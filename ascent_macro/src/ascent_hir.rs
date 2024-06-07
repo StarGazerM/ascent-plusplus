@@ -105,6 +105,7 @@ pub(crate) struct IrHeadClause{
    pub args : Vec<Expr>,
    pub span: Span,
    pub args_span: Span,
+   pub required_flag: bool,
 }
 
 pub(crate) enum IrBodyItem {
@@ -421,7 +422,8 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
          rel,
          args : hcl_node.args.iter().cloned().collect(),
          span: hcl_node.span(),
-         args_span: hcl_node.args.span()
+         args_span: hcl_node.args.span(),
+         required_flag: hcl_node.required_flag,
       };
       head_clauses.push(head_clause);
    }

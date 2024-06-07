@@ -881,6 +881,7 @@ fn compile_mir_rule_inner(rule: &MirRule, _scc: &MirScc, mir: &AscentMir, par_it
                let mut cl1_conds_then_rest = quote_spanned! {bclause.rel_args_span=>
                   #matching_dot_iter.clone().for_each(|__val|  {
                      // TODO we may be doing excessive cloning
+                     let mut __dep_changed = false;
                      #new_vars_assignments
                      #conds_then_next_loop
                   });
@@ -905,6 +906,7 @@ fn compile_mir_rule_inner(rule: &MirRule, _scc: &MirScc, mir: &AscentMir, par_it
                   if let Some(__matching) = #rel_version_exp.#index_get( &#selected_args_tuple) {
                      #matching_dot_iter.for_each(|__val|  {
                         // TODO we may be doing excessive cloning
+                        let mut __dep_changed = false;
                         #new_vars_assignments
                         #conds_then_next_loop
                      });
@@ -1052,7 +1054,14 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
       }} else { quote! {
          let __new_row_ind = _self.#head_rel_name.push(#new_row_to_be_pushed);
       }};
-
+      let skip_unchanged_code = if !hcl.required_flag {
+         quote!{}
+      } else {
+         quote!{
+            // println!("required flag not satisfied");
+            return;
+         }
+      };
       if !hcl.rel.is_lattice { 
          let add_row = quote_spanned!{hcl.span=>
             let __new_row: #row_type = #new_row_tuple;
@@ -1065,7 +1074,11 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
                   #push_code
                   #(#update_indices)*
                   #set_changed_true_code
+               } else {
+                  #skip_unchanged_code
                }
+            } else {
+                #skip_unchanged_code
             }
          };
          add_rows.push(add_row);
@@ -1097,6 +1110,8 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
                   let __new_row_ind = __existing_ind;
                   #(#update_indices)*
                   #set_changed_true_code
+               } else {
+                  #skip_unchanged_code
                }
             } else {
                let __new_row_ind = #_self.#head_rel_name.len();
@@ -1119,6 +1134,8 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
                   let __new_row_ind = __existing_ind;
                   #(#update_indices)*
                   #set_changed_true_code
+               } else {
+                  #skip_unchanged_code
                }
             } else {
                let __hash = #head_lat_full_index_var_name_new.hash_usize(&__lattice_key);
@@ -1126,6 +1143,7 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
                if let Some(__existing_ind) = #head_lat_full_index_var_name_new.get_cloned(&__lattice_key) {
                   ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].write().unwrap().#tuple_lat_index, 
                                               __new_row.#tuple_lat_index.clone());
+                  #skip_unchanged_code
                } else {
                   let __new_row_ind = #_self.#head_rel_name.push(::std::sync::RwLock::new(#new_row_to_be_pushed));
                   #(#update_indices)*

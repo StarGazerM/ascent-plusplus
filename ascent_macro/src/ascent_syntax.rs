@@ -160,6 +160,10 @@ fn peek_macro_invocation(parse_stream: ParseStream) -> bool {
    parse_stream.peek(Ident) && parse_stream.peek2(Token![!])
 }
 
+fn peek_indent_or_dep(parse_stream: ParseStream) -> bool {
+   parse_stream.peek(Ident) || parse_stream.peek(Token![!])
+}
+ 
 fn peek_if_or_let(parse_stream: ParseStream) -> bool {
    parse_stream.peek(Token![if]) || parse_stream.peek(Token![let])
 }
@@ -355,7 +359,7 @@ pub struct NegationClauseNode {
 pub enum HeadItemNode {
    #[peek_with(peek_macro_invocation, name = "macro invocation")]
    MacroInvocation(syn::ExprMacro),
-   #[peek(Ident, name = "head clause")]
+   #[peek_with(peek_indent_or_dep, name = "head clause")]
    HeadClause(HeadClauseNode),
 }
 
@@ -372,6 +376,7 @@ impl HeadItemNode {
 pub struct HeadClauseNode {
    pub rel : Ident,
    pub args : Punctuated<Expr, Token![,]>,
+   pub required_flag: bool,
 }
 impl ToTokens for HeadClauseNode {
    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
@@ -382,11 +387,17 @@ impl ToTokens for HeadClauseNode {
 
 impl Parse for HeadClauseNode{
    fn parse(input: ParseStream) -> Result<Self> {
+      // check if first token is !
+      let mut required_flag  = false; 
+      if input.peek(Token![!]) {
+         required_flag = true;
+         input.parse::<Token![!]>()?;
+      }
       let rel : Ident = input.parse()?;
       let args_content;
       parenthesized!(args_content in input);
       let args = args_content.parse_terminated(Expr::parse, Token![,])?;
-      Ok(HeadClauseNode{rel, args})
+      Ok(HeadClauseNode{rel, args, required_flag})
    }
 }
 

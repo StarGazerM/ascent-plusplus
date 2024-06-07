@@ -167,6 +167,22 @@ fn test_macro_unary_rels() {
 }
 
 #[test]
+fn test_macro_dep_head() {
+   let input = quote! {
+      relation foo(i32, i32);
+      relation bar(i32, i32);
+      relation foobar(i32, i32);
+
+      foo(1, 2);
+      bar(1, 2);
+
+      !bar(x, y), foobar(x, y) <-- foo(x, y);
+   };
+
+   write_to_scratchpad(input);
+}
+
+#[test]
 fn test_macro3() {
    let input = quote! {
       relation bar(i32, i32);
