@@ -106,6 +106,7 @@ pub(crate) struct IrHeadClause{
    pub span: Span,
    pub args_span: Span,
    pub required_flag: bool,
+   pub id_name: Option<Ident>
 }
 
 pub(crate) enum IrBodyItem {
@@ -157,6 +158,7 @@ pub(crate) struct IrRelation {
    pub relation: RelationIdentity,
    pub indices: Vec<usize>,
    pub val_type: IndexValType,
+   pub need_id: bool
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -166,7 +168,7 @@ pub enum IndexValType {
 }
 
 impl IrRelation {
-   pub fn new(relation: RelationIdentity, indices: Vec<usize>) -> Self {
+   pub fn new(relation: RelationIdentity, indices: Vec<usize>, need_id: bool) -> Self {
       // TODO this is not the right place for this
       let val_type = if relation.is_lattice //|| indices.len() == relation.field_types.len() 
       {
@@ -174,7 +176,7 @@ impl IrRelation {
       } else {
          IndexValType::Direct((0..relation.field_types.len()).filter(|i| !indices.contains(i)).collect_vec())
       };
-      IrRelation { relation, indices, val_type }
+      IrRelation { relation, indices, val_type, need_id }
    }
 
    pub fn key_type(&self) -> Type {
@@ -220,13 +222,13 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
 
       if rel.is_lattice {
          let indices = (0 .. rel_identity.field_types.len() - 1).collect_vec();
-         let lat_full_index = IrRelation::new(rel_identity.clone(), indices);
+         let lat_full_index = IrRelation::new(rel_identity.clone(), indices, rel.need_id);
          relations_ir_relations.entry(rel_identity.clone()).or_default().insert(lat_full_index.clone());
          lattices_full_indices.insert(rel_identity.clone(), lat_full_index);
       }
 
       let full_indices = (0 .. rel_identity.field_types.len()).collect_vec();
-      let rel_full_index = IrRelation::new(rel_identity.clone(),full_indices);
+      let rel_full_index = IrRelation::new(rel_identity.clone(),full_indices, rel.need_id);
 
       relations_ir_relations.entry(rel_identity.clone()).or_default().insert(rel_full_index.clone());
       // relations_ir_relations.entry(rel_identity.clone()).or_default().insert(rel_no_index.clone());
@@ -361,7 +363,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                extend_grounded_vars(&mut grounded_vars, cond_clause.bound_vars())?;
             }
             
-            let ir_rel = IrRelation::new(relation.into(), indices);
+            let ir_rel = IrRelation::new(relation.into(), indices, relation.need_id);
             let ir_bcl = IrBodyClause {
                rel: ir_rel,
                args: bcl.args.iter().cloned().map(BodyClauseArg::unwrap_expr).collect(),
@@ -393,7 +395,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
             }).map(|(i, _expr)| i).collect_vec();
             let relation = prog_get_relation(prog, &agg.rel, agg.rel_args.len())?;
             
-            let ir_rel = IrRelation::new(relation.into(), indices);
+            let ir_rel = IrRelation::new(relation.into(), indices, relation.need_id);
             let ir_agg_clause = IrAggClause {
                span: agg.agg_kw.span,
                pat: agg.pat.clone(),
@@ -416,16 +418,44 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
          Some(rel) => rel,
          None => return Err(Error::new(hcl_node.rel.span(), format!("relation {} not defined", hcl_node.rel))),
       };
+      let rel_identity = RelationIdentity::from(rel);
       
-      let rel = RelationIdentity::from(rel);
       let head_clause = IrHeadClause {
-         rel,
+         rel: rel_identity,
          args : hcl_node.args.iter().cloned().collect(),
          span: hcl_node.span(),
          args_span: hcl_node.args.span(),
          required_flag: hcl_node.required_flag,
+         id_name: hcl_node.id_name.clone(),
       };
       head_clauses.push(head_clause);
+
+      // desugar relation need ID
+      if rel.need_id {
+         // create a new Ident #relname_id
+         let rel_id_name = Ident::new(&format!("{}_id", rel.name), hcl_node.rel.span());
+         let mut field_types : Vec<Type> = rel.field_types.iter().cloned().collect();
+         field_types.insert(0, Type::Verbatim(quote!{usize}));
+
+         let rel_with_id_identity = RelationIdentity {
+            name: rel_id_name.clone(),
+            field_types,
+            is_lattice: rel.is_lattice,
+            need_id: false,
+         };
+         let mut args_with_id : Vec<Expr> = hcl_node.args.iter().cloned().collect();
+         // add __default_id to the beginning of the args
+         args_with_id.insert(0, parse_quote!{__default_id});
+         let head_clause_with_id = IrHeadClause {
+            rel: rel_with_id_identity,
+            args : args_with_id,
+            span: hcl_node.span(),
+            args_span: hcl_node.args.span(),
+            required_flag: hcl_node.required_flag,
+            id_name: Some(rel_id_name),
+         };
+         head_clauses.push(head_clause_with_id);
+      }
    }
    
    let is_simple_join = first_two_clauses_simple && body_items.len() >= 2;
@@ -438,7 +468,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
       };  
       let bcl2_vars = bcl2.args.iter().filter_map(expr_to_ident).collect_vec();
       let indices = get_indices_given_grounded_variables(&bcl1.args, &bcl2_vars);
-      let new_cl1_ir_relation = IrRelation::new(bcl1.rel.relation.clone(), indices);
+      let new_cl1_ir_relation = IrRelation::new(bcl1.rel.relation.clone(), indices, bcl1.rel.need_id);
       vec![new_cl1_ir_relation]
    } else {vec![]};
 

@@ -405,6 +405,7 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
    let mut shift_delta_to_total_new_to_delta = vec![];
    let mut move_total_to_field = vec![];
    let mut freeze_code = vec![];
+   // let mut def_relation_cnt = vec![];
    let mut unfreeze_code = vec![];
 
    let _self = quote! { _self };
@@ -421,6 +422,7 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
       let delta_var_name = ir_relation_version_var_name(&ir_name, MirRelationVersion::Delta);
       let total_var_name = ir_relation_version_var_name(&ir_name, MirRelationVersion::Total);
       let new_var_name = ir_relation_version_var_name(&ir_name, MirRelationVersion::New);
+      // let counter_name = ir_relation_counter(&ir_name);
       let total_field = &ir_name;
       move_total_to_delta.push(quote_spanned! {ir_name.span()=>
          let mut #delta_var_name: #ty = ::std::mem::take(&mut #_self.#total_field);
@@ -466,6 +468,17 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
             #delta_var_name.unfreeze();
          });
       }
+
+      // if mir.is_parallel {
+      //    def_relation_cnt.push(quote_spanned!{ir_name.span()=>
+      //       let #counter_name = std::sync::atomic::AtomicU64::new(#_self.#total_field.len() as u64);
+      //    });
+      // } else {
+      //    def_relation_cnt.push(quote_spanned!{ir_name.span()=>
+      //       let mut #counter_name = #_self.#total_field.len();
+      //    });
+      
+      // }
    }
    let sorted_body_only_relations = scc.body_only_relations.iter().sorted_by_cached_key(|(rel, _)| rel.name.clone());
    for rel in sorted_body_only_relations.flat_map(|(rel, indices)| {
@@ -565,6 +578,7 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
       {
          // let mut __changed = false;
          #changed_var_def_code
+         let mut __default_id = 0;
          #(#freeze_code)*
 
          #evaluate_rules
@@ -688,6 +702,9 @@ fn compile_update_indices_function_body(mir: &AscentMir) -> proc_macro2::TokenSt
          });
 
       }
+
+      
+
       let rel_name = &r.name;
       let maybe_lock = if r.is_lattice && mir.is_parallel {
          quote_spanned!{r.name.span()=> let tuple = tuple.read().unwrap(); }
@@ -750,7 +767,7 @@ fn compile_cond_clause(cond: &CondClause, body: proc_macro2::TokenStream) -> pro
 fn compile_mir_rule(rule: &MirRule, scc: &MirScc, mir: &AscentMir) -> proc_macro2::TokenStream {
    let (head_rels_structs_and_vars, head_update_code) = 
       head_clauses_structs_and_update_code(rule, scc, mir);
-
+   
    const MAX_PAR_ITERS: usize = 2;
 
    // do parallel iteration up to this clause index (exclusive)
@@ -847,6 +864,8 @@ fn compile_mir_rule_inner(rule: &MirRule, _scc: &MirScc, mir: &AscentMir, par_it
                (quote_spanned! {span=> index_get}, quote_spanned! {span=> iter_all})
             };
 
+            let def_default_id_code = quote! { let mut __default_id = 0; };
+
             // The special case where the first clause has indices, but there are no expressions
             // in the args of the first clause
             if doing_simple_join {
@@ -882,6 +901,7 @@ fn compile_mir_rule_inner(rule: &MirRule, _scc: &MirScc, mir: &AscentMir, par_it
                   #matching_dot_iter.clone().for_each(|__val|  {
                      // TODO we may be doing excessive cloning
                      let mut __dep_changed = false;
+                     #def_default_id_code
                      #new_vars_assignments
                      #conds_then_next_loop
                   });
@@ -907,6 +927,7 @@ fn compile_mir_rule_inner(rule: &MirRule, _scc: &MirScc, mir: &AscentMir, par_it
                      #matching_dot_iter.for_each(|__val|  {
                         // TODO we may be doing excessive cloning
                         let mut __dep_changed = false;
+                        #def_default_id_code
                         #new_vars_assignments
                         #conds_then_next_loop
                      });
@@ -990,6 +1011,13 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
       let new_row_tuple = tuple_spanned(&hcl_args_converted, hcl.args_span);
       
       let head_relation = &hcl.rel;
+      // if None use default name __new_tuple_d
+      let new_id_name = match &hcl.id_name {
+         Some(new_id) => new_id.clone(),
+         None => Ident::new(&format!("__new_{}", head_rel_name), hcl.span)
+      };
+      let def_id_code = quote_spanned!{hcl.span=> let mut #new_id_name = 0;};
+
       let row_type = tuple_type(&head_relation.field_types);
 
       let mut update_indices = vec![];
@@ -1049,10 +1077,12 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
       let new_row_to_be_pushed = tuple_spanned(&new_row_to_be_pushed, hcl.span);
 
       let push_code = if !mir.is_parallel { quote! {
-         let __new_row_ind = _self.#head_rel_name.len();
+         #new_id_name = _self.#head_rel_name.len();
          _self.#head_rel_name.push(#new_row_to_be_pushed);
+         __default_id = #new_id_name;
       }} else { quote! {
-         let __new_row_ind = _self.#head_rel_name.push(#new_row_to_be_pushed);
+         #new_id_name = _self.#head_rel_name.push(#new_row_to_be_pushed);
+         __default_id = #new_id_name;
       }};
       let skip_unchanged_code = if !hcl.required_flag {
          quote!{}
@@ -1065,6 +1095,7 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
       if !hcl.rel.is_lattice { 
          let add_row = quote_spanned!{hcl.span=>
             let __new_row: #row_type = #new_row_tuple;
+            #def_id_code
 
             if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
                !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {

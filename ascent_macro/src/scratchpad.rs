@@ -31,9 +31,9 @@ fn _test<T: FactTypes>() {
    use ascent::Dual;
 
    use ascent::rel as custom_ds;
+   ::ascent::rel::rel_codegen! { AscentProgram_foobar , (i32 , usize) , [[0 , 1]] , ser , () }
    ::ascent::rel::rel_codegen! { AscentProgram_foo , (i32 , i32) , [[] , [0 , 1]] , ser , () }
    ::ascent::rel::rel_codegen! { AscentProgram_bar , (i32 , i32) , [[0 , 1]] , ser , () }
-   ::ascent::rel::rel_codegen! { AscentProgram_foobar , (i32 , i32) , [[0 , 1]] , ser , () }
    pub struct AscentProgram {
       #[doc = "\nlogical indices: bar_indices_0_1"]
       pub bar: ::ascent::rel::rel!(AscentProgram_bar, (i32, i32), [[0, 1]], ser, ()),
@@ -48,12 +48,12 @@ fn _test<T: FactTypes>() {
       pub foo_indices_none:
          ::ascent::rel::rel_ind!(AscentProgram_foo, (i32, i32), [[], [0, 1]], ser, (), [], (), (i32, i32)),
       #[doc = "\nlogical indices: foobar_indices_0_1"]
-      pub foobar: ::ascent::rel::rel!(AscentProgram_foobar, (i32, i32), [[0, 1]], ser, ()),
-      pub __foobar_ind_common: ::ascent::rel::rel_ind_common!(AscentProgram_foobar, (i32, i32), [[0, 1]], ser, ()),
+      pub foobar: ::ascent::rel::rel!(AscentProgram_foobar, (i32, usize), [[0, 1]], ser, ()),
+      pub __foobar_ind_common: ::ascent::rel::rel_ind_common!(AscentProgram_foobar, (i32, usize), [[0, 1]], ser, ()),
       pub foobar_indices_0_1:
-         ::ascent::rel::rel_full_ind!(AscentProgram_foobar, (i32, i32), [[0, 1]], ser, (), (i32, i32), ()),
-      scc_times: [std::time::Duration; 3usize],
-      scc_iters: [usize; 3usize],
+         ::ascent::rel::rel_full_ind!(AscentProgram_foobar, (i32, usize), [[0, 1]], ser, (), (i32, usize), ()),
+      scc_times: [std::time::Duration; 2usize],
+      scc_iters: [usize; 2usize],
       pub update_time_nanos: std::sync::atomic::AtomicU64,
       pub update_indices_duration: std::time::Duration,
    }
@@ -168,9 +168,11 @@ fn _test<T: FactTypes>() {
             #[allow(unused_assignments, unused_variables)]
             {
                let mut __changed = false;
+               let mut __default_id = 0;
                ascent::internal::comment("foo <-- ");
                {
                   let __new_row: (i32, i32) = (1, 2);
+                  let mut __new_foo = 0;
                   if !::ascent::internal::RelFullIndexRead::contains_key(
                      &foo_indices_0_1_total.to_rel_index(&__foo_ind_common_total),
                      &__new_row,
@@ -183,8 +185,9 @@ fn _test<T: FactTypes>() {
                         &__new_row,
                         (),
                      ) {
-                        let __new_row_ind = _self.foo.len();
+                        __new_foo = _self.foo.len();
                         _self.foo.push((__new_row.0.clone(), __new_row.1.clone()));
+                        __default_id = __new_foo;
                         ::ascent::internal::RelIndexWrite::index_insert(
                            &mut foo_indices_none_new.to_rel_index_write(&mut __foo_ind_common_new),
                            (),
@@ -297,21 +300,21 @@ fn _test<T: FactTypes>() {
             );
             let mut __foobar_ind_common_delta: ::ascent::rel::rel_ind_common!(
                AscentProgram_foobar,
-               (i32, i32),
+               (i32, usize),
                [[0, 1]],
                ser,
                ()
             ) = ::std::mem::take(&mut _self.__foobar_ind_common);
             let mut __foobar_ind_common_total: ::ascent::rel::rel_ind_common!(
                AscentProgram_foobar,
-               (i32, i32),
+               (i32, usize),
                [[0, 1]],
                ser,
                ()
             ) = Default::default();
             let mut __foobar_ind_common_new: ::ascent::rel::rel_ind_common!(
                AscentProgram_foobar,
-               (i32, i32),
+               (i32, usize),
                [[0, 1]],
                ser,
                ()
@@ -323,29 +326,29 @@ fn _test<T: FactTypes>() {
             );
             let mut foobar_indices_0_1_delta: ::ascent::rel::rel_full_ind!(
                AscentProgram_foobar,
-               (i32, i32),
+               (i32, usize),
                [[0, 1]],
                ser,
                (),
-               (i32, i32),
+               (i32, usize),
                ()
             ) = ::std::mem::take(&mut _self.foobar_indices_0_1);
             let mut foobar_indices_0_1_total: ::ascent::rel::rel_full_ind!(
                AscentProgram_foobar,
-               (i32, i32),
+               (i32, usize),
                [[0, 1]],
                ser,
                (),
-               (i32, i32),
+               (i32, usize),
                ()
             ) = Default::default();
             let mut foobar_indices_0_1_new: ::ascent::rel::rel_full_ind!(
                AscentProgram_foobar,
-               (i32, i32),
+               (i32, usize),
                [[0, 1]],
                ser,
                (),
-               (i32, i32),
+               (i32, usize),
                ()
             ) = Default::default();
             ::ascent::internal::RelIndexMerge::init(
@@ -373,17 +376,20 @@ fn _test<T: FactTypes>() {
             #[allow(unused_assignments, unused_variables)]
             {
                let mut __changed = false;
+               let mut __default_id = 0;
                ascent::internal::comment("bar, foobar <-- foo_indices_none_total");
                {
                   if let Some(__matching) = foo_indices_none_total.to_rel_index(&__foo_ind_common_total).index_get(&())
                   {
                      __matching.for_each(|__val| {
                         let mut __dep_changed = false;
+                        let mut __default_id = 0;
                         let __val = __val.tuple_of_borrowed();
                         let x: &i32 = __val.0;
                         let y: &i32 = __val.1;
                         let __new_row: (i32, i32) =
                            (ascent::internal::Convert::convert(x), ascent::internal::Convert::convert(y));
+                        let mut new_bar = 0;
                         if !::ascent::internal::RelFullIndexRead::contains_key(
                            &bar_indices_0_1_total.to_rel_index(&__bar_ind_common_total),
                            &__new_row,
@@ -396,8 +402,9 @@ fn _test<T: FactTypes>() {
                               &__new_row,
                               (),
                            ) {
-                              let __new_row_ind = _self.bar.len();
+                              new_bar = _self.bar.len();
                               _self.bar.push((__new_row.0, __new_row.1));
+                              __default_id = new_bar;
                               __changed = true;
                            } else {
                               return;
@@ -405,8 +412,9 @@ fn _test<T: FactTypes>() {
                         } else {
                            return;
                         }
-                        let __new_row: (i32, i32) =
-                           (ascent::internal::Convert::convert(x), ascent::internal::Convert::convert(y));
+                        let __new_row: (i32, usize) =
+                           (ascent::internal::Convert::convert(x), ascent::internal::Convert::convert(new_bar));
+                        let mut __new_foobar = 0;
                         if !::ascent::internal::RelFullIndexRead::contains_key(
                            &foobar_indices_0_1_total.to_rel_index(&__foobar_ind_common_total),
                            &__new_row,
@@ -419,8 +427,9 @@ fn _test<T: FactTypes>() {
                               &__new_row,
                               (),
                            ) {
-                              let __new_row_ind = _self.foobar.len();
+                              __new_foobar = _self.foobar.len();
                               _self.foobar.push((__new_row.0, __new_row.1));
+                              __default_id = __new_foobar;
                               __changed = true;
                            } else {
                            }
@@ -480,120 +489,6 @@ fn _test<T: FactTypes>() {
             _self.foo_indices_none = foo_indices_none_total;
             _self.scc_times[1usize] += _scc_start_time.elapsed();
          }
-         ascent::internal::comment("scc 2");
-         {
-            let _scc_start_time = ::ascent::internal::Instant::now();
-            let mut __bar_ind_common_delta: ::ascent::rel::rel_ind_common!(
-               AscentProgram_bar,
-               (i32, i32),
-               [[0, 1]],
-               ser,
-               ()
-            ) = ::std::mem::take(&mut _self.__bar_ind_common);
-            let mut __bar_ind_common_total: ::ascent::rel::rel_ind_common!(
-               AscentProgram_bar,
-               (i32, i32),
-               [[0, 1]],
-               ser,
-               ()
-            ) = Default::default();
-            let mut __bar_ind_common_new: ::ascent::rel::rel_ind_common!(
-               AscentProgram_bar,
-               (i32, i32),
-               [[0, 1]],
-               ser,
-               ()
-            ) = Default::default();
-            ::ascent::internal::RelIndexMerge::init(
-               &mut __bar_ind_common_new,
-               &mut __bar_ind_common_delta,
-               &mut __bar_ind_common_total,
-            );
-            let mut bar_indices_0_1_delta: ::ascent::rel::rel_full_ind!(
-               AscentProgram_bar,
-               (i32, i32),
-               [[0, 1]],
-               ser,
-               (),
-               (i32, i32),
-               ()
-            ) = ::std::mem::take(&mut _self.bar_indices_0_1);
-            let mut bar_indices_0_1_total: ::ascent::rel::rel_full_ind!(
-               AscentProgram_bar,
-               (i32, i32),
-               [[0, 1]],
-               ser,
-               (),
-               (i32, i32),
-               ()
-            ) = Default::default();
-            let mut bar_indices_0_1_new: ::ascent::rel::rel_full_ind!(
-               AscentProgram_bar,
-               (i32, i32),
-               [[0, 1]],
-               ser,
-               (),
-               (i32, i32),
-               ()
-            ) = Default::default();
-            ::ascent::internal::RelIndexMerge::init(
-               &mut bar_indices_0_1_new.to_rel_index_write(&mut __bar_ind_common_new),
-               &mut bar_indices_0_1_delta.to_rel_index_write(&mut __bar_ind_common_delta),
-               &mut bar_indices_0_1_total.to_rel_index_write(&mut __bar_ind_common_total),
-            );
-            #[allow(unused_assignments, unused_variables)]
-            {
-               let mut __changed = false;
-               ascent::internal::comment("bar <-- ");
-               {
-                  let __new_row: (i32, i32) = (1, 2);
-                  if !::ascent::internal::RelFullIndexRead::contains_key(
-                     &bar_indices_0_1_total.to_rel_index(&__bar_ind_common_total),
-                     &__new_row,
-                  ) && !::ascent::internal::RelFullIndexRead::contains_key(
-                     &bar_indices_0_1_delta.to_rel_index(&__bar_ind_common_delta),
-                     &__new_row,
-                  ) {
-                     if ::ascent::internal::RelFullIndexWrite::insert_if_not_present(
-                        &mut bar_indices_0_1_new.to_rel_index_write(&mut __bar_ind_common_new),
-                        &__new_row,
-                        (),
-                     ) {
-                        let __new_row_ind = _self.bar.len();
-                        _self.bar.push((__new_row.0, __new_row.1));
-                        __changed = true;
-                     } else {
-                     }
-                  } else {
-                  }
-               }
-               ::ascent::internal::RelIndexMerge::merge_delta_to_total_new_to_delta(
-                  &mut __bar_ind_common_new,
-                  &mut __bar_ind_common_delta,
-                  &mut __bar_ind_common_total,
-               );
-               ::ascent::internal::RelIndexMerge::merge_delta_to_total_new_to_delta(
-                  &mut bar_indices_0_1_new.to_rel_index_write(&mut __bar_ind_common_new),
-                  &mut bar_indices_0_1_delta.to_rel_index_write(&mut __bar_ind_common_delta),
-                  &mut bar_indices_0_1_total.to_rel_index_write(&mut __bar_ind_common_total),
-               );
-               ::ascent::internal::RelIndexMerge::merge_delta_to_total_new_to_delta(
-                  &mut __bar_ind_common_new,
-                  &mut __bar_ind_common_delta,
-                  &mut __bar_ind_common_total,
-               );
-               ::ascent::internal::RelIndexMerge::merge_delta_to_total_new_to_delta(
-                  &mut bar_indices_0_1_new.to_rel_index_write(&mut __bar_ind_common_new),
-                  &mut bar_indices_0_1_delta.to_rel_index_write(&mut __bar_ind_common_delta),
-                  &mut bar_indices_0_1_total.to_rel_index_write(&mut __bar_ind_common_total),
-               );
-               _self.scc_iters[2usize] += 1;
-               __check_return_conditions!();
-            }
-            _self.__bar_ind_common = __bar_ind_common_total;
-            _self.bar_indices_0_1 = bar_indices_0_1_total;
-            _self.scc_times[2usize] += _scc_start_time.elapsed();
-         }
       }
       #[allow(noop_method_call, suspicious_double_ref_op)]
       fn update_indices_priv(&mut self) {
@@ -637,10 +532,15 @@ fn _test<T: FactTypes>() {
          self.update_indices_duration += before.elapsed();
       }
       #[deprecated = "Explicit call to update_indices not required anymore."]
-      pub fn update_indices(&mut self) { self.update_indices_priv(); }
-      fn type_constraints() { let _type_constraints: ascent::internal::TypeConstraints<i32>; }
+      pub fn update_indices(&mut self) {
+         self.update_indices_priv();
+      }
+      fn type_constraints() {
+         let _type_constraints: ascent::internal::TypeConstraints<i32>;
+         let _type_constraints: ascent::internal::TypeConstraints<usize>;
+      }
       pub fn summary() -> &'static str {
-         "scc 0, is_looping: false:\n  foo <-- \n  dynamic relations: foo\nscc 1, is_looping: false:\n  bar, foobar <-- foo_indices_none_total\n  dynamic relations: bar, foobar\nscc 2, is_looping: false:\n  bar <-- \n  dynamic relations: bar\n"
+         "scc 0, is_looping: false:\n  foo <-- \n  dynamic relations: foo\nscc 1, is_looping: false:\n  bar, foobar <-- foo_indices_none_total\n  dynamic relations: bar, foobar\n"
       }
       pub fn relation_sizes_summary(&self) -> String {
          use std::fmt::Write;
@@ -658,8 +558,6 @@ fn _test<T: FactTypes>() {
             .unwrap();
          writeln!(&mut res, "scc {}: iterations: {}, time: {:?}", "1", self.scc_iters[1usize], self.scc_times[1usize])
             .unwrap();
-         writeln!(&mut res, "scc {}: iterations: {}, time: {:?}", "2", self.scc_iters[2usize], self.scc_times[2usize])
-            .unwrap();
          res
       }
    }
@@ -676,8 +574,8 @@ fn _test<T: FactTypes>() {
             foobar: Default::default(),
             __foobar_ind_common: Default::default(),
             foobar_indices_0_1: Default::default(),
-            scc_times: [std::time::Duration::ZERO; 3usize],
-            scc_iters: [0; 3usize],
+            scc_times: [std::time::Duration::ZERO; 2usize],
+            scc_iters: [0; 2usize],
             update_time_nanos: Default::default(),
             update_indices_duration: std::time::Duration::default(),
          };

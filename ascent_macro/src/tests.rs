@@ -171,12 +171,27 @@ fn test_macro_dep_head() {
    let input = quote! {
       relation foo(i32, i32);
       relation bar(i32, i32);
-      relation foobar(i32, i32);
+      relation foobar(i32, usize);
 
       foo(1, 2);
       bar(1, 2);
 
-      !bar(x, y), foobar(x, y) <-- foo(x, y);
+      let new_bar = !bar(x, y), foobar(x, new_bar) <-- foo(x, y);
+   };
+
+   write_to_scratchpad(input);
+}
+
+#[test]
+fn test_relation_id() {
+   let input = quote! {
+      relation foo(i32, i32);
+      relation bar(i32, i32);
+      relation foobar(i32, usize);
+
+      foo(1, 2);
+
+      let new_bar = !bar(x, y), foobar(x, new_bar) <-- foo(x, y);
    };
 
    write_to_scratchpad(input);

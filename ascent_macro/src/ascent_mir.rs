@@ -150,6 +150,11 @@ pub(crate) fn ir_relation_version_var_name(ir_name: &Ident, version : MirRelatio
    Ident::new(&name, ir_name.span())
 }
 
+// pub(crate) fn ir_relation_counter(ir_name: &Ident) -> Ident{
+//    let name = format!("{}_counter", ir_name);
+//    Ident::new(&name, ir_name.span())
+// }
+
 impl MirRelation {
    pub fn var_name(&self) -> Ident {
       ir_relation_version_var_name(&self.ir_name, self.version)

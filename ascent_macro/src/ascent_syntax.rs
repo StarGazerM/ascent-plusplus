@@ -35,6 +35,7 @@ use crate::syn_utils::{
 mod kw {
    syn::custom_keyword!(relation);
    syn::custom_keyword!(lattice);
+   syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
    syn::custom_keyword!(agg);
    syn::custom_keyword!(ident);
@@ -116,11 +117,16 @@ pub struct RelationNode{
    pub initialization: Option<Expr>,
    pub _semi_colon: Token![;],
    pub is_lattice: bool,
+   pub need_id: bool,
 }
 impl Parse for RelationNode {
    fn parse(input: ParseStream) -> Result<Self> {
       let is_lattice = input.peek(kw::lattice);
       if is_lattice {input.parse::<kw::lattice>()?;} else {input.parse::<kw::relation>()?;}
+      let need_id = if input.peek(kw::ID) {
+         input.parse::<kw::ID>()?;
+         true
+      } else {false};
       let name : Ident = input.parse()?;
       let content;
       parenthesized!(content in input);
@@ -134,7 +140,7 @@ impl Parse for RelationNode {
       if is_lattice && field_types.empty_or_trailing() {
          return Err(input.error("empty lattice is not allowed"));
       }
-      Ok(RelationNode{attrs: vec![], name, field_types, _semi_colon, is_lattice, initialization})
+      Ok(RelationNode{attrs: vec![], name, field_types, _semi_colon, is_lattice, initialization, need_id})
    }
 }
 
@@ -161,7 +167,7 @@ fn peek_macro_invocation(parse_stream: ParseStream) -> bool {
 }
 
 fn peek_indent_or_dep(parse_stream: ParseStream) -> bool {
-   parse_stream.peek(Ident) || parse_stream.peek(Token![!])
+   parse_stream.peek(Ident) || parse_stream.peek(Token![!]) || parse_stream.peek(Token![let])
 }
  
 fn peek_if_or_let(parse_stream: ParseStream) -> bool {
@@ -377,6 +383,7 @@ pub struct HeadClauseNode {
    pub rel : Ident,
    pub args : Punctuated<Expr, Token![,]>,
    pub required_flag: bool,
+   pub id_name: Option<Ident>,
 }
 impl ToTokens for HeadClauseNode {
    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
@@ -387,8 +394,23 @@ impl ToTokens for HeadClauseNode {
 
 impl Parse for HeadClauseNode{
    fn parse(input: ParseStream) -> Result<Self> {
-      // check if first token is !
       let mut required_flag  = false; 
+      // check if first token is let
+      let mut id_name = None;
+      if input.peek(Token![let]) {
+         input.parse::<Token![let]>()?;
+         if !input.peek(Ident) {
+            return Err(input.error("expected identifier after let"));
+         }
+         id_name = Some(input.parse()?);
+         required_flag = true;
+         // consume a "=", if not exists throw parsing error
+         if !input.peek(Token![=]) {
+            return Err(input.error("expected '=' after let"));
+         }
+         input.parse::<Token![=]>()?;
+      }
+      // check if first token is !
       if input.peek(Token![!]) {
          required_flag = true;
          input.parse::<Token![!]>()?;
@@ -397,7 +419,7 @@ impl Parse for HeadClauseNode{
       let args_content;
       parenthesized!(args_content in input);
       let args = args_content.parse_terminated(Expr::parse, Token![,])?;
-      Ok(HeadClauseNode{rel, args, required_flag})
+      Ok(HeadClauseNode{rel, args, required_flag, id_name})
    }
 }
 
@@ -565,6 +587,21 @@ impl Parse for AscentProgram {
          let attrs = if !struct_attrs.is_empty() {std::mem::take(&mut struct_attrs)} else {Attribute::parse_outer(input)?};
          if input.peek(kw::relation) || input.peek(kw::lattice){
             let mut relation_node = RelationNode::parse(input)?;
+            if relation_node.need_id {
+               // compute the field type with id, append it to the head of the field types
+               let mut field_types_with_id = relation_node.field_types.clone();
+               field_types_with_id.insert(0, Type::Verbatim(quote!{usize}));
+               let relation_node_with_id = RelationNode{
+                  attrs: relation_node.attrs.clone(),
+                  name: Ident::new(&format!("{}_id", relation_node.name), relation_node.name.span()),
+                  field_types: field_types_with_id,
+                  initialization: None,
+                  _semi_colon: relation_node._semi_colon.clone(),
+                  is_lattice: false,
+                  need_id: true
+               };
+               relations.push(relation_node_with_id);
+            }
             relation_node.attrs = attrs;
             relations.push(relation_node);
          } else if input.peek(Token![macro]) {
@@ -588,6 +625,7 @@ pub(crate) struct RelationIdentity {
    pub name: Ident,
    pub field_types: Vec<Type>,
    pub is_lattice: bool,
+   pub need_id: bool
 }
 
 impl From<&RelationNode> for RelationIdentity{
@@ -595,7 +633,8 @@ impl From<&RelationNode> for RelationIdentity{
       RelationIdentity {
          name: relation_node.name.clone(),
          field_types: relation_node.field_types.iter().cloned().collect(),
-         is_lattice: relation_node.is_lattice
+         is_lattice: relation_node.is_lattice,
+         need_id: relation_node.need_id
       }
    }
 } 
