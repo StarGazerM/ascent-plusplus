@@ -432,6 +432,33 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
          delete_flag: hcl_node.delete_flag,
       };
       head_clauses.push(head_clause);
+
+      // desugar relation need ID
+      if rel.need_id {
+         // create a new Ident #relname_id
+         let rel_id_name = Ident::new(&format!("{}_id", rel.name), hcl_node.rel.span());
+         let mut field_types : Vec<Type> = rel.field_types.iter().cloned().collect();
+         field_types.insert(0, Type::Verbatim(quote!{usize}));
+
+         let rel_with_id_identity = RelationIdentity {
+            name: rel_id_name.clone(),
+            field_types,
+            is_lattice: rel.is_lattice,
+            need_id: false,
+         };
+         let mut args_with_id : Vec<Expr> = hcl_node.args.iter().cloned().collect();
+         // add __default_id to the beginning of the args
+         args_with_id.insert(0, parse_quote!{__default_id});
+         let head_clause_with_id = IrHeadClause {
+            rel: rel_with_id_identity,
+            args : args_with_id,
+            span: hcl_node.span(),
+            args_span: hcl_node.args.span(),
+            required_flag: hcl_node.required_flag,
+            id_name: Some(rel_id_name),
+         };
+         head_clauses.push(head_clause_with_id);
+      }
    }
    
    let is_simple_join = first_two_clauses_simple && body_items.len() >= 2;
