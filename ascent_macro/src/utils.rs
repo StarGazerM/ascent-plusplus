@@ -135,36 +135,98 @@ pub fn is_wild_card(expr: &Expr) -> bool {
    }
 }
 
+// pub fn contains_relation(ts: TokenStream) -> bool {
+//    ts.into_iter().any(|tt| {
+//       match tt {
+//          TokenTree::Ident(ident) => ident.to_string().contains("relation"),
+//          _ => false
+//       }
+//    })
+// }
 
-pub fn token_stream_replace_macro_idents(input: TokenStream, ident_replacements: &HashMap<Ident, TokenStream>) -> TokenStream {
+// pub fn contains_arrow(ts: TokenStream) -> bool {
+//    // arrow is a <--
+//    let mut matching = "";
+//    let mut arrow_matched = false;
+//    for tt in ts {
+//       match tt {
+//          TokenTree::Punct(punct) => {
+//             let cur = punct.as_char();
+//             if arrow_matched {
+//                if cur == '-' {
+//                   matching = "<-";
+//                } else if cur == '-' && matching == "<-" {
+//                   return true;
+//                } else {
+//                   arrow_matched = false;
+//                }
+//             } else if cur == '<' {
+//                matching = "<";
+//             } else if cur == '-' && matching == "<" {
+//                arrow_matched = true;
+//             } else {
+//                matching = "";
+//             }
+//          },
+//          _ => matching = ""
+//       }
+//    }
+//    false
+// }
 
-   fn ts_replace(ts: TokenStream, ident_replacements: &HashMap<Ident, TokenStream>, res: &mut Vec<TokenTree>){
-      
-
+pub fn token_stream_replace_macro_idents(input: TokenStream, ident_replacements: &HashMap<Ident, TokenStream>) -> (TokenStream, bool) {
+   fn ts_replace(ts: TokenStream, ident_replacements: &HashMap<Ident, TokenStream>, res: &mut Vec<TokenTree>) -> bool {
       let mut last_dollar = None;
+      let mut replaced_huh = false;
+      let mut concat_next_symbol : Option<TokenStream> = None;
       for tt in ts {
+         if let Some(prev_sym) = &concat_next_symbol {
+            if let TokenTree::Ident(cur_ident) = &tt {
+               // create a new ident with the concatenation of prev_sym and cur_ident
+               let new_ident = Ident::new(&format!("{}{}", prev_sym, cur_ident), cur_ident.span());
+               // res.extend(prev_sym.clone());
+               res.push(TokenTree::Ident(new_ident));
+               concat_next_symbol = None;
+               continue;
+            }
+         }
          if let Some(dollar) = last_dollar.take() {
             let is_match = match &tt {
-               TokenTree::Ident(after_dollar_ident) => ident_replacements.get(after_dollar_ident),
-               _ => None
+               TokenTree::Ident(after_dollar_ident) => {
+                  replaced_huh = true;
+                  ident_replacements.get(after_dollar_ident)
+               },
+               TokenTree::Group(grp) => {
+                  let grp_content = grp.stream().into_iter().collect::<Vec<TokenTree>>();
+                  if grp_content.len() == 2 {
+                     if let TokenTree::Ident(ident) = &grp_content[1] {
+                        concat_next_symbol = ident_replacements.get(ident).cloned();
+                        continue;
+                     }
+                  }
+                  None
+               }
+               _ => {
+                  res.push(dollar);
+                  None
+               }   
             };
             if let Some(replacement) = is_match {
                res.extend(replacement.clone());
                continue;
-            } else {
-               res.push(dollar);
             }
          }
          let is_dollar = match &tt {
             TokenTree::Punct(punct) => punct.as_char() == '$',
-            _ => false
+            _ => false 
          };
          if is_dollar {
             last_dollar = Some(tt);
          } else {
             match tt {
                TokenTree::Group(grp) => {
-                  let replaced = token_stream_replace_macro_idents(grp.stream(), ident_replacements);
+                  let (replaced, replace_flag) = token_stream_replace_macro_idents(grp.stream(), ident_replacements);
+                  replaced_huh = replaced_huh || replace_flag;
                   let updated_group = Group::new(grp.delimiter(), replaced);
                   res.push(TokenTree::Group(updated_group));
                },
@@ -177,12 +239,13 @@ pub fn token_stream_replace_macro_idents(input: TokenStream, ident_replacements:
       if let Some(dollar) = last_dollar {
          res.push(dollar);
       }
+      replaced_huh
    }
 
    let mut res = vec![];
-   ts_replace(input, ident_replacements, &mut res);
+   let changed_flag = ts_replace(input, ident_replacements, &mut res);
 
-   res.into_iter().collect()
+   (res.into_iter().collect(), changed_flag)
 }
 
 pub fn spans_eq(span1: &Span, span2: &Span) -> bool {
