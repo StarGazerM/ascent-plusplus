@@ -686,21 +686,6 @@ impl Parse for AscentProgram {
          let attrs = if !struct_attrs.is_empty() {std::mem::take(&mut struct_attrs)} else {Attribute::parse_outer(input)?};
          if input.peek(kw::relation) || input.peek(kw::lattice){
             let mut relation_node = RelationNode::parse(input)?;
-            if relation_node.need_id {
-               // compute the field type with id, append it to the head of the field types
-               let mut field_types_with_id = relation_node.field_types.clone();
-               field_types_with_id.insert(0, Type::Verbatim(quote!{usize}));
-               let relation_node_with_id = RelationNode{
-                  attrs: relation_node.attrs.clone(),
-                  name: Ident::new(&format!("{}_id", relation_node.name), relation_node.name.span()),
-                  field_types: field_types_with_id,
-                  initialization: None,
-                  _semi_colon: relation_node._semi_colon.clone(),
-                  is_lattice: false,
-                  need_id: true
-               };
-               relations.push(relation_node_with_id);
-            }
             relation_node.attrs = attrs;
             relations.push(relation_node);
          } else if input.peek(kw::function) {
