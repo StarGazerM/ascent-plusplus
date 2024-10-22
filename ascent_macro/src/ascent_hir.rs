@@ -3,7 +3,8 @@ use std::{collections::{HashMap, HashSet}, rc::Rc};
 
 use itertools::Itertools;
 use proc_macro2::{Ident, Span, TokenStream};
-use syn::{Attribute, Error, Expr, Pat, Type, parse2, spanned::Spanned, parse_quote, Path};
+use quote::ToTokens;
+use syn::{parse2, parse_quote, punctuated::Punctuated, spanned::Spanned, token::Comma, Attribute, Error, Expr, Pat, Path, Type};
 
 use crate::{AscentProgram, ascent_syntax::{RelationNode, DsAttributeContents, Signatures}, utils::{expr_to_ident, is_wild_card, tuple_type}, syn_utils::{expr_get_vars, pattern_get_vars}};
 use crate::ascent_syntax::{BodyClauseArg, BodyItemNode, CondClause, GeneratorNode, RelationIdentity, RuleNode};
@@ -106,7 +107,8 @@ pub(crate) struct IrHeadClause{
    pub span: Span,
    pub args_span: Span,
    pub required_flag: bool,
-   pub id_name: Option<Ident>
+   pub id_name: Option<Ident>,
+   pub delete_flag: bool,
 }
 
 pub(crate) enum IrBodyItem {
@@ -357,7 +359,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                   }
                }
             }
-            let relation = prog_get_relation(prog, &bcl.rel, bcl.args.len())?;
+            let relation = prog_get_relation(prog, &bcl.rel, &bcl.args)?;
 
             for cond_clause in bcl.cond_clauses.iter() {
                extend_grounded_vars(&mut grounded_vars, cond_clause.bound_vars())?;
@@ -393,7 +395,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                }
                true
             }).map(|(i, _expr)| i).collect_vec();
-            let relation = prog_get_relation(prog, &agg.rel, agg.rel_args.len())?;
+            let relation = prog_get_relation(prog, &agg.rel, &agg.rel_args)?;
             
             let ir_rel = IrRelation::new(relation.into(), indices, relation.need_id);
             let ir_agg_clause = IrAggClause {
@@ -427,35 +429,9 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
          args_span: hcl_node.args.span(),
          required_flag: hcl_node.required_flag,
          id_name: hcl_node.id_name.clone(),
+         delete_flag: hcl_node.delete_flag,
       };
       head_clauses.push(head_clause);
-
-      // desugar relation need ID
-      if rel.need_id {
-         // create a new Ident #relname_id
-         let rel_id_name = Ident::new(&format!("{}_id", rel.name), hcl_node.rel.span());
-         let mut field_types : Vec<Type> = rel.field_types.iter().cloned().collect();
-         field_types.insert(0, Type::Verbatim(quote!{usize}));
-
-         let rel_with_id_identity = RelationIdentity {
-            name: rel_id_name.clone(),
-            field_types,
-            is_lattice: rel.is_lattice,
-            need_id: false,
-         };
-         let mut args_with_id : Vec<Expr> = hcl_node.args.iter().cloned().collect();
-         // add __default_id to the beginning of the args
-         args_with_id.insert(0, parse_quote!{__default_id});
-         let head_clause_with_id = IrHeadClause {
-            rel: rel_with_id_identity,
-            args : args_with_id,
-            span: hcl_node.span(),
-            args_span: hcl_node.args.span(),
-            required_flag: hcl_node.required_flag,
-            id_name: Some(rel_id_name),
-         };
-         head_clauses.push(head_clause_with_id);
-      }
    }
    
    let is_simple_join = first_two_clauses_simple && body_items.len() >= 2;
@@ -506,12 +482,17 @@ pub fn get_indices_given_grounded_variables(args: &[Expr], vars: &[Ident]) -> Ve
    res
 }
 
-pub(crate) fn prog_get_relation<'a>(prog: &'a AscentProgram, name: &Ident, arity: usize) -> syn::Result<&'a RelationNode> {
+pub(crate) fn prog_get_relation<'a, T: ToTokens>(prog: &'a AscentProgram, name: &Ident, args: &Punctuated<T, Comma>) -> syn::Result<&'a RelationNode> {
    let relation = prog.relations.iter().find(|r| name == &r.name);
+   let arity = args.len();
    match relation {
       Some(rel) => {
          if rel.field_types.len() != arity {
-            Err(Error::new(name.span(), format!("Wrong arity for relation {}. Actual arity: {}", name, rel.field_types.len())))
+            Err(Error::new(
+               name.span(), 
+               format!("Wrong arity for relation {}. Actual arity: {}, but get {} : {:?}",
+                              name, rel.field_types.len(), arity,
+                              args.iter().map(|arg| quote!{#arg}.to_string()).collect::<Vec<_>>().join(", "))))
          } else {
             Ok(rel)
          }

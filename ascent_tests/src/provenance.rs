@@ -3,6 +3,7 @@
 
 use ascent::lattice::set::*;
 use ascent::*;
+use std::path::Path;
 use std::rc::Rc;
 
 // why provenance is used trace all possible sources of a output value
@@ -84,12 +85,12 @@ fn test_why_lattice() {
 
 // can we get slog style int autoinc id?
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-struct Id(&'static str, usize);
+struct Tag(&'static str, usize);
 
 ascent_par! {
     struct WhySlog;
 
-    macro id_gen($rel_name: ident, $id: ident, $args: va_list) {
+    macro exists($rel_name: ident, $id: ident, $args: va_list) {
         let $id = !$rel_name($args), $($rel_name)_id($args, $id)
     }
     macro id_rel($rel_name: ident, $args: va_list) {
@@ -102,18 +103,18 @@ ascent_par! {
 
     relation edge_raw(i32, i32);
     @declare_id_rel!(edge, i32, i32);
-    @declare_id_rel!(path, i32, Id);
+    @declare_id_rel!(path, i32, Tag);
 
-    id_gen!(edge, id, x, y) <-- edge_raw(x, y);
+    exists!(edge, id, x, y) <-- edge_raw(x, y);
 
-    id_gen!(path, new_id, x, nest_id.clone()) <--
+    exists!(path, new_id, x, nest_id.clone()) <--
         id_rel!(edge, x, y, eid),
-        let nest_id = Id("edge", *eid);
+        let nest_id = Tag("edge", *eid);
 
-    id_gen!(path, new_id, x, nest_id.clone()) <--
+    exists!(path, new_id, x, nest_id.clone()) <--
         edge(x, y),
         id_rel!(path, y, _, pid),
-        let nest_id = Id("edge", *pid);
+        let nest_id = Tag("edge", *pid);
 }
 
 #[test]
@@ -140,25 +141,26 @@ ascent_par! {
     relation edge_id(i32, i32, usize);
     relation path(i32, i32);
     relation path_id(i32, i32, usize);
-    relation provenance(Id, Id);
+    relation provenance(Tag, Tag);
 
     // let <id> = ... will allow you to extract the length of the relation when
     // head clasue tuple is created. `!` operator will enforce all head clause
     // to be generated after this clause to be generated after this clause
     // **succeed** (If a tuple get deduplicated, it means failed).
     // by combine `let` and `!` in head clauses you can get the slog style autoinc id
-    let eid = !edge(x, y), edge_id(x, y, eid) <--
+    let eid = !edge(x, y),
+    edge_id(x, y, eid) <--
         edge_raw(x, y);
 
     let new_id = !path(x, y),
     path_id(x, y, new_id),
-    provenance(Id("path", new_id), Id("edge", *eid)) <--
+    provenance(Tag("path", new_id), Tag("edge", *eid)) <--
         edge_id(x, y, eid);
 
     let new_id = !path(x, z),
     path_id(x, z, new_id),
     // provenance(StructId("path", new_id), StructId("path", *pid)),
-    provenance(Id("path", new_id), Id("edge", *eid)) <--
+    provenance(Tag("path", new_id), Tag("edge", *eid)) <--
         edge_id(x, y, eid),
         path_id(y, z, pid);
 }
@@ -173,4 +175,51 @@ fn test_where() {
    println!("path_id size = {}", tc.path_id.len());
    println!("edge_id size = {}", tc.edge_id.len());
    println!("provenance: {:?}", tc.provenance);
+}
+
+ascent! {
+    struct Length;
+    relation edge_raw(i32, i32);
+    relation ID edge(i32, i32);
+    relation ID path(i32, Tag);
+    relation input(usize);
+    // normal TC
+    >?id.edge(x, y) <-- edge_raw(x, y);
+    >?new_id.path(x, nest_id.clone()) <--
+        edge(x, y).eid,
+        let nest_id = Tag("edge", *eid);
+    >?new_id.path(x, nest_id.clone()) <--
+        edge(x, y),
+        path(y, _).pid,
+        let nest_id = Tag("path", *pid);
+
+    function path_length(Tag) -> usize;
+    // length of a path
+
+    %path_length(Tag("path", *pid)) -> ?
+        <--
+        input(pid);
+
+    %path_length(Tag("edge", *eid)) -> ret_val
+        <-- %path_length(?Tag("edge", eid)) -> ?,
+        let ret_val = 1;
+
+    %path_length(Tag("path", *pid)) -> ret_val
+        <-- %path_length(?Tag("path", pid)) -> ?,
+        path(x, res).pid,
+        %path_length(res) -> rest_length,
+        let ret_val = rest_length + 1;
+}
+
+#[test]
+fn test_length() {
+   let mut tc = Length::default();
+   tc.edge_raw = vec![(1, 2), (2, 3), (3, 4), (1, 4)];
+   tc.input = vec![(6,)];
+
+   tc.run();
+   println!("edge id : {:?}", tc.edge_id);
+   println!("path id : {:?}", tc.path_id);
+   println!("path_length_do_id : {:?}", tc.path_length_do_id);
+   println!("path length : {:?}", tc.path_length);
 }

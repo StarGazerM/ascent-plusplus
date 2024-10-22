@@ -1,220 +1,162 @@
-# Logic programming in Rust
-[![Rust](https://github.com/s-arash/ascent/actions/workflows/rust.yml/badge.svg)](https://github.com/s-arash/ascent/actions/workflows/rust.yml) 
-[![Crates.io](https://img.shields.io/crates/v/ascent?color=blue)](https://crates.io/crates/ascent)
+# Yihao's fork of Ascent
 
-Ascent is a logic programming language (similar to Datalog) embedded in Rust via macros.
+This is a fork of Ascent, a rust based datalog dailect made by [Arash](https://github.com/s-arash)
 
-For more information, check out [the CC paper](https://s-arash.github.io/ascent/cc22main-p95-seamless-deductive-inference-via-macros.pdf) on Ascent.
+# What's new in this fork?
 
-In addition, [this OOPSLA paper](https://dl.acm.org/doi/pdf/10.1145/3622840) describes the "Bring Your Own Data Structures to Datalog" aspect of Ascent.
+## Head Tuple Generating Dependency
 
-## Examples
+In most of datalog engine, all head clauses are independent, there generateing order of each head clause is arbitrary and doesn't affect the final result. For example in the following datalog program:
 
-### Computing all the connected nodes in a graph
-```Rust
+```rust
 ascent! {
-   relation edge(i32, i32);
-   relation path(i32, i32);
-   
-   path(x, y) <-- edge(x, y);
-   path(x, z) <-- edge(x, y), path(y, z);
+   relation foo(i32);
+   relation bar1(i32);
+   relation bar2(i32);
+
+   foo(1);
+   bar1(1);
+   bar1(x), bar2(x) <-- foo(x);
 }
 ```
 
-## Using Ascent
-1. [Install Rust](https://www.rust-lang.org/tools/install).
-2. Make a new Rust project:
-   ```bash
-   cargo new my-ascent-project
-   cd my-ascent-project
-   ```
-3. Add `ascent` as a dependency in `Cargo.toml`:
-   ```toml
-   [dependencies]
-   ascent = "*"
-   ```
-4. Write some Ascent code in `main.rs`. Here is a complete example:
-   ```rust
-   use ascent::ascent;
-   ascent! {
-      relation edge(i32, i32);
-      relation path(i32, i32);
-      
-      path(x, y) <-- edge(x, y);
-      path(x, z) <-- edge(x, y), path(y, z);
+The result will contain `bar2(1)`, because the generating of `bar1(1)` and `bar2(1)` are independent. However, in some case, we only want to generate `bar2(1)` when `bar1(1)` is generated. In this example, since `bar1(1)` is a fact, it won't be generated in the last rule, so `bar2(1)` won't be generated either. This can be realized using `!` head cluase in this fork:
+
+```rust
+   !bar1(1), bar2(1) <-- foo(1);
+``` 
+In this case, `bar2(1)` will not be generated.
+
+## Materialization of tuple ID
+In this branch, you can get current size of relation using `let <y> = !<x>(...)` in the head clause to get the total size of relation x when tuple `<x>(...)` is generated and then use it autoinc ID. For example, in the following datalog program:
+
+```rust
+ascent! {
+   relation foo(i32);
+   relation bar(i32);
+   relation bar_id(i32, usize);
+
+   foo(1);
+   let id = !bar(x), bar_d(x, id) <-- foo(x);
+}
+```
+The detail semantic of this syntax can be found in slog paper (called ∃! in the paper).
+a syntax sugar for ID is also provide:
+```rust
+   >?id.bar(x) <-- foo(x);
+```
+To declare a relation with ID, you can use  below syntax:
+```rust
+   relation ID bar(i32);
+```
+to declare `bar` and `bar_id` at the same time.
+If you want use id of `bar` relation more elegantly, without directly use `bar_id`, you can use below syntax:
+```rust
+   ... <-- bar(x).id;
+```
+Using these materialized ID you can get slog like nested facts:
+```rust
+ascent! {
+   relation ID edge(i32, i32);
+   relation ID path(i32, Tag);
+   relation input(usize);
+    // normal TC
+   >?id.edge(x, y) <-- edge_raw(x, y);
+   >?new_id.path(x, nest_id.clone()) <--
+      edge(x, y).eid,
+      let nest_id = Tag("edge", *eid);
+   >?new_id.path(x, nest_id.clone()) <--
+      edge(x, y),
+      path(y, _).pid,
+      let nest_id = Tag("path", *pid);
+}
+```
+
+## Defunctionalization
+In slog, a function can be represented by relation with a nested "do" rule. For example to compute 
+```scheme
+(lenghth ?(do-length (edge x y)) 1)
+[(length ?(do-length (path x y)) {+ l 1 })
+    <--
+    (edge x y),
+    (length !(do-length y) l)]
+
+(input (path 1 (path 2 (edge 3 y))))
+```
+
+In this branch, you can define do relation together with the relation using `function ` keyword. For example:
+```rust
+function path_length(Tag) -> usize;
+```
+both `path_length` and `do_path_length` will all paired with a id rule for id referencing.
+A syntax sugar for referencing the do relation  without using actual function relation is:
+```rust
+   %path(x, y) -> ?;
+```
+It can be both used in head and body clause. For example:
+```rust
+   %path_length(Tag("path", *pid)) -> ? <--
+      input(pid);
+```
+If `?` is repalced by a logical variable, it will also use the actual result of the function rule.
+
+Using all these feature, above slog rule can be implemented as:
+```rust
+ascent! {
+    struct Length;
+    relation edge_raw(i32, i32);
+    relation ID edge(i32, i32);
+    relation ID path(i32, Tag);
+    relation input(usize);
+    // normal TC
+    >?id.edge(x, y) <-- edge_raw(x, y);
+    >?new_id.path(x, nest_id.clone()) <--
+        edge(x, y).eid,
+        let nest_id = Tag("edge", *eid);
+    >?new_id.path(x, nest_id.clone()) <--
+        edge(x, y),
+        path(y, _).pid,
+        let nest_id = Tag("path", *pid);
+
+    function path_length(Tag) -> usize;
+    // length of a path
+
+    %path_length(Tag("path", *pid)) -> ?
+        <--
+        input(pid);
+
+    %path_length(Tag("edge", *eid)) -> ret_val
+        <-- %path_length(?Tag("edge", eid)) -> ?,
+        let ret_val = 1;
+
+    %path_length(Tag("path", *pid)) -> ret_val
+        <-- %path_length(?Tag("path", pid)) -> ?,
+        path(x, res).pid,
+        %path_length(res) -> rest_length,
+        let ret_val = rest_length + 1;
+}
+```
+
+## More powerful macro
+
+Now you can use `va_list` to match the rest of unmatched variable in a macro definition. For example:
+```rust
+ascent! {
+   macro exists($rel_name: ident, $id: ident, $args: va_list) {
+        let $id = !$rel_name($args), $($rel_name)_id($args, $id)
+   }
+   exists!(edge, id, x, y) <-- edge_raw(x, y);
+}
+```
+You can also use macro to generate relation definition and rules, but when calling these macro, you need a `@` before the callsite. For example:
+```rust
+ascent! {
+   macro declare_id_rel($rel_name: ident, $args: va_list) {
+        relation $rel_name($args);
+        relation $($rel_name)_id($args, usize);
    }
 
-   fn main() {
-      let mut prog = AscentProgram::default();
-      prog.edge = vec![(1, 2), (2, 3)];
-      prog.run();
-      println!("path: {:?}", prog.path);
-   }
-   ```
-5. Run the program:
-   ```bash
-   cargo run
-   ```
-
-## Examples
-
-See the [ascent/examples](ascent/examples) directory for a more complete set of examples.
-
-## Features
-
-### Lattices
-
-Ascent supports computing fixed points of user-defined lattices. The `lattice` keyword defines a lattice in Ascent. The type of the final column of a `lattice` must implement the `Lattice` trait. A `lattice` is like a relation, except that when a new `lattice` fact (v<sub>1</sub>, v<sub>2</sub>, ..., v<sub>(n-1)</sub>, v<sub>n</sub>) is discovered, and a fact  (v<sub>1</sub>, v<sub>2</sub>, ..., v<sub>(n-1)</sub>, v'<sub>n</sub>) is already present in the database, v<sub>n</sub> and v'<sub>n</sub> are `join`ed together to produce a single fact.
-
-This feature enables writing programs not expressible in Datalog. For example we can use this feature to compute the lengths of shortest paths between nodes in a graph.
-
-```Rust
-ascent! {
-   lattice shortest_path(i32, i32, Dual<u32>);
-   relation edge(i32, i32, u32);
-
-   shortest_path(x, y, Dual(*w)) <-- edge(x, y, w);
-
-   shortest_path(x, z, Dual(w + l)) <-- 
-      edge(x, y, w), 
-      shortest_path(y, z, ?Dual(l));
+   @declare_id_rel!(edge, i32, i32);
+   @declare_id_rel!(path, i32, Tag);
 }
 ```
-
-In this example, `Dual<T>` is the dual of the lattice `T`. We use `Dual<T>` because we are interested in shortest paths, given two path lengths `l1` and `l2` for any given pair of nodes, we only store `min(l1, l2)`.
-
-### Parallel Ascent
-
-Ascent is capable of producing parallel code. The macros `ascent_par!` and `ascent_run_par!` produce parallelized code. 
-Naturally, column types must be `Send + Sync` to work in parallel Ascent. 
-
-Parallel Ascent utilizes [`rayon`](https://crates.io/crates/rayon), so the parallelism level can be controlled either via `rayon`'s [`ThreadPoolBuilder`](https://docs.rs/rayon/latest/rayon/struct.ThreadPoolBuilder.html) or using the `RAYON_NUM_THREADS` environment variable (see [here](https://github.com/rayon-rs/rayon/blob/master/FAQ.md#how-many-threads-will-rayon-spawn) for more info).
-
-### BYODS
-
-[![ascent-byods-rels on crates.io](https://img.shields.io/crates/v/ascent-byods-rels?label=ascent-byods-rels&color=blue)](https://crates.io/crates/ascent-byods-rels)
-
-BYODS (short for [Bring Your Own Data Structures to Datalog](https://dl.acm.org/doi/pdf/10.1145/3622840)) is a feature of Ascent that enables relations to be backed by custom data structures. This feature allows improving the algorithmic complexity of Ascent programs by optimizing the data structures used to back relations. For example, a program that requires transitive closure computation of a large graph could improve its performance by choosing a union-find based data structure `trrel_uf` (defined in [`ascent-byods-rels`](https://crates.io/crates/ascent-byods-rels)) for the transitive closure relation:
-
-in `Cargo.toml`:
-```toml
-[dependencies]
-ascent-byods-rels = "*"
-ascent = "*"
-```
-
-```Rust
-use ascent_byods_rels::trrel_uf;
-ascent! {
-   relation edge(Node, Node);
-   
-   #[ds(trrel_uf)] // Makes the relation transitive
-   relation path(Node, Node);
-   
-   path(x, y) <-- edge(x, y);
-}
-```
-
-The `#[ds(trrel_uf)]` attribute directs the Ascent compiler to use the data structure provider defined in the module `trrel_uf` for the `path` relation.
-You can find a complete example of BYODS dramatically speeding up Ascent computations [here](./byods/ascent-byods-rels/examples/steensgaard/main.rs).
-
-See [BYODS.MD](BYODS.MD) for more information on BYODS.
-
-### `ascent_run!`
-
-In addition to `ascent!`, we provide the `ascent_run!` macro. Unlike `ascent!`, this macro evaluates the ascent program when invoked. The main advantage of `ascent_run!` is that local variables are in scope inside the Ascent program. For example, we can define a function for discovering the (optionally reflexive) transitive closure of a relation like so:
-
-```Rust
-fn tc(r: Vec<(i32, i32)>, reflexive: bool) -> Vec<(i32, i32)> {
-   ascent_run! {
-      relation r(i32, i32) = r;
-      relation tc(i32, i32);
-      tc(x, y) <-- r(x, y);
-      tc(x, z) <-- r(x, y), tc(y, z);
-      tc(x, x), tc(y, y) <-- if reflexive, r(x, y);
-   }.tc
-}
-```
-In the above example, we initialize the relation `r` directly to shorten the program.
-
-We also provide `ascent_run_par!`, the parallel version of `ascent_run!`.
-### Conditions and Generative Clauses
-The syntax is designed to be familiar to Rust users. In this example, `edge` is populated with non-reflexive edges from `node`. Note that any type that implements `Clone + Eq + Hash` can be used as a relation column.
-
-```Rust
-ascent! {
-   relation node(i32, Rc<Vec<i32>>);
-   relation edge(i32, i32);
-   
-   edge(x, y) <--
-      node(x, neighbors),
-      for &y in neighbors.iter(),
-      if x != y;
-}
-```
-
-### Negation and Aggregation
-Ascent supports stratified negation and aggregation. Aggregators are defined in `ascent::aggregators`. You can find `sum`, `min`, `max`, `count`, and `mean` there.
-
-In the following example, the average grade of students is stored in `avg_grade`:
-
-```Rust
-use ascent::aggregators::mean;
-type Student = u32;
-type Course = u32;
-type Grade = u16;
-ascent! {
-   relation student(Student);
-   relation course_grade(Student, Course, Grade);
-   relation avg_grade(Student, Grade);
-
-   avg_grade(s, avg as Grade) <--
-      student(s),
-      agg avg = mean(g) in course_grade(s, _, g);
-}
-```
-
-You can define your own aggregators if the provided aggregators are not sufficient. For example, an aggregator for getting the 2nd highest value of a column can have the following signature: 
-
-```Rust
-fn second_highest<'a, N: 'a>(inp: impl Iterator<Item = (&'a N,)>) -> impl Iterator<Item = N>
-where N: Ord + Clone
-```
-Aggregators can even be parameterized! For an example of a parameterized aggregator, lookup the definition of `percentile` in [`ascent::aggregators`](./ascent/src/aggregators.rs).
-
-### Macro definitions
-It may be useful to define macros that expand to either body items or head items. Ascent allows you to do this.
-
-You can find more about macros in Ascent macros [here](MACROS.MD).
-
-### Misc
-- **`#![measure_rule_times]`** causes execution times of individual rules to be measured. Example: 
-   ```Rust
-   ascent! {
-      #![measure_rule_times]
-      // ...
-   }
-   let mut prog = AscentProgram::default();
-   prog.run();
-   println!("{}", prog.scc_times_summary());
-   ```
-   Note that **`scc_times_summary()`** is generated for all Ascent programs. With `#![measure_rule_times]`
-   it reports execution times of individual rules too.
-
-- With **`#![generate_run_timeout]`**, a `run_timeout` function is generated that stops after
-  the given amount of time.
-
-- The feature **`wasm-bindgen`** allows Ascent programs to run in WASM environments.
-
-- **`struct`** declarations can be added to the top of `ascent!` definitions. This allows changing the
-  name and visibility of the generated type and introduction of type/lifetime parameters and constraints.
-   ```Rust
-   ascent! {
-      struct GenericTC<N: Clone + Eq + Hash>;
-      relation edge(N, N);
-      // ...
-   }
-   ```
-
-   *Hint*: If you get a "private type ... in public interface (error E0446)" warning, you can fix it by
-   making the generated Ascent type private, as done in the above example.

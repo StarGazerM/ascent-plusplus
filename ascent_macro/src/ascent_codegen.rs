@@ -1092,6 +1092,23 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
             return;
          }
       };
+      let update_rel_code = if !hcl.delete_flag {
+         quote_spanned! {hcl.span=>
+            if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new, 
+               &__new_row, ())
+            {
+               #push_code
+               #(#update_indices)*
+               #set_changed_true_code
+            } else {
+               #skip_unchanged_code
+            }
+         }
+      } else {
+         quote! {
+
+         }
+      };
       if !hcl.rel.is_lattice { 
          let add_row = quote_spanned!{hcl.span=>
             let __new_row: #row_type = #new_row_tuple;
@@ -1099,15 +1116,7 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
 
             if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
                !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
-               if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new, 
-                  &__new_row, ())
-               {
-                  #push_code
-                  #(#update_indices)*
-                  #set_changed_true_code
-               } else {
-                  #skip_unchanged_code
-               }
+               #update_rel_code
             } else {
                 #skip_unchanged_code
             }

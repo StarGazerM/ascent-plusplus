@@ -4,6 +4,8 @@ use std::ops::Deref;
 use std::hash::Hash;
 use std::fmt::Debug;
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct Tag(&'static str, usize);
 
 #[allow(dead_code)]
 pub trait Atom:

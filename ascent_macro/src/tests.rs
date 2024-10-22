@@ -573,3 +573,25 @@ fn test_macro_in_macro() {
 
    write_to_scratchpad(inp);
 }
+
+#[test]
+fn test_function() {
+   let prefix = quote! {
+      #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+      struct Tag(&'static str, usize);
+   };
+   let inp = quote!{
+      relation ID edge(i32, i32);
+      relation ID path(i32, Tag);
+      relation input(i32, i32);
+
+      function path_length(Tag) -> usize;
+      %path_length(Tag("edge", *pid)) -> ret_val
+        <--
+        path(x, res).pid,
+        %path_length(res) -> rest_length,
+        let ret_val = rest_length + 1;
+   };
+
+   write_with_prefix_to_scratchpad(inp, prefix);
+}

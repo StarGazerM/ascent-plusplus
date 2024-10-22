@@ -1,5 +1,6 @@
 // #![allow(warnings)]
 // #![feature(decl_macro)]
+#![feature(macro_metavar_expr)]
 #![allow(unused_imports)]
 #![allow(confusable_idents)]
 

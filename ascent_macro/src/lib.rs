@@ -7,6 +7,7 @@ mod ascent_hir;
 mod scratchpad;
 mod ascent_codegen;
 mod ascent_syntax;
+mod ascent_sugar;
 mod test_errors;
 mod syn_utils;
 
@@ -14,7 +15,8 @@ mod syn_utils;
 extern crate quote;
 
 extern crate proc_macro;
-use ascent_syntax::{AscentProgram, desugar_ascent_program};
+use ascent_syntax::AscentProgram;
+use ascent_sugar::desugar_ascent_program;
 use proc_macro::TokenStream;
 use syn::Result;
 use crate::{ascent_codegen::compile_mir, ascent_hir::compile_ascent_program_to_hir, ascent_mir::compile_hir_to_mir};
