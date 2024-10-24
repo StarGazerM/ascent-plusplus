@@ -8,6 +8,7 @@ mod scratchpad;
 mod ascent_codegen;
 mod ascent_syntax;
 mod ascent_sugar;
+mod ascent_monotonic;
 mod test_errors;
 mod syn_utils;
 
@@ -15,6 +16,7 @@ mod syn_utils;
 extern crate quote;
 
 extern crate proc_macro;
+use ascent_monotonic::ascent_check_monotonicity;
 use ascent_syntax::AscentProgram;
 use ascent_sugar::desugar_ascent_program;
 use proc_macro::TokenStream;
@@ -111,6 +113,8 @@ pub(crate) fn ascent_impl(input: proc_macro2::TokenStream, is_ascent_run: bool, 
    // println!("parse res: {} relations, {} rules", prog.relations.len(), prog.rules.len());
 
    let prog = desugar_ascent_program(prog)?;
+
+   ascent_check_monotonicity(&prog)?;
    
    let hir = compile_ascent_program_to_hir(&prog, is_parallel)?;
    // println!("hir relations: {}", hir.relations_ir_relations.keys().map(|r| &r.name).join(", "));

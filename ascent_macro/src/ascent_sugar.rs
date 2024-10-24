@@ -220,7 +220,6 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
                 visit(e);
              }
           }
-          // visit();
        },
     }
  }
@@ -293,34 +292,34 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
     }
  }
  
+ fn clause_desugar_pattern_args(body_clause: BodyClauseNode, gensym: &mut GenSym) -> BodyClauseNode {
+   let mut new_args = Punctuated::new();
+   let mut new_cond_clauses = vec![];
+   for arg in body_clause.args.into_pairs() {
+      let (arg, punc) = arg.into_tuple();
+      let new_arg = match arg {
+         BodyClauseArg::Expr(_) => arg,
+         BodyClauseArg::Pat(pat) => {
+            let pattern = pat.pattern;
+            let ident = gensym.next_ident("__arg_pattern", pattern.span());
+            let new_cond_clause = quote!{ if let #pattern = #ident};
+            let new_cond_clause = CondClause::IfLet(syn::parse2(new_cond_clause).unwrap());
+            new_cond_clauses.push(new_cond_clause);
+            BodyClauseArg::Expr(syn::parse2(quote!{#ident}).unwrap())
+         }
+      };
+      new_args.push_value(new_arg);
+      if let Some(punc) = punc {new_args.push_punct(punc)}
+   }
+   new_cond_clauses.extend(body_clause.cond_clauses);
+   BodyClauseNode{
+      args: new_args,
+      cond_clauses: new_cond_clauses,
+      rel: body_clause.rel,
+      id_var: body_clause.id_var
+   }
+ }
  fn rule_desugar_pattern_args(rule: RuleNode) -> RuleNode {
-    fn clause_desugar_pattern_args(body_clause: BodyClauseNode, gensym: &mut GenSym) -> BodyClauseNode {
-       let mut new_args = Punctuated::new();
-       let mut new_cond_clauses = vec![];
-       for arg in body_clause.args.into_pairs() {
-          let (arg, punc) = arg.into_tuple();
-          let new_arg = match arg {
-             BodyClauseArg::Expr(_) => arg,
-             BodyClauseArg::Pat(pat) => {
-                let pattern = pat.pattern;
-                let ident = gensym.next_ident("__arg_pattern", pattern.span());
-                let new_cond_clause = quote!{ if let #pattern = #ident};
-                let new_cond_clause = CondClause::IfLet(syn::parse2(new_cond_clause).unwrap());
-                new_cond_clauses.push(new_cond_clause);
-                BodyClauseArg::Expr(syn::parse2(quote!{#ident}).unwrap())
-             }
-          };
-          new_args.push_value(new_arg);
-          if let Some(punc) = punc {new_args.push_punct(punc)}
-       }
-       new_cond_clauses.extend(body_clause.cond_clauses);
-       BodyClauseNode{
-          args: new_args,
-          cond_clauses: new_cond_clauses,
-          rel: body_clause.rel,
-          id_var: body_clause.id_var
-       }
-    }
     let mut gensym = GenSym::default();
     use BodyItemNode::*;
     RuleNode {
@@ -464,12 +463,12 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           // };
           let do_clause_arg : Punctuated<BodyClauseArg, Comma> = arg_vec.clone();
           let var_do_clause_id = gensym.next_ident(&format!("{}_do__", f.name), f.name.span());
-          let do_clause_used = BodyClauseNode {
+         let do_clause_used = BodyClauseNode {
              rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
              args: do_clause_arg,
-             id_var: Some(var_do_clause_id.clone()),
+             id_var: Some(syn::parse2(quote!{#var_do_clause_id}).unwrap()),
              cond_clauses: vec![]
-          };
+         };
           let use_result_clause = BodyClauseNode {
              rel: f.name.clone(),
              args: Punctuated::from_iter(vec![
@@ -561,12 +560,16 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           let do_call_id = gensym.next_ident(&format!("{}_ret__", f.name), f.name.span());
           let head_exists_var = gensym.next_ident(&format!("{}_exists", f.name), f.name.span());
           if let Some (ret_var) = &f.return_var {
-            desugared_body_items.push(BodyItemNode::Clause(BodyClauseNode{
-                rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
-                args: f.args.clone(),
-                id_var: Some(do_call_id.clone()),
-                cond_clauses: vec![]
-            }));
+            let new_do_clause = BodyClauseNode{
+               rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+               args: f.args.clone(),
+               id_var: Some(syn::parse2(quote!{#do_call_id}).unwrap()),
+               cond_clauses: vec![]
+            };
+            let mut gensym = GenSym::default();
+            let pattern_desugared_do = clause_desugar_pattern_args(new_do_clause, &mut gensym);
+            // insert to head of desugared_body_items
+            desugared_body_items.insert(0, BodyItemNode::Clause(pattern_desugared_do));
             desugared_head_items.push(HeadItemNode::HeadClause(HeadClauseNode{
                 rel: f.name.clone(),
                 args: Punctuated::from_iter(vec![
@@ -807,8 +810,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
     prog.rules = 
        rule_desugared_disjunction.into_iter()
        .map(rule_desugar_function_impl_decl_clause)
-       .flat_map(rule_desugar_functional_call)
        .map(rule_desugar_function_return)
+       .flat_map(rule_desugar_functional_call)
        .map(rule_desugar_exists_bang)
        .map(rule_desugar_id_unification)
        .map(rule_desugar_pattern_args)

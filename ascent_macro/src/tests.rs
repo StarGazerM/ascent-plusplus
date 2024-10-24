@@ -586,9 +586,9 @@ fn test_function() {
       relation input(i32, i32);
 
       function path_length(Tag) -> usize;
-      %path_length(Tag("edge", *pid)) -> ret_val
-        <--
-        path(x, res).pid,
+      %path_length(?Tag("edge", pid)) -> ret_val
+        <-- 
+        path(x, res).*pid,
         %path_length(res) -> rest_length,
         let ret_val = rest_length + 1;
    };

@@ -200,13 +200,14 @@ ascent! {
         <--
         input(pid);
 
-    %path_length(Tag("edge", *eid)) -> ret_val
-        <-- %path_length(?Tag("edge", eid)) -> ?,
+    %path_length(?Tag("edge", eid)) -> ret_val
+        <--
+        // %path_length(?Tag("edge", eid)) -> ?,
         let ret_val = 1;
 
-    %path_length(Tag("path", *pid)) -> ret_val
-        <-- %path_length(?Tag("path", pid)) -> ?,
-        path(x, res).pid,
+    %path_length(?Tag("path", pid)) -> ret_val
+        <-- // %path_length(?Tag("path", pid)) -> ?,
+        path(x, res).*pid,
         %path_length(res) -> rest_length,
         let ret_val = rest_length + 1;
 }

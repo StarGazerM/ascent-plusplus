@@ -233,7 +233,7 @@ pub struct FunctionCallNode {
    pub _percent: Token![%],
    pub name: Ident,
    pub args: Punctuated<BodyClauseArg, Token![,]>,
-   pub id_var: Option<Ident>,
+   pub id_var: Option<Expr>,
    pub _get_kw: Token![->],
    pub return_var: Option<Ident>,
 }
@@ -276,7 +276,7 @@ pub struct BodyClauseNode {
    pub rel : Ident,
    pub args : Punctuated<BodyClauseArg, Token![,]>,
    pub cond_clauses: Vec<CondClause>,
-   pub id_var : Option<Ident>,
+   pub id_var : Option<Expr>,
 }
 
 #[derive(Parse, Clone, PartialEq, Eq, Debug)]
@@ -414,7 +414,7 @@ impl Parse for BodyClauseNode{
       let mut id_var = None;
       if input.peek(Token![.]) {
          input.parse::<Token![.]>()?;
-         id_var = input.parse()?;
+         id_var = input.parse().ok();
       }
       let mut cond_clauses = vec![];
       while let Ok(cl) = input.parse(){
