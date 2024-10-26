@@ -5,7 +5,8 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, BuildHasherDefault};
 
 use crate::c_rel_index::{DashMapViewParIter, shards_count};
-use crate::internal::{RelIndexWrite, CRelIndexWrite, RelFullIndexRead, RelFullIndexWrite, CRelFullIndexWrite, RelIndexMerge, Freezable};
+
+use crate::internal::{AtomicCounter, RelIndexWrite, CRelIndexWrite, RelFullIndexRead, RelFullIndexWrite, CRelFullIndexWrite, RelIndexMerge, Freezable};
 use crate::internal::{RelIndexRead, RelIndexReadAll, CRelIndexRead, CRelIndexReadAll};
 
 
@@ -146,16 +147,24 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + Sync> CRelIndexRead<'a> for CRelFull
 
 }
 
-impl<'a, K: 'a + Clone + Hash + Eq, V: 'a> RelFullIndexRead<'a> for CRelFullIndex<K, V> {
+impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + AtomicCounter> RelFullIndexRead<'a> for CRelFullIndex<K, V> {
    type Key = K;
 
    #[inline(always)]
    fn contains_key(&self, key: &Self::Key) -> bool {
-      self.unwrap_frozen().contains_key(key)
+      // self.unwrap_frozen().contains_key(key)
+      let unforzen = self.unwrap_frozen();
+      match unforzen.get(key) {
+         Some(val) => {
+            val.inc_atomic();
+            true
+         },
+         None => false,
+      }
    }
 }
 
-impl<'a, K: 'a + Clone + Hash + Eq, V: 'a> RelFullIndexWrite for CRelFullIndex<K, V> {
+impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + AtomicCounter> RelFullIndexWrite for CRelFullIndex<K, V> {
    type Key = K;
    type Value = V;
 

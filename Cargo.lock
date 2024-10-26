@@ -28,11 +28,12 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "ascent"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ascent_base",
  "ascent_macro",
  "boxcar",
+ "cfg-if",
  "dashmap",
  "hashbrown 0.14.5",
  "instant",
@@ -44,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "ascent-byods-rels"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ascent",
  "derive_more",
@@ -61,14 +62,14 @@ dependencies = [
 
 [[package]]
 name = "ascent_base"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "paste",
 ]
 
 [[package]]
 name = "ascent_macro"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ascent",
  "ascent_base",

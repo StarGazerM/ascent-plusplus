@@ -25,3 +25,4 @@ harness = false
 
 [features]
 par = ["ascent/par"]
+default = ["par"]

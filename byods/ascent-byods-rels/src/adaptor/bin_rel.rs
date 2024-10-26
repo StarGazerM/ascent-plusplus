@@ -1,7 +1,7 @@
 use std::iter::{Map, once, Once};
 use std::marker::PhantomData;
 
-use ascent::internal::{RelIndexMerge, RelIndexWrite, RelFullIndexWrite, RelFullIndexRead};
+use ascent::internal::{FullRelCounter, RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexWrite};
 use ascent::internal::{RelIndexRead, RelIndexReadAll};
 
 use crate::iterator_from_dyn::IteratorFromDyn;
@@ -162,9 +162,9 @@ impl<'a, TBinRel> RelIndexMerge for ByodsBinRelInd0_1Write<'a, TBinRel> {
 
 impl<'a, TBinRel: ByodsBinRel> RelIndexWrite for ByodsBinRelInd0_1Write<'a, TBinRel> {
    type Key = (TBinRel::T0, TBinRel::T1);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn index_insert(&mut self, key: Self::Key, (): Self::Value) {
+   fn index_insert(&mut self, key: Self::Key, _: Self::Value) {
       self.0.insert(key.0, key.1);
    }
 }
@@ -173,9 +173,9 @@ impl<'a, TBinRel: ByodsBinRel> RelFullIndexWrite for ByodsBinRelInd0_1Write<'a, 
 where TBinRel::T0: Clone, TBinRel::T1: Clone
 {
    type Key = (TBinRel::T0, TBinRel::T1);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn insert_if_not_present(&mut self, key: &Self::Key, (): Self::Value) -> bool {
+   fn insert_if_not_present(&mut self, key: &Self::Key, _: Self::Value) -> bool {
       self.0.insert(key.0.clone(), key.1.clone())
    }
 }
