@@ -2,7 +2,7 @@
 
 use crate::ascent_syntax::{AscentProgram, BodyItemNode, HeadItemNode};
 
-pub fn ascent_check_monotonicity(prog: &AscentProgram) -> Result<(), syn::Error> {
+pub(crate) fn ascent_check_monotonicity(prog: &AscentProgram) -> Result<(), syn::Error> {
    let mut monotonic_map = std::collections::HashMap::new();
 
    for rule in &prog.rules {

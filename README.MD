@@ -1,8 +1,8 @@
-# Yihao's fork of Ascent
+# Ascent++
 
 This is a fork of Ascent, a rust based datalog dailect made by [Arash](https://github.com/s-arash)
 
-# What's new in this fork?
+# What's new in this ++?
 
 ## Head Tuple Generating Dependency
 
@@ -160,3 +160,32 @@ ascent! {
    @declare_id_rel!(path, i32, Tag);
 }
 ```
+
+## Derivation Counter
+*WARNING: This can't been turned off in current code!*
+*WARNING: This feature only works in you are using native relation(not lattice or BYODS relation)*
+In this branch, tuple in full version of relation (in a ascent they are relation index with all of its columns) will have a tag associated with it. This tag is used to track the derivation of the tuple. For example, in the following datalog program:
+```rust
+fn test_tc() {
+    let mut tc = ascent_run! {
+        relation edge(i32, i32);
+        relation path(i32, i32);
+
+        edge(1, 2);
+        edge(2, 3);
+        edge(3, 4);
+        edge(1, 4);
+
+        path(x, y) <-- edge(x, y);
+        path(x, y) <-- path(x, z), edge(z, y);
+    };
+
+    let path_with_cnt = tc.path_indices_0_1.iter().collect::<Vec<_>>();
+    println!("path: {:?}", path_with_cnt);
+    // path: [((1, 2), FullRelCounter { counter: 1 }), ((2, 4), FullRelCounter { counter: 1 }), 
+    // ((3, 4), FullRelCounter { counter: 1 }), ((2, 3), FullRelCounter { counter: 1 }), ((1, 3),
+    // FullRelCounter { counter: 1 }), ((1, 4), FullRelCounter { counter: 2 })]
+}
+```
+The result will contain `path(1, 4)` with a counter of 2, because it is derived from two different paths.
+

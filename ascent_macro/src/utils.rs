@@ -26,6 +26,7 @@ pub fn tuple(exprs: &[Expr]) -> Expr {
 }
 pub fn tuple_spanned(exprs: &[Expr], span: Span) -> Expr {
    let res = match exprs.len() {
+      // 0 => quote_spanned! {span=> 1 },
       1 => {
          let exp = &exprs[0];
          quote_spanned! {span=> ( #exp, ) }

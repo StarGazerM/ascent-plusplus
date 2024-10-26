@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use itertools::{Itertools, Either};
 use proc_macro2::{Ident, Span, TokenStream};
-use syn::{Expr, Type, parse2, spanned::Spanned, parse_quote, parse_quote_spanned};
+use syn::{parse2, parse_quote, parse_quote_spanned, spanned::Spanned, Expr, Type};
 
 use crate::{ascent_hir::{IrRelation, IndexValType}, ascent_syntax::{CondClause, RelationIdentity}, utils::TokenStreamExtensions};
 use crate::utils::{exp_cloned, expr_to_ident, tuple, tuple_spanned, tuple_type};
@@ -325,14 +325,16 @@ fn rel_index_type(rel: &IrRelation, mir: &AscentMir) -> Type {
    
    if rel.relation.is_lattice {
       let res = if !mir.is_parallel {
+         // let full_val_type = quote_spanned! {span=> ascent::internal::FullRelCounter};
          if is_lat_full_index {
-            quote_spanned! { span=>ascent::internal::RelFullIndexType<#key_type, #value_type> }
+            quote_spanned! { span=>ascent::internal::LatticeFullIndexType<#key_type, #value_type> }
          } else {
             quote_spanned!{ span=>ascent::internal::LatticeIndexType<#key_type, #value_type> }
          }
       } else {
          // parallel
          if is_lat_full_index {
+            // TODO: full lat index for parallel
             quote_spanned! { span=>ascent::internal::CRelFullIndex<#key_type, #value_type> }
          } else if rel.is_no_index() {
             quote_spanned! { span=>ascent::internal::CRelNoIndex<#value_type> }
@@ -345,8 +347,9 @@ fn rel_index_type(rel: &IrRelation, mir: &AscentMir) -> Type {
       let macro_path = &mir.relations_metadata[&rel.relation].ds_macro_path;
       let span = macro_path.span();
       let macro_input = rel_ds_macro_input(&rel.relation, mir);
+      let full_value_type = quote_spanned! {span=>ascent::internal::FullRelCounter};
       if rel.is_full_index() {
-         parse_quote_spanned! {span=> #macro_path::rel_full_ind!(#macro_input, #key_type, #value_type)}
+         parse_quote_spanned! {span=> #macro_path::rel_full_ind!(#macro_input, #key_type, #full_value_type)}
       } else {
          let ind = rel_index_to_macro_input(&rel.indices);
          parse_quote_spanned! {span=> #macro_path::rel_ind!(#macro_input, #ind, #key_type, #value_type)}
@@ -692,8 +695,12 @@ fn compile_update_indices_function_body(mir: &AscentMir) -> proc_macro2::TokenSt
             parse_quote_spanned! {r.name.span()=> tuple.#ind.clone()}
          }).collect_vec();
          let selection_tuple = tuple_spanned(&selection_tuple, r.name.span());
-         let entry_val = index_get_entry_val_for_insert(
-            ind, &parse_quote_spanned!{r.name.span()=> tuple}, &parse_quote_spanned!{r.name.span()=> _i});
+         let entry_val = if ind.is_full_index() {
+            syn::parse2(quote_spanned!{r.name.span()=> (1 as usize).into() }).unwrap()
+         } else {
+            index_get_entry_val_for_insert(
+               ind, &parse_quote_spanned!{r.name.span()=> tuple}, &parse_quote_spanned!{r.name.span()=> _i})
+         };
          let _pre_ref = if r.is_lattice {quote!()} else {_ref.clone()};
          update_indices.push(quote_spanned! {r.name.span()=>
             let selection_tuple = #selection_tuple;
@@ -1095,7 +1102,7 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
       let update_rel_code = if !hcl.delete_flag {
          quote_spanned! {hcl.span=>
             if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new, 
-               &__new_row, ())
+               &__new_row, (1 as usize).into())
             {
                #push_code
                #(#update_indices)*

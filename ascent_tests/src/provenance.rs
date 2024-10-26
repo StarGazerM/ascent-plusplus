@@ -2,15 +2,44 @@
 #![allow(warnings)]
 
 use ascent::lattice::set::*;
-use ascent::*;
+use ascent::ascent;
+use ascent::internal::{Freezable, RelIndexReadAll};
 use std::path::Path;
 use std::rc::Rc;
+
+use crate::{ascent_m_par, ascent_run_m_par};
 
 // why provenance is used trace all possible sources of a output value
 // in some literature also called proof tree
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct Edge(i32, i32);
+
+#[test]
+fn test_tc() {
+    let mut tc = ascent_run_m_par! {
+        relation edge(i32, i32);
+        relation path(i32, i32);
+
+        edge(1, 2);
+        edge(2, 3);
+        edge(3, 4);
+        edge(1, 4);
+
+        path(x, y) <-- edge(x, y);
+        path(x, y) <-- path(x, z), edge(z, y);
+    };
+
+    // let path_with_cnt = tc.path_indices_0_1.iter().collect::<Vec<_>>();
+    tc.path_indices_0_1.freeze();
+    let path_with_cnt = tc.path_indices_0_1.
+        iter_all().map(|(k, v)|{
+            let all_v = v.collect::<Vec<_>>();
+            (k, all_v[0].clone())
+        }).
+        collect::<Vec<_>>();
+    println!("path: {:?}", path_with_cnt);
+}
 
 ascent! {
     struct TCWhyExpensive;
@@ -87,7 +116,7 @@ fn test_why_lattice() {
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct Tag(&'static str, usize);
 
-ascent_par! {
+ascent_m_par! {
     struct WhySlog;
 
     macro exists($rel_name: ident, $id: ident, $args: va_list) {
@@ -133,7 +162,7 @@ fn test_why_slog() {
 
 // where provenance
 
-ascent_par! {
+ascent_m_par! {
     struct TCWhere;
 
     relation edge_raw(i32, i32);
@@ -143,11 +172,6 @@ ascent_par! {
     relation path_id(i32, i32, usize);
     relation provenance(Tag, Tag);
 
-    // let <id> = ... will allow you to extract the length of the relation when
-    // head clasue tuple is created. `!` operator will enforce all head clause
-    // to be generated after this clause to be generated after this clause
-    // **succeed** (If a tuple get deduplicated, it means failed).
-    // by combine `let` and `!` in head clauses you can get the slog style autoinc id
     let eid = !edge(x, y),
     edge_id(x, y, eid) <--
         edge_raw(x, y);
@@ -196,17 +220,13 @@ ascent! {
     function path_length(Tag) -> usize;
     // length of a path
 
-    %path_length(Tag("path", *pid)) -> ?
-        <--
+    %path_length(Tag("path", *pid)) -> ? <--
         input(pid);
 
-    %path_length(?Tag("edge", eid)) -> ret_val
-        <--
-        // %path_length(?Tag("edge", eid)) -> ?,
+    %path_length(?Tag("edge", eid)) -> ret_val <--
         let ret_val = 1;
 
-    %path_length(?Tag("path", pid)) -> ret_val
-        <-- // %path_length(?Tag("path", pid)) -> ?,
+    %path_length(?Tag("path", pid)) -> ret_val <-- 
         path(x, res).*pid,
         %path_length(res) -> rest_length,
         let ret_val = rest_length + 1;
