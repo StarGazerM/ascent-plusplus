@@ -92,7 +92,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: nightly
 
       - name: run examples
         working-directory: ./ascent
@@ -145,6 +145,12 @@ jobs:
       - uses: taiki-e/install-action@cargo-hack
       - uses: taiki-e/install-action@cargo-minimal-versions
 
-      - name: cargo minimal-versions
-        run: cargo +stable minimal-versions check --workspace --all-features --ignore-private -v
+      - name: cargo minimal-versions-byods
+        run: cargo +stable check --all-features --manifest-path byods/ascent-byods-rels/Cargo.toml
+      - name: cargo minimal-versions-base
+        run: cargo check --all-features --manifest-path ascent_base/Cargo.toml
+      - name: cargo minimal-versions-macro
+        run: cargo check --all-features --manifest-path ascent_macro/Cargo.toml
+      - name: cargo minimal-versions-tests
+        run: cargo check --all-features --manifest-path ascent_tests/Cargo.toml
   

@@ -2,6 +2,8 @@
 
 pub use crate::convert::*;
 
+use std::sync::atomic::AtomicI32;
+use std::sync::Arc;
 use std::time::Duration;
 use std::hash::{BuildHasherDefault, Hash};
 use std::collections::{HashMap, HashSet};
@@ -22,6 +24,9 @@ pub type LatticeIndexType<K, V> = HashMap<K, HashSet<V, BuildHasherDefault<FxHas
 
 pub(crate) type HashBrownRelFullIndexType<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub type RelFullIndexType<K, V> = HashBrownRelFullIndexType<K, V>;
+
+pub struct LatticeMap<K, V>(pub hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>);
+pub type LatticeFullIndexType<K, V> = LatticeMap<K, V>;
 
 pub type RelNoIndexType = Vec<usize>;
 
@@ -67,6 +72,12 @@ pub trait RelIndexMerge: Sized {
    fn init(new: &mut Self, delta: &mut Self, total: &mut Self) { }
 }
 
+pub trait RelIndexDelete : Sized {
+   type Key;
+   type Value;
+   fn remove_if_present(&mut self, key: &Self::Key, value: &Self::Value) -> bool;
+}
+
 pub trait CRelIndexWrite{
    type Key;
    type Value;
@@ -76,6 +87,64 @@ pub trait CRelIndexWrite{
 pub trait RelFullIndexRead<'a> {
    type Key;
    fn contains_key(&'a self, key: &Self::Key) -> bool;
+}
+
+pub trait Counter {
+   fn inc(&mut self);
+}
+
+pub trait AtomicCounter {
+   fn inc_atomic(&self);
+   fn add_atomic(&self, value: i32);
+}
+
+impl Counter for i32 {
+   fn inc(&mut self) {
+      *self += 1;
+   }
+}
+
+impl Counter for usize {
+   fn inc(&mut self) {
+      *self += 1;
+   }
+}
+
+impl AtomicCounter for AtomicI32 {
+   fn inc_atomic(&self) {
+      self.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+   }
+
+   fn add_atomic(&self, value: i32) {
+      self.fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+   }
+}
+
+#[derive(Clone, Debug)]
+pub struct FullRelCounter {
+   pub counter: Arc<AtomicI32>
+}
+
+impl AtomicCounter for FullRelCounter {
+   fn inc_atomic(&self) {
+      self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+   }
+
+   fn add_atomic(&self, value: i32) {
+      self.counter.fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+   }
+}
+
+impl Into<FullRelCounter> for i32 {
+   fn into(self) -> FullRelCounter {
+      FullRelCounter{counter: Arc::new(AtomicI32::new(self))}
+   }
+}
+
+impl Into<FullRelCounter> for usize {
+   fn into(self) -> FullRelCounter {
+      FullRelCounter{counter: Arc::new(AtomicI32::new(self as i32))}
+   }
 }
 
 
@@ -91,6 +160,13 @@ pub trait CRelFullIndexWrite {
    type Value;
    /// if an entry for `key` does not exist, inserts `v` for it and returns true.
    fn insert_if_not_present(&self, key: &Self::Key, v: Self::Value) -> bool;
+}
+
+pub trait RelFullIndexDelete {
+   type Key: Clone;
+   type Value;
+   /// if an entry for `key` exists, removes it and returns true.
+   fn remove_if_present(&mut self, key: &Self::Key) -> bool;
 }
 
 
@@ -147,6 +223,25 @@ impl<K: Eq + Hash, V> RelIndexMerge for RelIndexType1<K, V> {
    }
 }
 
+impl<K: Eq + Hash, V: Eq> RelIndexDelete for RelIndexType1<K, V> {
+   type Key = K;
+   type Value = V;
+
+   fn remove_if_present(&mut self, key: &Self::Key, value: &Self::Value) -> bool {
+      if let Some(vec) = self.get_mut(key) {
+         let index = vec.iter().position(|v| v == value);
+         if let Some(index) = index {
+            vec.swap_remove(index);
+            if vec.is_empty() {
+               self.remove(key);
+            }
+            return true;
+         }
+      }
+      false
+   }
+}
+
 impl RelIndexWrite for RelNoIndexType {
    type Key = ();
    type Value = usize;
@@ -196,9 +291,76 @@ impl<K: Eq + Hash, V> RelIndexWrite for HashBrownRelFullIndexType<K, V>{
    }
 }
 
-impl<K: Eq + Hash, V> RelIndexMerge for HashBrownRelFullIndexType<K, V> {
+impl<K: Eq + Hash, V: AtomicCounter> RelIndexMerge for HashBrownRelFullIndexType<K, V> {
    fn move_index_contents(from: &mut Self, to: &mut Self) {
       let before = Instant::now();
+      if from.len() > to.len() {
+         std::mem::swap(from, to);
+      }
+      to.reserve(from.len());
+      for (k, v) in from.drain() {
+         // to.insert(k, v); // TODO could be improved
+         match to.raw_entry_mut().from_key(&k) {
+            hashbrown::hash_map::RawEntryMut::Occupied(occupied) => {
+               let val = occupied.into_mut();
+               val.inc_atomic();
+            },
+            hashbrown::hash_map::RawEntryMut::Vacant(vacant) => {vacant.insert(k, v);},
+         }
+      }
+      unsafe {
+         MOVE_FULL_INDEX_CONTENTS_TOTAL_TIME += before.elapsed();
+      }
+   }
+}
+
+impl <K: Clone + Hash + Eq, V: AtomicCounter> RelFullIndexWrite for HashBrownRelFullIndexType<K, V> {
+   type Key = K;
+   type Value = V;
+   #[inline]
+   fn insert_if_not_present(&mut self, key: &K, v: V) -> bool {
+      match self.raw_entry_mut().from_key(key) {
+         hashbrown::hash_map::RawEntryMut::Occupied(occupied) => {
+            let val = occupied.into_mut();
+            val.inc_atomic();
+            false
+         },
+         hashbrown::hash_map::RawEntryMut::Vacant(vacant) => {vacant.insert(key.clone(), v); true},
+      }
+   }
+}
+
+impl<'a, K: Hash + Eq, V: AtomicCounter> RelFullIndexRead<'a> for HashBrownRelFullIndexType<K, V> {
+    type Key = K;
+
+   fn contains_key(&self, key: &Self::Key) -> bool {
+      // self.contains_key(key)
+      match self.raw_entry().from_key(key) {
+        Some((_, exists_v)) => {
+         exists_v.inc_atomic();
+         true
+        },
+        None => false,
+      }
+   }
+}
+
+
+impl<K: Eq + Hash, V> RelIndexWrite for LatticeMap<K, V>{
+   type Key = K;
+   type Value = V;
+
+  #[inline(always)]
+  fn index_insert(&mut self, key: Self::Key, value: V) {
+     self.0.insert(key, value);
+  }
+}
+
+impl<K: Eq + Hash, V> RelIndexMerge for LatticeMap<K, V> {
+   fn move_index_contents(from_r: &mut Self, to_r: &mut Self) {
+      let before = Instant::now();
+      let from = &mut from_r.0;
+      let to = &mut to_r.0;
       if from.len() > to.len() {
          std::mem::swap(from, to);
       }
@@ -212,26 +374,31 @@ impl<K: Eq + Hash, V> RelIndexMerge for HashBrownRelFullIndexType<K, V> {
    }
 }
 
-impl <K: Clone + Hash + Eq, V> RelFullIndexWrite for HashBrownRelFullIndexType<K, V> {
+impl <K: Clone + Hash + Eq, V> RelFullIndexWrite for LatticeMap<K, V> {
    type Key = K;
    type Value = V;
    #[inline]
    fn insert_if_not_present(&mut self, key: &K, v: V) -> bool {
-      match self.raw_entry_mut().from_key(key) {
+      match self.0.raw_entry_mut().from_key(key) {
          hashbrown::hash_map::RawEntryMut::Occupied(_) => false,
          hashbrown::hash_map::RawEntryMut::Vacant(vacant) => {vacant.insert(key.clone(), v); true},
       }
    }
 }
 
-impl<'a, K: Hash + Eq, V> RelFullIndexRead<'a> for HashBrownRelFullIndexType<K, V> {
-    type Key = K;
+impl<'a, K: Hash + Eq, V> RelFullIndexRead<'a> for LatticeMap<K, V> {
+   type Key = K;
 
-   fn contains_key(&self, key: &Self::Key) -> bool {
-      self.contains_key(key)
-   }
+  fn contains_key(&self, key: &Self::Key) -> bool {
+     self.0.contains_key(key)
+  }
 }
 
+impl<K, V> Default for LatticeMap<K, V> {
+   fn default() -> Self {
+      LatticeMap(hashbrown::HashMap::default())
+   }
+}
 
 /// type constraints for relation columns
 pub struct TypeConstraints<T> where T : Clone + Eq + Hash{_t: ::core::marker::PhantomData<T>}

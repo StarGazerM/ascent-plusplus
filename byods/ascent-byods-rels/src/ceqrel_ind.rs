@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::mem::transmute;
 use std::sync::Mutex;
 
-use ascent::internal::{RelFullIndexRead, RelIndexRead, RelIndexReadAll, RelIndexWrite, RelIndexMerge, RelFullIndexWrite, CRelIndexWrite, CRelFullIndexWrite, Freezable};
+use ascent::internal::{CRelFullIndexWrite, CRelIndexWrite, Freezable, FullRelCounter, RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll, RelIndexWrite};
 use ascent::rayon::prelude::{ParallelIterator, IntoParallelRefIterator};
 use ascent::internal::{CRelIndexRead, CRelIndexReadAll};
 use ascent::internal::{ToRelIndex, ToRelIndex0};
@@ -64,7 +64,7 @@ pub struct EqRelInd0_1CWrite<'a, T: Clone + Hash + Eq>(&'a CEqRelIndCommon<T>);
 
 impl <'a, T: Clone + Hash + Eq> RelIndexWrite for EqRelInd0_1Write<'a, T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = i32;
 
    fn index_insert(&mut self, key: Self::Key, value: Self::Value) {
       self.0.index_insert(key, value)
@@ -73,9 +73,9 @@ impl <'a, T: Clone + Hash + Eq> RelIndexWrite for EqRelInd0_1Write<'a, T> {
 
 impl <'a, T: Clone + Hash + Eq> CRelIndexWrite for EqRelInd0_1CWrite<'a, T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = i32;
 
-   fn index_insert(&self, key: Self::Key, (): Self::Value) {
+   fn index_insert(&self, key: Self::Key, _: Self::Value) {
       self.0.unwrap_unfrozen().lock().unwrap().add(key.0, key.1);
    }
 }
@@ -87,7 +87,7 @@ impl <'a, T: Clone + Hash + Eq> RelIndexMerge for EqRelInd0_1Write<'a, T> {
 
 impl <T: Clone + Hash + Eq> RelFullIndexWrite for CEqRelIndCommon<T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = FullRelCounter;
 
    fn insert_if_not_present(&mut self, key: &Self::Key, _v: Self::Value) -> bool {
       self.unwrap_mut_unfrozen().add(key.0.clone(), key.1.clone())
@@ -96,7 +96,7 @@ impl <T: Clone + Hash + Eq> RelFullIndexWrite for CEqRelIndCommon<T> {
 
 impl <T: Clone + Hash + Eq> CRelFullIndexWrite for CEqRelIndCommon<T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = FullRelCounter;
 
    fn insert_if_not_present(&self, key: &Self::Key, _v: Self::Value) -> bool {
       self.unwrap_unfrozen().lock().unwrap().add(key.0.clone(), key.1.clone())
@@ -406,14 +406,14 @@ impl<T: Clone + Hash + Eq> Default for CEqRelIndCommon<T> {
 
 impl<'a, T: Clone + Hash + Eq + 'a> RelIndexRead<'a> for CEqRelIndCommon<T> {
    type Key = &'a (T, T);
-   type Value = ();
+   type Value = i32;
 
-   type IteratorType = std::iter::Once<()>;
+   type IteratorType = std::iter::Once<i32>;
 
    fn index_get(&'a self, (x, y): &Self::Key) -> Option<Self::IteratorType> {
       let self_ = self.unwrap_frozen();
       if self_.combined.contains(x, y) && !self_.old.contains(x, y) {
-         Some(std::iter::once(()))
+         Some(std::iter::once(1))
       } else {
          None
       }
@@ -430,14 +430,14 @@ impl<'a, T: Clone + Hash + Eq + 'a> RelIndexRead<'a> for CEqRelIndCommon<T> {
 
 impl<'a, T: Clone + Hash + Eq + Sync + 'a> CRelIndexRead<'a> for CEqRelIndCommon<T> {
    type Key = &'a (T, T);
-   type Value = ();
+   type Value = i32;
 
-   type IteratorType = ascent::rayon::iter::Once<()>;
+   type IteratorType = ascent::rayon::iter::Once<i32>;
 
    fn c_index_get(&'a self, (x, y): &Self::Key) -> Option<Self::IteratorType> {
       let self_ = self.unwrap_frozen();
       if self_.combined.contains(x, y) && !self_.old.contains(x, y) {
-         Some(ascent::rayon::iter::once(()))
+         Some(ascent::rayon::iter::once(1))
       } else {
          None
       }
@@ -447,28 +447,28 @@ impl<'a, T: Clone + Hash + Eq + Sync + 'a> CRelIndexRead<'a> for CEqRelIndCommon
 
 impl<'a, T: Clone + Hash + Eq + 'a> RelIndexReadAll<'a> for CEqRelIndCommon<T> {
    type Key = (&'a T, &'a T);
-   type Value = ();
+   type Value = i32;
 
-   type ValueIteratorType = std::iter::Once<()>;
+   type ValueIteratorType = std::iter::Once<i32>;
 
    type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
    fn iter_all(&'a self) -> Self::AllIteratorType {
-      Box::new(self.iter_all_added().map(|x| (x, std::iter::once(()))))
+      Box::new(self.iter_all_added().map(|x| (x, std::iter::once(1))))
    }
 }
 
 impl<'a, T: Clone + Hash + Eq + Sync + 'a> CRelIndexReadAll<'a> for CEqRelIndCommon<T> {
    type Key = (&'a T, &'a T);
-   type Value = ();
+   type Value = i32;
 
-   type ValueIteratorType = ascent::rayon::iter::Once<()>;
+   type ValueIteratorType = ascent::rayon::iter::Once<i32>;
 
-   type AllIteratorType = ascent::rayon::iter::Map<AllAddedParIter<'a, T>, for<'aa, 'bb> fn((&'aa T, &'bb T)) -> ((&'aa T, &'bb T), ascent::rayon::iter::Once<()>)>;
+   type AllIteratorType = ascent::rayon::iter::Map<AllAddedParIter<'a, T>, for<'aa, 'bb> fn((&'aa T, &'bb T)) -> ((&'aa T, &'bb T), ascent::rayon::iter::Once<i32>)>;
 
    fn c_iter_all(&'a self) -> Self::AllIteratorType {
       let res: Self::AllIteratorType
-         = self.c_iter_all_added().map(|x| (x, ascent::rayon::iter::once(())));
+         = self.c_iter_all_added().map(|x| (x, ascent::rayon::iter::once(1)));
       res
    }
 }
@@ -484,7 +484,7 @@ impl<'a, T: Clone + Hash + Eq> RelFullIndexRead<'a> for CEqRelIndCommon<T> {
 
 impl<'a, T: Clone + Hash + Eq> RelIndexWrite for CEqRelIndCommon<T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = i32;
 
    fn index_insert(&mut self, key: Self::Key, _value: Self::Value) { 
       self.unwrap_mut_unfrozen().add(key.0, key.1);
@@ -494,7 +494,7 @@ impl<'a, T: Clone + Hash + Eq> RelIndexWrite for CEqRelIndCommon<T> {
 
 impl<'a, T: Clone + Hash + Eq> CRelIndexWrite for CEqRelIndCommon<T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = i32;
 
    fn index_insert(&self, key: Self::Key, _value: Self::Value) {
       self.unwrap_unfrozen().lock().unwrap().add(key.0, key.1);

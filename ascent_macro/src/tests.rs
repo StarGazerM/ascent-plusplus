@@ -163,7 +163,8 @@ fn test_macro_unary_rels() {
       baz(x, x + 1) <-- foo(x), bar(x);
    };
 
-   write_to_scratchpad(input);
+   // write_to_scratchpad(input);
+   write_par_to_scratchpad(input);
 }
 
 #[test]
@@ -179,6 +180,36 @@ fn test_macro_dep_head() {
       let new_bar = !bar(x, y), foobar(x, new_bar) <-- foo(x, y);
    };
 
+   write_to_scratchpad(input);
+}
+
+#[test]
+fn test_macro_dep_par() {
+   let input = quote! {
+    relation edge_raw(i32, i32);
+    relation edge(i32, i32);
+    relation edge_id(i32, i32, usize);
+    relation path(i32, i32);
+    relation path_id(i32, i32, usize);
+    relation provenance(Tag, Tag);
+
+    let eid = !edge(x, y),
+    edge_id(x, y, eid) <--
+        edge_raw(x, y);
+
+    let new_id = !path(x, y),
+    path_id(x, y, new_id),
+    provenance(Tag("path", new_id), Tag("edge", *eid)) <--
+        edge_id(x, y, eid);
+
+    let new_id = !path(x, z),
+    path_id(x, z, new_id),
+    // provenance(StructId("path", new_id), StructId("path", *pid)),
+    provenance(Tag("path", new_id), Tag("edge", *eid)) <--
+        edge_id(x, y, eid),
+        path_id(y, z, pid);
+   };
+   
    write_to_scratchpad(input);
 }
 
