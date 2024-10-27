@@ -4,6 +4,7 @@ use std::hash::Hash;
 use std::iter::Map;
 use std::iter::once;
 use std::marker::PhantomData;
+use ascent::internal::FullRelCounter;
 use ascent::internal::RelFullIndexRead;
 use ascent::internal::RelFullIndexWrite;
 use ascent::internal::RelIndexMerge;
@@ -487,9 +488,9 @@ impl<'a, T0, T1, T2, TBinRel> RelFullIndexWrite for BinRelToTernaryInd0_1_2Write
 where T0: Clone + Hash + Eq, T1: Clone + Hash + Eq, T2: Clone + Hash + Eq, TBinRel: ByodsBinRel<T0 = T1, T1 = T2>
 {
    type Key = (T0, T1, T2);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn insert_if_not_present(&mut self, (x0, x1, x2): &Self::Key, (): Self::Value) -> bool {
+   fn insert_if_not_present(&mut self, (x0, x1, x2): &Self::Key, _: Self::Value) -> bool {
       let x0_hash = hash_one(self.0.map.hasher(), x0);
 
       if !self.0.map.raw_entry_mut().from_key_hashed_nocheck(x0_hash, x0)
@@ -512,9 +513,9 @@ impl<'a, T0, T1, T2, TBinRel> RelIndexWrite for BinRelToTernaryInd0_1_2Write<'a,
 where T0: Clone + Hash + Eq, T1: Clone + Hash + Eq, T2: Clone + Hash + Eq, TBinRel: ByodsBinRel<T0 = T1, T1 = T2>
 {   
    type Key = (T0, T1, T2);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn index_insert(&mut self, (x0, x1, x2): Self::Key, (): Self::Value) {
+   fn index_insert(&mut self, (x0, x1, x2): Self::Key, _: Self::Value) {
       if let Some(reverse_map1) = self.0.reverse_map1.as_mut() {
          reverse_map1.entry(x1.clone()).or_default().insert(x0.clone());
       }

@@ -1,7 +1,7 @@
 use std::hash::{Hash, BuildHasherDefault};
 use std::iter::{Map, once};
 
-use ascent::internal::{RelIndexRead, RelIndexReadAll, RelFullIndexRead, RelIndexWrite, RelFullIndexWrite, RelIndexMerge};
+use ascent::internal::{FullRelCounter, RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll, RelIndexWrite};
 use derive_more::{DerefMut, Deref};
 use hashbrown::HashMap;
 use rustc_hash::FxHasher;
@@ -406,9 +406,9 @@ impl<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelFullIndexRead<'a> for 
 
 impl<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelIndexReadAll<'a> for TrRel2IndFull<'a, T0, T1> {
    type Key = (&'a T0, &'a T1, &'a T1);
-   type Value = ();
+   type Value = i32;
 
-   type ValueIteratorType = std::iter::Once<()>;
+   type ValueIteratorType = std::iter::Once<i32>;
    type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
    fn iter_all(&'a self) -> Self::AllIteratorType {
@@ -416,19 +416,19 @@ impl<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelIndexReadAll<'a> for T
          trrel.rel().iter_all().map(move |(x1, x2)| (x0, x1, x2))
       });
 
-      Box::new(iter.map(|t| (t, std::iter::once(()))))
+      Box::new(iter.map(|t| (t, std::iter::once(1))))
    }
 }
 
 impl<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelIndexRead<'a> for TrRel2IndFull<'a, T0, T1> {
    type Key = (T0, T1, T1);
-   type Value = ();
+   type Value = i32;
 
    type IteratorType = std::iter::Once<Self::Value>;
 
    fn index_get(&'a self, (x0, x1, x2): &Self::Key) -> Option<Self::IteratorType> {
       if self.0.map.get(x0)?.rel().contains(x1, x2) {
-         Some(once(()))
+         Some(once(1))
       } else {
          None
       }
@@ -453,9 +453,9 @@ impl<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelIndexMerge for TrRel2I
 impl<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelFullIndexWrite for TrRel2IndFullWrite<'a, T0, T1> {
    type Key = (T0, T1, T1);
 
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn insert_if_not_present(&mut self, (x0, x1, x2): &Self::Key, (): Self::Value) -> bool {
+   fn insert_if_not_present(&mut self, (x0, x1, x2): &Self::Key, _: Self::Value) -> bool {
       let x0_hash = hash_one(self.0.map.hasher(), x0);
 
       if !self.0.map.raw_entry_mut().from_key_hashed_nocheck(x0_hash, x0)
@@ -478,9 +478,9 @@ impl<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelFullIndexWrite for TrR
 impl<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelIndexWrite for TrRel2IndFullWrite<'a, T0, T1> {
    type Key = (T0, T1, T1);
 
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn index_insert(&mut self, (x0, x1, x2): Self::Key, (): Self::Value) {
+   fn index_insert(&mut self, (x0, x1, x2): Self::Key, _: Self::Value) {
       if let Some(reverse_map1) = self.0.reverse_map1.as_mut() {
          reverse_map1.entry(x1.clone()).or_default().insert(x0.clone());
       }

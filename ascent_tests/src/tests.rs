@@ -393,6 +393,42 @@ fn test_dl_multiple_head_clauses2(){
 }
 
 #[test]
+fn test_dl_dep_head_clause_rel() {
+   ascent! {
+      relation foo(i32, i32);
+      relation bar(i32, i32);
+      relation foobar(i32, i32);
+
+      !bar(x, y), foobar(x, y) <-- foo(x, y);
+   }
+   let mut prog = AscentProgram::default();
+   prog.foo = vec![(1, 2), (3, 4)];
+   prog.bar = vec![(1, 2)];
+   prog.run();
+   println!("foobar: {:?}", prog.foobar);
+
+   assert!(rels_equal([(3,4),], prog.foobar));
+}
+
+#[test]
+fn test_dl_dep_head_clause_lattice() {
+   ascent! {
+      relation foo(i32, i32);
+      lattice bar(i32, Dual<i32>);
+      relation foobar(i32, i32);
+
+      !bar(x, Dual(*y)), foobar(x, y) <-- foo(x, y);
+   }
+   let mut prog = AscentProgram::default();
+   prog.foo = vec![(1, 3), (3, 4)];
+   prog.bar = vec![(1, Dual(2))];
+   prog.run();
+   println!("foobar: {:?}", prog.foobar);
+
+   assert!(rels_equal([(3,4),], prog.foobar));
+}
+
+#[test]
 fn test_dl_disjunctions(){
    ascent!{
       relation foo1(i32, i32);

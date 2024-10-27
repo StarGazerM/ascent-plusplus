@@ -2,7 +2,7 @@ use std::hash::{Hash, BuildHasherDefault};
 use std::iter::Map;
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
-use ascent::internal::{RelIndexMerge, RelIndexReadAll, RelIndexRead, RelFullIndexWrite, RelIndexWrite, RelFullIndexRead};
+use ascent::internal::{FullRelCounter, RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll, RelIndexWrite};
 use ascent::internal::ToRelIndex;
 use hashbrown::HashMap;
 use rustc_hash::FxHasher;
@@ -378,18 +378,18 @@ impl<'a, T: Clone + Hash + Eq> RelIndexMerge for TrRelIndFullWrite<'a, T> {
 
 impl<'a, T: Clone + Hash + Eq> RelFullIndexWrite for TrRelIndFullWrite<'a, T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn insert_if_not_present(&mut self, (x, y): &Self::Key, (): Self::Value) -> bool {
+   fn insert_if_not_present(&mut self, (x, y): &Self::Key, _: Self::Value) -> bool {
       self.0.insert_by_ref(x, y)
    }
 }
 
 impl<'a, T: Clone + Hash + Eq> RelIndexWrite for TrRelIndFullWrite<'a, T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn index_insert(&mut self, key: Self::Key, (): Self::Value) {
+   fn index_insert(&mut self, key: Self::Key, _: Self::Value) {
       self.0.insert(key.0, key.1);
    }
 }
@@ -407,27 +407,27 @@ impl<'a, T: Clone + Hash + Eq> RelFullIndexRead<'a> for TrRelIndFull<'a, T> {
 
 impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for TrRelIndFull<'a, T> {
    type Key = (&'a T, &'a T);
-   type Value = ();
+   type Value = i32;
 
    type ValueIteratorType = std::iter::Once<Self::Value>;
    type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
    fn iter_all(&'a self) -> Self::AllIteratorType {
       let res = self.0.rel().map.iter().flat_map(|(x, x_set)| x_set.iter().map(move |y| (x, y)))
-         .map(|key| (key, std::iter::once(())));
+         .map(|key| (key, std::iter::once(1)));
       Box::new(res)
    }
 }
 
 impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for TrRelIndFull<'a, T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = i32;
 
-   type IteratorType = std::iter::Once<()>;
+   type IteratorType = std::iter::Once<i32>;
 
    fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
       if self.0.rel().map.get(&key.0)?.contains(&key.1) {
-         Some(std::iter::once(()))
+         Some(std::iter::once(1))
       } else {
          None
       }

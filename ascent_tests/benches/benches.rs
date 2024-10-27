@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use ascent_tests::ascent_m_par;
 use stopwatch::Stopwatch;
-use ascent::{ascent};
+use ascent::{ascent, ascent_par};
 use ascent::lattice::Dual;
 
 mod tc {
-   use ascent::ascent;
+   use ascent::{ascent, ascent_par};
 
    ascent! {
       relation edge(i32, i32);
@@ -144,6 +144,7 @@ fn bench_tc_for_graph(graph: Vec<(i32, i32)>, name: &str) {
    let before = Instant::now();
    let mut tc = tc::AscentProgram::default();
    tc.edge = graph;
+   // tc.edge = graph.ino
    tc.run();
    let elapsed = before.elapsed();
    println!("tc for {} took {:?}", name, elapsed);
@@ -152,9 +153,9 @@ fn bench_tc_for_graph(graph: Vec<(i32, i32)>, name: &str) {
 }
 
 fn main() {
-   // bench_tc(1000);
+   // bench_tc(10000);
    bench_tc_path_join_path(1000);
-   // bench_tc_for_graph(loop_graph(4000), "loop 4000");
+   bench_tc_for_graph(loop_graph(4000), "loop 4000");
    //bench_lattice();
    // bench_hash();
 }

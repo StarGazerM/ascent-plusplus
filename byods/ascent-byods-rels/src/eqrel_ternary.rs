@@ -56,7 +56,7 @@ macro_rules! eqrel_ternary_rel_ind_common {
 pub use eqrel_ternary_rel_ind_common as rel_ind_common;
 
 
-use ascent::internal::{RelIndexRead, RelIndexReadAll, RelIndexWrite, RelIndexMerge, RelFullIndexWrite, RelFullIndexRead};
+use ascent::internal::{FullRelCounter, RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll, RelIndexWrite};
 use ascent::internal::ToRelIndex;
 
 use itertools::Itertools;
@@ -128,17 +128,17 @@ impl<T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> EqRel2IndCommon<T0, T1> {
 
 impl<T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelFullIndexWrite for EqRel2IndCommon<T0, T1> {
    type Key = (T0, T1, T1);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn insert_if_not_present(&mut self, key: &Self::Key, (): Self::Value) -> bool {
+   fn insert_if_not_present(&mut self, key: &Self::Key, _: Self::Value) -> bool {
       self.insert_into_reverse_map(key);
       match self.map.entry(key.0.clone()) {
          hashbrown::hash_map::Entry::Occupied(mut occ) => {
-            occ.get_mut().insert_if_not_present(&(key.1.clone(), key.2.clone()), ())
+            occ.get_mut().insert_if_not_present(&(key.1.clone(), key.2.clone()), 1.into())
          },
          hashbrown::hash_map::Entry::Vacant(vac) => {
             let mut eqrel = EqRelIndCommon::default();
-            eqrel.index_insert((key.1.clone(), key.2.clone()), ());
+            eqrel.index_insert((key.1.clone(), key.2.clone()), 1.into());
             vac.insert(eqrel);
             true
          },
@@ -148,11 +148,11 @@ impl<T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelFullIndexWrite for EqRel2I
 
 impl<T0: Clone + Hash + Eq, T1: Clone + Hash + Eq> RelIndexWrite for EqRel2IndCommon<T0, T1> {
    type Key = (T0, T1, T1);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   fn index_insert(&mut self, key: Self::Key, (): Self::Value) {
+   fn index_insert(&mut self, key: Self::Key, _: Self::Value) {
       self.insert_into_reverse_map(&key);
-      self.map.entry(key.0).or_default().index_insert((key.1, key.2), ());
+      self.map.entry(key.0).or_default().index_insert((key.1, key.2), 1.into());
    }
 }
 
