@@ -89,25 +89,10 @@ pub trait RelFullIndexRead<'a> {
    fn contains_key(&'a self, key: &Self::Key) -> bool;
 }
 
-pub trait Counter {
-   fn inc(&mut self);
-}
 
 pub trait AtomicCounter {
    fn inc_atomic(&self);
    fn add_atomic(&self, value: i32);
-}
-
-impl Counter for i32 {
-   fn inc(&mut self) {
-      *self += 1;
-   }
-}
-
-impl Counter for usize {
-   fn inc(&mut self) {
-      *self += 1;
-   }
 }
 
 impl AtomicCounter for AtomicI32 {
