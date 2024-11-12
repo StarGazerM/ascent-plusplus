@@ -73,6 +73,10 @@ pub trait RelIndexMerge: Sized {
    fn init(new: &mut Self, delta: &mut Self, total: &mut Self) { }
 }
 
+pub trait RelIndexBulkDelete: Sized {
+   fn remove_index_contents(&mut self, to_remove: &Self);
+}
+
 pub trait RelIndexDelete : Sized {
    type Key;
    type Value;
@@ -92,17 +96,22 @@ pub trait RelFullIndexRead<'a> {
 
 
 pub trait AtomicCounter {
-   fn inc_atomic(&self);
-   fn add_atomic(&self, value: i32);
+   fn inc_atomic(&self) -> i32;
+   fn desc_atomic(&self) -> i32;
+   fn add_atomic(&self, value: i32) -> i32;
 }
 
 impl AtomicCounter for AtomicI32 {
-   fn inc_atomic(&self) {
-      self.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+   fn inc_atomic(&self) -> i32 {
+      self.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
    }
 
-   fn add_atomic(&self, value: i32) {
-      self.fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+   fn desc_atomic(&self) -> i32 {
+      self.fetch_sub(1, std::sync::atomic::Ordering::Relaxed)
+   }
+
+   fn add_atomic(&self, value: i32) -> i32 {
+      self.fetch_add(value, std::sync::atomic::Ordering::Relaxed)
    }
 }
 
@@ -111,13 +120,17 @@ pub struct FullRelCounter {
    pub counter: Arc<AtomicI32>
 }
 
-impl AtomicCounter for FullRelCounter {
-   fn inc_atomic(&self) {
-      self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+impl AtomicCounter for FullRelCounter  {
+   fn inc_atomic(&self) -> i32{
+      self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
    }
 
-   fn add_atomic(&self, value: i32) {
-      self.counter.fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+   fn desc_atomic(&self) -> i32 {
+      self.counter.fetch_sub(1, std::sync::atomic::Ordering::Relaxed)
+   }
+
+   fn add_atomic(&self, value: i32) -> i32 {
+      self.counter.fetch_add(value, std::sync::atomic::Ordering::Relaxed)
    }
 }
 
@@ -160,6 +173,7 @@ pub type RelIndexType1<K, V> = HashMap<K, Vec<V>, BuildHasherDefault<FxHasher>>;
 
 pub static mut MOVE_REL_INDEX_CONTENTS_TOTAL_TIME : Duration = Duration::ZERO;
 pub static mut INDEX_INSERT_TOTAL_TIME : Duration = Duration::ZERO;
+pub static mut REMOVE_REL_INDEX_CONTENTS_TOTAL_TIME : Duration = Duration::ZERO;
 
 impl<K: Eq + Hash, V> RelIndexWrite for RelIndexType1<K, V>{
    type Key = K;
@@ -313,6 +327,30 @@ impl <K: Clone + Hash + Eq, V: AtomicCounter> RelFullIndexWrite for HashBrownRel
          },
          hashbrown::hash_map::RawEntryMut::Vacant(vacant) => {vacant.insert(key.clone(), v); true},
       }
+   }
+}
+
+impl <K: Clone + Hash + Eq, V: AtomicCounter> RelFullIndexDelete for HashBrownRelFullIndexType<K, V> {
+   type Key = K;
+   type Value = V;
+   #[inline]
+   fn remove_if_present(&mut self, key: &K) -> bool {
+      let del_flag = match self.raw_entry_mut().from_key(key) {
+         hashbrown::hash_map::RawEntryMut::Occupied(occupied) => {
+            let val = occupied.into_mut();
+            let old_v =  val.desc_atomic();
+            if old_v <= 1 {
+               true
+            } else {
+               false
+            }
+         },
+         hashbrown::hash_map::RawEntryMut::Vacant(_) => false,
+      };
+      if del_flag {
+         self.remove(key);
+      }
+      del_flag
    }
 }
 

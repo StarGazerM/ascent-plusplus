@@ -206,8 +206,8 @@ fn test_macro_dep_par() {
     path_id(x, z, new_id),
     // provenance(StructId("path", new_id), StructId("path", *pid)),
     provenance(Tag("path", new_id), Tag("edge", *eid)) <--
-        edge_id(x, y, eid),
-        path_id(y, z, pid);
+      path_id(y, z, pid),
+      edge_id(x, y, eid);
    };
    
    write_to_scratchpad(input);
@@ -612,13 +612,30 @@ fn test_function() {
       struct Tag(&'static str, usize);
    };
    let inp = quote!{
-      relation ID edge(i32, i32);
-      relation ID path(i32, Tag);
-      relation input(i32, i32);
+      relation edge_raw(i32, i32);
+    relation ID edge(i32, i32);
+    relation ID path(i32, Tag);
+    relation input(usize);
+    // normal TC
+   //  >? id.edge(x, y) <-- edge_raw(x, y);
+   //  >?new_id.path(x, nest_id.clone()) <--
+   //      edge(x, y).eid,
+   //      let nest_id = Tag("edge", *eid);
+   //  >?new_id.path(x, nest_id.clone()) <--
+   //      edge(x, y),
+   //      path(y, _).pid,
+   //      let nest_id = Tag("path", *pid);
 
-      function path_length(Tag) -> usize;
-      %path_length(?Tag("edge", pid)) -> ret_val
-        <-- 
+    function path_length(Tag) -> usize;
+    // length of a path
+
+    %path_length(Tag("path", *pid)) -> ? <--
+        input(pid);
+
+    %path_length(?Tag("edge", eid)) -> ret_val <--
+        let ret_val = 1;
+
+    %path_length(?Tag("path", pid)) -> ret_val <-- 
         path(x, res).*pid,
         %path_length(res) -> rest_length,
         let ret_val = rest_length + 1;

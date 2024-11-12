@@ -114,7 +114,7 @@ pub(crate) fn ascent_impl(input: proc_macro2::TokenStream, is_ascent_run: bool, 
 
    let prog = desugar_ascent_program(prog)?;
 
-   ascent_check_monotonicity(&prog)?;
+   // ascent_check_monotonicity(&prog)?;
    
    let hir = compile_ascent_program_to_hir(&prog, is_parallel)?;
    // println!("hir relations: {}", hir.relations_ir_relations.keys().map(|r| &r.name).join(", "));

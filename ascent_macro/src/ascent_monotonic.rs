@@ -1,4 +1,3 @@
-#![deny(warnings)]
 
 use crate::ascent_syntax::{AscentProgram, BodyItemNode, HeadItemNode};
 

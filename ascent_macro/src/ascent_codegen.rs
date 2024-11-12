@@ -3,9 +3,9 @@ use std::collections::HashSet;
 
 use itertools::{Itertools, Either};
 use proc_macro2::{Ident, Span, TokenStream};
-use syn::{parse2, parse_quote, parse_quote_spanned, spanned::Spanned, Expr, Type};
+use syn::{parse2, parse_quote, parse_quote_spanned, punctuated::Punctuated, spanned::Spanned, Expr, Type, Token};
 
-use crate::{ascent_hir::{IrRelation, IndexValType}, ascent_syntax::{CondClause, RelationIdentity}, utils::TokenStreamExtensions};
+use crate::{ascent_hir::{ir_name_for_rel_indices, IndexValType, IrRelation}, ascent_syntax::{CondClause, RelationIdentity}, utils::TokenStreamExtensions};
 use crate::utils::{exp_cloned, expr_to_ident, tuple, tuple_spanned, tuple_type};
 use crate::ascent_mir::{AscentMir, MirBodyItem, MirRelation, MirRelationVersion, MirRule, MirScc, ir_relation_version_var_name, mir_rule_summary, mir_summary};
 use crate::ascent_mir::MirRelationVersion::*;
@@ -24,13 +24,35 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       let rel_type = rel_type(rel, mir);
       let rel_ind_common = rel_ind_common_var_name(rel);
       let rel_ind_common_type = rel_ind_common_type(rel, mir);
+      let rel_delete = rel_delete_var_name(rel);
+      let rel_delete_counter_def = if rel.need_delete {
+         let rel_delete_counter = rel_delete_counter_var_name(rel);
+         quote!{ pub #rel_delete_counter: std::sync::atomic::AtomicUsize, }
+      } else {
+         quote!{}
+      };
+
       relation_fields.push(quote! {
          #(#rel_attrs)*
          #[doc = #rel_indices_comment]
          pub #name: #rel_type,
+         pub #rel_delete: #rel_type,
+         #rel_delete_counter_def
          pub #rel_ind_common: #rel_ind_common_type,
       });
-      field_defaults.push(quote! {#name : Default::default(), #rel_ind_common: Default::default(),});
+
+      let counter_default_val = if rel.need_delete {
+         let rel_delete_counter = rel_delete_counter_var_name(rel);
+         quote!{ #rel_delete_counter : std::sync::atomic::AtomicUsize::new(0), }
+      } else {
+         quote!{}
+      };
+      field_defaults.push(quote! {
+         #name : Default::default(),
+         #rel_ind_common: Default::default(),
+         #rel_delete: Default::default(),
+         #counter_default_val
+      });
       if rel.is_lattice && mir.is_parallel {
          let lattice_mutex_name = lattice_insertion_mutex_var_name(rel);
          relation_fields.push(quote! {
@@ -140,6 +162,8 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
 
    let more_usings = if !mir.is_parallel {quote! {
       use ascent::internal::RelIndexWrite;
+      use ascent::internal::RelIndexDelete;
+      use ascent::internal::RelFullIndexDelete;
    }} else { quote! {
       use ascent::internal::CRelIndexWrite;
    }};
@@ -406,6 +430,8 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
    let scc = &mir.sccs[scc_ind];
    let mut move_total_to_delta = vec![];
    let mut shift_delta_to_total_new_to_delta = vec![];
+   let mut delete_from_total = vec![];
+   let mut clear_deleted_codes = vec![];
    let mut move_total_to_field = vec![];
    let mut freeze_code = vec![];
    // let mut def_relation_cnt = vec![];
@@ -415,7 +441,7 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
 
    use std::iter::once;
    let sorted_dynamic_relations = scc.dynamic_relations.iter().sorted_by_cached_key(|(rel, _)| rel.name.clone());
-   for rel in sorted_dynamic_relations.flat_map(|(rel, indices)| {
+   for rel in sorted_dynamic_relations.clone().flat_map(|(rel, indices)| {
       once(Either::Left(rel)).chain(indices.iter().sorted_by_cached_key(|rel| rel.ir_name()).map(Either::Right))
    }) {
       let (ir_name, ty) = match rel {
@@ -483,6 +509,72 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
       
       // }
    }
+
+   for (rel, indices) in sorted_dynamic_relations {
+      let del_var_name = rel_delete_var_name(rel);
+      let del_iter_var_name = quote! {del_tuple};
+      // delete the full relation first
+      let full_deletion_and_check = Punctuated::<Expr, Token![&&]>::from_iter(
+         indices.iter().
+         filter(|rel_ind| rel_ind.is_full_index()).
+         map(|rel_ind| -> Expr {
+            // TODO: what if more than one full index?
+            let ir_name = rel_ind.ir_name();
+            let total_var_name = ir_relation_version_var_name(&ir_name, MirRelationVersion::Total);
+            // let full_del_selection_var_name = Ident::new(&format!("full_del_selection_{}", ir_name), ir_name.span());
+            parse_quote_spanned!{ir_name.span()=> 
+               #total_var_name.remove_if_present(#del_iter_var_name)
+            }
+         }));
+      let ind_common = rel_ind_common_var_name(rel);
+      let to_rel_index_fn = if !mir.is_parallel { quote!{to_rel_index_write} } else { quote!{to_c_rel_index_write} };
+      let _ref = if !mir.is_parallel { quote!{&mut} } else { quote!{&} }.with_span(rel.name.span());
+      let to_rel_index = if rel.is_lattice { quote!{} } else {
+         quote! {#to_rel_index_fn(#_ref #_self.#ind_common) }
+      };
+
+      let indices_del_code = indices.iter().map(|rel_ind| {
+         let ir_name = rel_ind.ir_name();
+         let total_var_name = ir_relation_version_var_name(&ir_name, MirRelationVersion::Total);
+
+         let selection_tuple : Vec<Expr> = rel_ind.indices.iter().map(|&i| {
+            let ind = syn::Index::from(i); 
+            parse_quote_spanned! {ir_name.span()=> #del_iter_var_name.#ind.clone()}
+         }).collect_vec();
+         let selection_tuple_k = tuple_spanned(&selection_tuple, ir_name.span());
+         let entry_val = index_get_entry_val_for_insert(
+            rel_ind, &parse_quote_spanned!{ir_name.span()=> #del_iter_var_name},
+            &parse_quote_spanned!{ir_name.span()=> _i});
+         if !rel_ind.is_full_index() && !rel_ind.is_no_index() {
+            quote_spanned! {ir_name.span()=>
+               #total_var_name.
+               #to_rel_index.
+               remove_if_present(&#selection_tuple_k, &#entry_val);
+            }
+         } else {
+            quote! {}
+         }
+      });
+
+      if rel.need_delete {
+         delete_from_total.push(quote_spanned!{rel.name.span()=>
+            ::ascent::internal::comment("delete from total for indices");
+            {
+               for #del_iter_var_name in #_self.#del_var_name.iter() {
+                  // full relation delete
+                  if #full_deletion_and_check {
+                     #( #indices_del_code )*
+                  }
+               }
+            }
+         });
+
+         clear_deleted_codes.push(quote_spanned!{rel.name.span()=>
+            #_self.#del_var_name.clear();
+         });
+      }
+   }
+
    let sorted_body_only_relations = scc.body_only_relations.iter().sorted_by_cached_key(|(rel, _)| rel.name.clone());
    for rel in sorted_body_only_relations.flat_map(|(rel, indices)| {
       let sorted_indices = indices.iter().sorted_by_cached_key(|rel| rel.ir_name());
@@ -571,6 +663,9 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
 
          #(#unfreeze_code)*
          #(#shift_delta_to_total_new_to_delta)*
+         
+         #(#delete_from_total)*
+         #(#clear_deleted_codes)*
          _self.scc_iters[#scc_ind] += 1;
          if !#check_changed_code {break;}
          __check_return_conditions!();
@@ -594,6 +689,21 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
          __check_return_conditions!();
       }
    }};
+
+   // for all dynamic relations, which may require delete, copy them to rel after finishing the scc
+   let full_to_rel = scc.dynamic_relations.
+      iter().
+      filter(|(rel, _)| rel.need_delete).
+      map(|(rel, _)| {
+         let total_field = &rel.name;
+         let canonical_idx: Vec<usize> = (0..rel.field_types.len()).collect();
+         let canonical_var_name = ir_name_for_rel_indices(&rel.name, &canonical_idx);
+         // full relation var name
+         // let full_var_name = ir_relation_version_var_name(&canonical_var_name, MirRelationVersion::Total);
+         quote_spanned!{rel.name.span()=>
+            #_self.#total_field = #_self.#canonical_var_name.keys().cloned().collect();
+         }});
+
    quote! {
       // define variables for delta and new versions of dynamic relations in the scc
       // move total versions of dynamic indices to delta
@@ -602,6 +712,7 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
       #evaluate_rules_loop
 
       #(#move_total_to_field)*
+      #(#full_to_rel)*
    }
 }
 
@@ -1083,14 +1194,34 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
       }).collect_vec();
       let new_row_to_be_pushed = tuple_spanned(&new_row_to_be_pushed, hcl.span);
 
-      let push_code = if !mir.is_parallel { quote! {
-         #new_id_name = _self.#head_rel_name.len();
-         _self.#head_rel_name.push(#new_row_to_be_pushed);
-         __default_id = #new_id_name;
-      }} else { quote! {
-         #new_id_name = _self.#head_rel_name.push(#new_row_to_be_pushed);
-         __default_id = #new_id_name;
-      }};
+      let push_code_with_id = if !mir.is_parallel {
+         if !hcl.rel.need_delete {
+            quote! {
+               #new_id_name = _self.#head_rel_name.len();
+               _self.#head_rel_name.push(#new_row_to_be_pushed);
+               __default_id = #new_id_name;
+            }
+         } else {
+            let del_counter_name = rel_delete_counter_var_name(&hcl.rel);
+            quote! {
+               #new_id_name = _self.#del_counter_name.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+               __default_id = #new_id_name;
+            }
+         }
+      } else {
+         if !hcl.rel.need_delete {
+            quote! {
+               #new_id_name = _self.#head_rel_name.push(#new_row_to_be_pushed);
+               __default_id = #new_id_name;
+            }
+         } else {
+            let del_counter_name = rel_delete_counter_var_name(&hcl.rel);
+            quote! {
+               #new_id_name = _self.#del_counter_name.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+               __default_id = #new_id_name;
+            }
+         }
+      };
       let skip_unchanged_code = if !hcl.required_flag {
          quote!{}
       } else {
@@ -1104,7 +1235,7 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
             if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new, 
                &__new_row, (1 as usize).into())
             {
-               #push_code
+               #push_code_with_id
                #(#update_indices)*
                #set_changed_true_code
             } else {
@@ -1112,24 +1243,38 @@ fn head_clauses_structs_and_update_code(rule: &MirRule, scc: &MirScc, mir: &Asce
             }
          }
       } else {
+         let delete_rel_name = rel_delete_var_name(head_relation);
+         let push_deleta_code = quote! {
+            _self.#delete_rel_name.push(#new_row_to_be_pushed);
+         };
          quote! {
-
+            ::ascent::internal::comment("delete code");
+            #push_deleta_code
          }
       };
       if !hcl.rel.is_lattice { 
-         let add_row = quote_spanned!{hcl.span=>
-            let __new_row: #row_type = #new_row_tuple;
-            #def_id_code
+            if !hcl.delete_flag {
+            let add_row = quote_spanned!{hcl.span=>
+               let __new_row: #row_type = #new_row_tuple;
+               #def_id_code
 
-            if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
-               !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
+               if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
+                  !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
+                  #update_rel_code
+               } else {
+                  #skip_unchanged_code
+               }
+            };
+            add_rows.push(add_row);
+         } else {
+            let add_row = quote_spanned!{hcl.span=>
+               let __new_row: #row_type = #new_row_tuple;
                #update_rel_code
-            } else {
-                #skip_unchanged_code
-            }
-         };
-         add_rows.push(add_row);
+            };
+            add_rows.push(add_row);
+         }
       } else {  // rel.is_lattice:
+         // TODO: add delete support for lattice relations
          let lattice_insertion_mutex = lattice_insertion_mutex_var_name(head_relation);
          let head_lat_full_index = &mir.lattices_full_indices[head_relation];
          let head_lat_full_index_var_name_new = ir_relation_version_var_name(&head_lat_full_index.ir_name(), New);
@@ -1213,6 +1358,14 @@ fn lattice_insertion_mutex_var_name(head_relation: &RelationIdentity) -> Ident {
 
 fn rel_ind_common_var_name(relation: &RelationIdentity) -> Ident {
    Ident::new(&format!("__{}_ind_common", relation.name), relation.name.span())
+}
+
+fn rel_delete_var_name(relation: &RelationIdentity) -> Ident {
+   Ident::new(&format!("__{}_delete", relation.name), relation.name.span())
+}
+
+fn rel_delete_counter_var_name(relation: &RelationIdentity) -> Ident {
+   Ident::new(&format!("__{}_delete_counter", relation.name), relation.name.span())
 }
 
 fn convert_head_arg(arg: Expr) -> Expr {

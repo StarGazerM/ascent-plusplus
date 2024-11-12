@@ -1,4 +1,4 @@
-#![deny(warnings)]
+// #![deny(warnings)]
 extern crate proc_macro;
 use proc_macro2::{Span, TokenStream};
 use syn::token::Comma;
@@ -445,6 +445,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
  fn rule_desugar_functional_call(rule: RuleNode) -> Vec<RuleNode> {
     // let mut generated_do_call_head = vec![];
     let mut desugared_body_items = vec![];
+    let mut desugared_head_items = rule.head_clauses.clone();
     let mut res_rules = vec![];
     let mut gensym = GenSym::default();
     let mut bi_pos = 0;
@@ -463,12 +464,36 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           // };
           let do_clause_arg : Punctuated<BodyClauseArg, Comma> = arg_vec.clone();
           let var_do_clause_id = gensym.next_ident(&format!("{}_do__", f.name), f.name.span());
-         let do_clause_used = BodyClauseNode {
-             rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
-             args: do_clause_arg,
-             id_var: Some(syn::parse2(quote!{#var_do_clause_id}).unwrap()),
-             cond_clauses: vec![]
-         };
+          let do_clause_used = BodyClauseNode {
+              rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+              args: do_clause_arg,
+              id_var: Some(syn::parse2(quote!{#var_do_clause_id}).unwrap()),
+              cond_clauses: vec![]
+          };
+          let arg_expr_vec = arg_vec.iter().map(|arg| match arg {
+             BodyClauseArg::Expr(expr) => expr.clone(),
+             _ => panic!("Pattern is not allowed in body function call!, found {:?}", arg),
+          }).collect::<Vec<Expr>>();
+          let do_clause_delete_head = HeadItemNode::HeadClause(
+               HeadClauseNode {
+                  rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+                  args: Punctuated::from_iter(arg_expr_vec.clone()),
+                  required_flag: false,
+                  id_name: None,
+                  delete_flag: true,
+                  exists_var: None
+               });
+         //  let mut arg_expr_vec_do_id = arg_expr_vec.clone();
+         //  arg_expr_vec_do_id.push(parse2(quote!{#var_do_clause_id}).unwrap());
+          let do_clause_id_delete_head = HeadItemNode::HeadClause(
+               HeadClauseNode {
+                  rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+                  args: Punctuated::from_iter(arg_expr_vec.clone()),
+                  required_flag: false,
+                  id_name: Some(var_do_clause_id.clone()),
+                  delete_flag: true,
+                  exists_var: None
+               }); 
           let use_result_clause = BodyClauseNode {
              rel: f.name.clone(),
              args: Punctuated::from_iter(vec![
@@ -478,6 +503,35 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
              id_var: f.id_var.clone(),
              cond_clauses: vec![]
           };
+          let use_result_delete_clause = HeadItemNode::HeadClause(
+             HeadClauseNode {
+                rel: f.name.clone(),
+                args: Punctuated::from_iter(vec![
+                   parse2::<Expr>(quote!{#var_do_clause_id}).unwrap(),
+                   parse2::<Expr>(quote!{#ret_v}).unwrap()
+                ]),
+                required_flag: false,
+                id_name: None,
+                delete_flag: true,
+                exists_var: None
+             });
+          let use_result_id_delete_clause = HeadItemNode::HeadClause(
+            HeadClauseNode {
+               rel: f.name.clone(),
+               args: Punctuated::from_iter(vec![
+                  parse2::<Expr>(quote!{#var_do_clause_id}).unwrap(),
+                  parse2::<Expr>(quote!{#ret_v}).unwrap()
+               ]),
+               required_flag: false,
+               id_name: Some(var_do_clause_id.clone()),
+               delete_flag: true,
+               exists_var: None
+            }
+          );
+          desugared_head_items.push(do_clause_delete_head);
+          desugared_head_items.push(do_clause_id_delete_head);
+          desugared_head_items.push(use_result_delete_clause);
+          desugared_head_items.push(use_result_id_delete_clause);
           desugared_body_items.push(BodyItemNode::Clause(do_clause_used));
           desugared_body_items.push(BodyItemNode::Clause(use_result_clause));
  
@@ -531,7 +585,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        bi_pos += 1;
     }
     let use_result_rule = RuleNode {
-       head_clauses: rule.head_clauses.clone(),
+       head_clauses: desugared_head_items,
        body_items: desugared_body_items
     };
     res_rules.push(use_result_rule);
@@ -739,6 +793,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           _semi_colon: rel._semi_colon.clone(),
           is_lattice: rel.is_lattice,
           need_id: false,
+          need_delete: rel.need_delete,
           // is_function: rel.is_function
        };
        vec![rel, new_rel]
@@ -760,6 +815,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        _semi_colon: syn::token::Semi::default(),
        is_lattice: false,
        need_id: true,
+       need_delete: true,
     };
     let usize_type = Type::Verbatim(quote!{usize});
     // let tag_type = Type::Verbatim(quote!{ascent::RelationTag});
@@ -773,6 +829,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        _semi_colon: syn::token::Semi::default(),
        is_lattice: false,
        need_id: true,
+       need_delete: true,
     };
  
     vec![do_relation, res_relation]

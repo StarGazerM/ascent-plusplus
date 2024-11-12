@@ -113,7 +113,7 @@ fn test_why_lattice() {
 }
 
 // can we get slog style int autoinc id?
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct Tag(&'static str, usize);
 
 ascent_m_par! {
@@ -239,8 +239,11 @@ fn test_length() {
    tc.input = vec![(6,)];
 
    tc.run();
+//    tc.
    println!("edge id : {:?}", tc.edge_id);
    println!("path id : {:?}", tc.path_id);
    println!("path_length_do_id : {:?}", tc.path_length_do_id);
    println!("path length : {:?}", tc.path_length);
+   println!("path_lenght_do_delete : {:?}", tc.__path_length_do_delete);
+   println!("path_lenght_delete : {:?}", tc.__path_length_delete);
 }

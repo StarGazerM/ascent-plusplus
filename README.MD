@@ -189,3 +189,7 @@ fn test_tc() {
 ```
 The result will contain `path(1, 4)` with a counter of 2, because it is derived from two different paths.
 
+
+# Known Issues
+
+- BYODS is not supported in this branch

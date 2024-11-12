@@ -140,12 +140,14 @@ pub struct RelationNode{
    pub _semi_colon: Token![;],
    pub is_lattice: bool,
    pub need_id: bool,
+   pub need_delete: bool,
    // pub is_function: bool,
 }
 impl Parse for RelationNode {
    fn parse(input: ParseStream) -> Result<Self> {
       let is_lattice = input.peek(kw::lattice);
       let is_function = input.peek(kw::function);
+      let need_delete = is_function;
       if is_lattice {
          input.parse::<kw::lattice>()?;
       } else if is_function {
@@ -172,7 +174,7 @@ impl Parse for RelationNode {
       }
       Ok(RelationNode{
          attrs: vec![], name, field_types, _semi_colon, is_lattice,
-         initialization, need_id,
+         initialization, need_id, need_delete,
          // is_function
       })
    }
@@ -718,7 +720,8 @@ pub(crate) struct RelationIdentity {
    pub name: Ident,
    pub field_types: Vec<Type>,
    pub is_lattice: bool,
-   pub need_id: bool
+   pub need_id: bool,
+   pub need_delete: bool,
 }
 
 impl From<&RelationNode> for RelationIdentity{
@@ -727,7 +730,8 @@ impl From<&RelationNode> for RelationIdentity{
          name: relation_node.name.clone(),
          field_types: relation_node.field_types.iter().cloned().collect(),
          is_lattice: relation_node.is_lattice,
-         need_id: relation_node.need_id
+         need_id: relation_node.need_id,
+         need_delete: relation_node.need_delete,
       }
    }
 } 
