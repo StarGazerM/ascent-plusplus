@@ -15,6 +15,8 @@ itertools = "0.12"
 quote = "1.0"
 arrayvec = "0.7"
 const-fnv1a-hash = "1.0.1"
+# serde = { version = "1.0", features = ["derive"] }
+# serde_json = "1.0.85"
 
 [dev-dependencies]
 rand = "0.8.4"

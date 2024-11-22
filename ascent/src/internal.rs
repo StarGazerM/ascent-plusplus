@@ -73,10 +73,6 @@ pub trait RelIndexMerge: Sized {
    fn init(new: &mut Self, delta: &mut Self, total: &mut Self) { }
 }
 
-pub trait RelIndexBulkDelete: Sized {
-   fn remove_index_contents(&mut self, to_remove: &Self);
-}
-
 pub trait RelIndexDelete : Sized {
    type Key;
    type Value;
@@ -228,6 +224,7 @@ impl<K: Eq + Hash, V: Eq> RelIndexDelete for RelIndexType1<K, V> {
    type Value = V;
 
    fn remove_if_present(&mut self, key: &Self::Key, value: &Self::Value) -> bool {
+      let before = Instant::now();
       if let Some(vec) = self.get_mut(key) {
          let index = vec.iter().position(|v| v == value);
          if let Some(index) = index {
@@ -237,6 +234,9 @@ impl<K: Eq + Hash, V: Eq> RelIndexDelete for RelIndexType1<K, V> {
             }
             return true;
          }
+      }
+      unsafe {
+         REMOVE_REL_INDEX_CONTENTS_TOTAL_TIME += before.elapsed();
       }
       false
    }
@@ -335,6 +335,7 @@ impl <K: Clone + Hash + Eq, V: AtomicCounter> RelFullIndexDelete for HashBrownRe
    type Value = V;
    #[inline]
    fn remove_if_present(&mut self, key: &K) -> bool {
+      let before = Instant::now();
       let del_flag = match self.raw_entry_mut().from_key(key) {
          hashbrown::hash_map::RawEntryMut::Occupied(occupied) => {
             let val = occupied.into_mut();
@@ -349,6 +350,9 @@ impl <K: Clone + Hash + Eq, V: AtomicCounter> RelFullIndexDelete for HashBrownRe
       };
       if del_flag {
          self.remove(key);
+      }
+      unsafe {
+         REMOVE_REL_INDEX_CONTENTS_TOTAL_TIME += before.elapsed();
       }
       del_flag
    }

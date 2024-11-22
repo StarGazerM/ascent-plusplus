@@ -152,6 +152,8 @@ fn bench_tc_for_graph(graph: Vec<(i32, i32)>, name: &str) {
    println!("path size: {}", tc.path.len());
 }
 
+
+
 fn main() {
    // bench_tc(10000);
    bench_tc_path_join_path(1000);
