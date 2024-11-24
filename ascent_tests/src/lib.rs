@@ -18,3 +18,4 @@ mod provenance;
 mod itype;
 // mod inca_codegen;
 mod dep_head;
+mod longest_palindromic;
