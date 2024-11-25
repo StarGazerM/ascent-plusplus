@@ -105,6 +105,10 @@ impl<K: Clone + Hash + Eq, V> CRelFullIndex<K, V> {
          },
       }
    }
+
+   pub fn clear(&self) {
+      self.unwrap_unfrozen().clear();
+   }
 }
 
 impl<K: Clone + Hash + Eq, V> Default for CRelFullIndex<K, V> {

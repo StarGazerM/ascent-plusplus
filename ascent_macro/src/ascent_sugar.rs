@@ -316,7 +316,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
       args: new_args,
       cond_clauses: new_cond_clauses,
       rel: body_clause.rel,
-      id_var: body_clause.id_var
+      id_var: body_clause.id_var,
+      delta_flag: body_clause.delta_flag
    }
  }
  fn rule_desugar_pattern_args(rule: RuleNode) -> RuleNode {
@@ -429,7 +430,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                    rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
                    args: f.args.clone(),
                    id_var: f.id_var.clone(),
-                   cond_clauses: vec![]
+                   cond_clauses: vec![],
+                   delta_flag: false
                 })
              );
           } else {
@@ -467,7 +469,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
              rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
              args: do_clause_arg,
              id_var: Some(syn::parse2(quote!{#var_do_clause_id}).unwrap()),
-             cond_clauses: vec![]
+             cond_clauses: vec![],
+             delta_flag: false
          };
           let use_result_clause = BodyClauseNode {
              rel: f.name.clone(),
@@ -476,7 +479,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                 BodyClauseArg::Expr(parse2(quote!{#ret_v}).unwrap())
              ]),
              id_var: f.id_var.clone(),
-             cond_clauses: vec![]
+             cond_clauses: vec![],
+             delta_flag: false,
           };
           desugared_body_items.push(BodyItemNode::Clause(do_clause_used));
           desugared_body_items.push(BodyItemNode::Clause(use_result_clause));
@@ -501,7 +505,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                          rel: Ident::new(&format!("{}_do", other_f.name), other_f.name.span()),
                          args: other_f.args.clone(),
                          id_var: None,
-                         cond_clauses: vec![]    
+                         cond_clauses: vec![],
+                         delta_flag: false    
                       })
                    );
                 } else {
@@ -564,7 +569,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
                args: f.args.clone(),
                id_var: Some(syn::parse2(quote!{#do_call_id}).unwrap()),
-               cond_clauses: vec![]
+               cond_clauses: vec![],
+               delta_flag: false
             };
             let mut gensym = GenSym::default();
             let pattern_desugared_do = clause_desugar_pattern_args(new_do_clause, &mut gensym);
@@ -739,7 +745,6 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           _semi_colon: rel._semi_colon.clone(),
           is_lattice: rel.is_lattice,
           need_id: false,
-          // is_function: rel.is_function
        };
        vec![rel, new_rel]
     } else {

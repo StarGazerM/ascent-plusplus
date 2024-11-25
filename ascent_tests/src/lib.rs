@@ -15,3 +15,4 @@ mod example_tests;
 mod macros_tests;
 
 mod provenance;
+mod dynamic_programming;

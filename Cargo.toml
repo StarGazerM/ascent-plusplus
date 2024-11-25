@@ -1,5 +1,6 @@
 [workspace]
-members = ["byods/ascent-byods-rels", "ascent", "ascent_base", "ascent_macro", "ascent_tests"] 
+members = ["ascent", "ascent_base", "ascent_macro", "ascent_tests", "byods/ascent-byods-rels"] 
+# members = ["ascent", "ascent_base", "ascent_macro"] 
 exclude = ["wasm-tests"]
 resolver = "2"
 

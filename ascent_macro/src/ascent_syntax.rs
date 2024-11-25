@@ -29,6 +29,7 @@ mod kw {
    syn::custom_keyword!(lattice);
    syn::custom_keyword!(function);
    syn::custom_keyword!(provenance);
+   syn::custom_keyword!(delta);
    syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
    syn::custom_keyword!(agg);
@@ -277,6 +278,7 @@ pub struct BodyClauseNode {
    pub args : Punctuated<BodyClauseArg, Token![,]>,
    pub cond_clauses: Vec<CondClause>,
    pub id_var : Option<Expr>,
+   pub delta_flag: bool,
 }
 
 #[derive(Parse, Clone, PartialEq, Eq, Debug)]
@@ -407,6 +409,10 @@ impl Parse for CondClause {
 
 impl Parse for BodyClauseNode{
    fn parse(input: ParseStream) -> Result<Self> {
+      let delta_flag = input.peek(kw::delta);
+      if delta_flag {
+         input.parse::<kw::delta>()?;
+      }
       let rel : Ident = input.parse()?;
       let args_content;
       parenthesized!(args_content in input);
@@ -420,7 +426,7 @@ impl Parse for BodyClauseNode{
       while let Ok(cl) = input.parse(){
          cond_clauses.push(cl);
       }
-      Ok(BodyClauseNode{rel, args, cond_clauses, id_var})
+      Ok(BodyClauseNode{rel, args, cond_clauses, id_var, delta_flag})
    }
 }
 

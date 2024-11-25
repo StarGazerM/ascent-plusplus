@@ -595,3 +595,38 @@ fn test_function() {
 
    write_with_prefix_to_scratchpad(inp, prefix);
 }
+
+#[test]
+fn test_macro_lattices_slow () {
+   let inp = quote! {
+      #![measure_rule_times]
+      lattice longest_range(usize);
+      longest_range(0);
+      // relation input_string(usize, u8);
+      // input_string(i, c) <-- for i in 1..s.len() + 1, let c = s.as_bytes()[i - 1];
+
+      // the longest range ends at i is j, inclusive
+      lattice longest_ranges_ends(usize, usize);
+
+      // case 0: "" empty is a range has size 0 
+      // init longest_range to 0
+      longest_ranges_ends(i + 1, 0) <-- for i in 0..s.len();
+
+      // case 1 : ( {range} ) is a range
+      longest_ranges_ends(i + 1, j + 2) <--
+         longest_ranges_ends(i, j),
+         if i < &s.len() && i > j, 
+         if s.as_bytes()[*i] == b')' && s.as_bytes()[i - j - 1] == b'(';
+         // input_string(i + 1, b')'),
+         // input_string(i - j, b'(');
+
+      // case 2 : {range} {range} is a range
+      // if two ranges are connected, update the later range's size
+      longest_ranges_ends(i, size1 + size2) <--
+         longest_ranges_ends(i, size1),
+         longest_ranges_ends(i - size1, size2);
+
+      longest_range(size) <-- longest_ranges_ends(_, size);
+   };
+   write_to_scratchpad(inp);
+}

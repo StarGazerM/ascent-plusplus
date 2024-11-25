@@ -5,6 +5,7 @@
 
 // See Cargo.toml for why this is needed. 
 use syn as _;
+use rayon as _;
 
 mod union_find;
 #[doc(hidden)]
@@ -40,3 +41,4 @@ pub mod trrel;
 pub mod eqrel;
 pub mod trrel_uf;
 pub mod adaptor;
+pub mod linear;
