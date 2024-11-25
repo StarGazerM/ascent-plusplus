@@ -459,6 +459,11 @@ macro_rules! to_rel_ind {
          fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexWrite<'a> { 
             NoopRelIndexWrite::default() 
          }
+
+         type RelIndexDelete<'a> = &'a mut Rel where Self: 'a, Rel: 'a;
+         fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> {
+            todo!()
+         }
       }
    }};
 }
@@ -484,4 +489,9 @@ where
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut Rel) -> Self::RelIndexWrite<'a> {
       TrRelIndFullWrite(rel.to_tr_rel_ind_mut())
    }
+   
+   type RelIndexDelete<'a> = &'a mut Rel where Self: 'a, Rel: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }

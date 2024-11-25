@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 
 ascent = { path = "../ascent", default-features = false }
+ascent-byods-rels = { path = "../byods/ascent-byods-rels"}
 stopwatch = "0.0.7"
 bencher = "0.1.5"
 derive_more = "0.99.16"

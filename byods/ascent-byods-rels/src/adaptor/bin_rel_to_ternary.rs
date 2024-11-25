@@ -579,6 +579,11 @@ where T0: Clone + Hash + Eq, T1: Clone + Hash + Eq, T2: Clone + Hash + Eq, TBinR
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut BinRelToTernaryWrapper<HAS_REVERSE_MAP1, HAS_REVERSE_MAP2, T0, T1, T2, TBinRel>) -> Self::RelIndexWrite<'a> {
       BinRelToTernaryInd0_1_2Write(&mut rel.0)
    }
+   
+   type RelIndexDelete<'a> = BinRelToTernaryInd0_1_2Write<'a, T0, T1, T2, TBinRel> where Self: 'a, BinRelToTernaryWrapper<HAS_REVERSE_MAP1, HAS_REVERSE_MAP2, T0, T1, T2, TBinRel>: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut BinRelToTernaryWrapper<HAS_REVERSE_MAP1, HAS_REVERSE_MAP2, T0, T1, T2, TBinRel>) -> Self::RelIndexDelete<'a> {
+      todo!()
+    }
 }
 
 
@@ -609,6 +614,12 @@ macro_rules! to_trrel2 {
          type RelIndexWrite<'a> = NoopRelIndexWrite<$key, $val> where Self: 'a, BinRelToTernaryWrapper<HAS_REVERSE_MAP1, HAS_REVERSE_MAP2, T0, T1, T2, TBinRel>: 'a;
          #[inline(always)]
          fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut BinRelToTernaryWrapper<HAS_REVERSE_MAP1, HAS_REVERSE_MAP2, T0, T1, T2, TBinRel>) -> Self::RelIndexWrite<'a> { 
+            NoopRelIndexWrite::default() 
+         }
+
+         type RelIndexDelete<'a> = NoopRelIndexWrite<$key, $val> where Self: 'a, BinRelToTernaryWrapper<HAS_REVERSE_MAP1, HAS_REVERSE_MAP2, T0, T1, T2, TBinRel>: 'a;
+         #[inline(always)]
+         fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut BinRelToTernaryWrapper<HAS_REVERSE_MAP1, HAS_REVERSE_MAP2, T0, T1, T2, TBinRel>) -> Self::RelIndexDelete<'a> { 
             NoopRelIndexWrite::default() 
          }
       }

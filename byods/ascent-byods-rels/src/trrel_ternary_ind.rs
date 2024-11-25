@@ -515,6 +515,12 @@ macro_rules! to_trrel2 {
          fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexWrite<'a> { 
             NoopRelIndexWrite::default() 
          }
+
+         type RelIndexDelete<'a> = NoopRelIndexWrite<$key, $val> where Self: 'a, Rel: 'a;
+         #[inline(always)]
+         fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> { 
+            NoopRelIndexWrite::default()
+         }
       }
    }};
 }
@@ -546,4 +552,9 @@ where Rel: std::ops::DerefMut<Target = TrRel2IndCommon<T0, T1>>,
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut Rel) -> Self::RelIndexWrite<'a> {
       TrRel2IndFullWrite(rel.deref_mut())
    }
+   
+   type RelIndexDelete<'a> = TrRel2IndFullWrite<'a, T0, T1>where Self:'a,Rel:'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }

@@ -11,8 +11,7 @@ pub struct LinearRelIndexFullType<K, V>(hashbrown::HashMap<K, V, BuildHasherDefa
 pub struct LinearNoIndexType<V>(Vec<V>);
 
 use ascent::internal::{
-   CRelIndexRead, Freezable, RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll,
-   RelIndexWrite, MOVE_FULL_INDEX_CONTENTS_TOTAL_TIME,
+   AtomicCounter, CRelIndexRead, Freezable, RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll, RelIndexWrite, MOVE_FULL_INDEX_CONTENTS_TOTAL_TIME
 };
 
 use ascent::dashmap::RwLock;
@@ -280,7 +279,7 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + Sync> CRelIndexRead<'a> for CLinearR
    fn c_index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> { self.0.c_index_get(key) }
 }
 
-impl<'a, K: 'a + Clone + Hash + Eq, V: 'a> RelFullIndexRead<'a> for CLinearRelIndexFull<K, V> {
+impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + AtomicCounter> RelFullIndexRead<'a> for CLinearRelIndexFull<K, V> {
    type Key = K;
 
    #[inline(always)]

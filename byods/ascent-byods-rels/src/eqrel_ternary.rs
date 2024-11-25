@@ -361,6 +361,11 @@ where Rel: ToEqRel2IndCommon<T0, T1>
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut Rel) -> Self::RelIndexWrite<'a> { 
       rel.to_eq_rel2_ind_common_mut()
    }
+   
+   type RelIndexDelete<'a> = &'a mut EqRel2IndCommon<T0, T1> where Self: 'a, Rel: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 pub struct EqRel2IndFull<'a, T0: Clone + Hash + Eq, T1: Clone + Hash + Eq>(
@@ -457,6 +462,11 @@ macro_rules! to_eq_rel2 {
          type RelIndexWrite<'a> = NoopRelIndexWrite<$key, $val> where Self: 'a, Rel: 'a;
          fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexWrite<'a> { 
             NoopRelIndexWrite::default() 
+         }
+
+         type RelIndexDelete<'a> = NoopRelIndexWrite<$key, $val> where Self: 'a, Rel: 'a;
+         fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> { 
+            NoopRelIndexWrite::default()
          }
       }
    }};

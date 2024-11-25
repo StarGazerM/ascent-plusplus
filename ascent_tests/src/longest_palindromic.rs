@@ -98,6 +98,7 @@ impl Lattice for PalindromeR {
 
 fn longest_palindromic_ascent(s: &str) -> String {
     let res = ascent_run! {
+        #[ds(ascent_byods_rels::linear::linear)]
         relation palindromes(usize, usize); // this relation can be linear
         lattice longest_palindromic(PalindromeR);
         

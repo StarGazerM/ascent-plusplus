@@ -89,6 +89,11 @@ impl<K, V, R> ToRelIndex<R> for ToLinearRelIndexType<K, V> {
 
    #[inline(always)]
    fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut R) -> Self::RelIndexWrite<'a> { &mut self.0 }
+   
+   type RelIndexDelete<'a> = &'a mut LinearRelIndexType<K, V> where Self: 'a, R: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut R) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 impl<K, V, Rel> ToRelIndex<Rel> for LinearRelIndexFullType<K, V> {
@@ -108,6 +113,11 @@ impl<K, V, Rel> ToRelIndex<Rel> for LinearRelIndexFullType<K, V> {
 
    #[inline(always)]
    fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexWrite<'a> { self }
+   
+   type RelIndexDelete<'a> = &'a mut Self where Self: 'a, Rel: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> {
+      self
+    }
 }
 
 use super::linear_ind::{CLinearNoIndex, CLinearRelIndex, CLinearRelIndexFull};
@@ -127,6 +137,11 @@ impl<K, V, Rel> ToRelIndex<Rel> for CLinearRelIndex<K, V> {
       Rel: 'a;
    #[inline(always)]
    fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexWrite<'a> { self }
+   
+   type RelIndexDelete<'a> = &'a mut Self where Self: 'a, Rel: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 impl<K, V, Rel> ToRelIndex<Rel> for CLinearRelIndexFull<K, V> {
@@ -145,6 +160,12 @@ impl<K, V, Rel> ToRelIndex<Rel> for CLinearRelIndexFull<K, V> {
       Rel: 'a;
    #[inline(always)]
    fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexWrite<'a> { self }
+   
+   type RelIndexDelete<'a> = &'a mut Self where Self: 'a, Rel: 'a;
+   
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 impl<V, Rel> ToRelIndex<Rel> for CLinearNoIndex<V> {
@@ -163,4 +184,10 @@ impl<V, Rel> ToRelIndex<Rel> for CLinearNoIndex<V> {
       Rel: 'a;
    #[inline(always)]
    fn to_rel_index_write<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexWrite<'a> { self }
+   
+   type RelIndexDelete<'a> = &'a mut Self where Self: 'a, Rel: 'a;
+   
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut Rel) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }

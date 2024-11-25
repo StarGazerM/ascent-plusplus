@@ -16,7 +16,6 @@ mod syn_utils;
 extern crate quote;
 
 extern crate proc_macro;
-use ascent_monotonic::ascent_check_monotonicity;
 use ascent_syntax::AscentProgram;
 use ascent_sugar::desugar_ascent_program;
 use proc_macro::TokenStream;

@@ -31,6 +31,11 @@ impl<T: Clone + Hash + Eq> ToRelIndex<CEqRelIndCommon<T>> for ToEqRelIndNone<T> 
 
    type RelIndexWrite<'a> = EqRelIndNone<'a, T> where T: 'a;
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut CEqRelIndCommon<T>) -> Self::RelIndexWrite<'a> { EqRelIndNone(rel) }
+   
+   type RelIndexDelete<'a> = EqRelIndNone<'a, T> where T: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut CEqRelIndCommon<T>) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 
@@ -47,6 +52,11 @@ impl<T: Clone + Hash + Eq> ToRelIndex<CEqRelIndCommon<T>> for ToEqRelInd0<T> {
 
    type RelIndexWrite<'a> = EqRelInd0<'a, T> where T: 'a;
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut CEqRelIndCommon<T>) -> Self::RelIndexWrite<'a> { EqRelInd0(rel) }
+   
+   type RelIndexDelete<'a> = EqRelInd0<'a, T> where T: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut CEqRelIndCommon<T>) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 pub struct ToEqRelInd0_1<T>(PhantomData<T>);
