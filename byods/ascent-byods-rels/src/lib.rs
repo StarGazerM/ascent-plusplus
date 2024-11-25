@@ -40,3 +40,4 @@ pub mod trrel;
 pub mod eqrel;
 pub mod trrel_uf;
 pub mod adaptor;
+pub mod linear;

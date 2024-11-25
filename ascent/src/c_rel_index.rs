@@ -106,6 +106,11 @@ impl<K: Clone + Hash + Eq, V> CRelIndex<K, V> {
    pub fn hash_usize(&self, k: &K) -> usize {
       self.unwrap_unfrozen().hash_usize(k)
    }
+
+   #[inline]
+   pub fn clear(&self) {
+      self.unwrap_unfrozen().clear();
+   }
 }
 
 impl<K: Clone + Hash + Eq, V> Default for CRelIndex<K, V> {

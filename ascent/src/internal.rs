@@ -37,6 +37,7 @@ cfg_if! {
       pub use crate::c_lat_index::CLatIndex;
       pub use crate::c_rel_no_index::CRelNoIndex;
       pub use crate::c_rel_index::DashMapViewParIter;
+      pub use crate::c_rel_index::CRelIndexReadAllParIter;
    }
 }
 
