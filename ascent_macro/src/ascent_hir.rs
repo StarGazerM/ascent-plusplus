@@ -3,7 +3,8 @@ use std::{collections::{HashMap, HashSet}, rc::Rc};
 
 use itertools::Itertools;
 use proc_macro2::{Ident, Span, TokenStream};
-use syn::{Attribute, Error, Expr, Pat, Type, parse2, spanned::Spanned, parse_quote, Path};
+use quote::ToTokens;
+use syn::{parse2, parse_quote, punctuated::Punctuated, spanned::Spanned, token::Comma, Attribute, Error, Expr, Pat, Path, Type};
 
 use crate::{AscentProgram, ascent_syntax::{RelationNode, DsAttributeContents, Signatures}, utils::{expr_to_ident, is_wild_card, tuple_type}, syn_utils::{expr_get_vars, pattern_get_vars}};
 use crate::ascent_syntax::{BodyClauseArg, BodyItemNode, CondClause, GeneratorNode, RelationIdentity, RuleNode};
@@ -105,6 +106,9 @@ pub(crate) struct IrHeadClause{
    pub args : Vec<Expr>,
    pub span: Span,
    pub args_span: Span,
+   pub required_flag: bool,
+   pub id_name: Option<Ident>,
+   pub delete_flag: bool,
 }
 
 pub(crate) enum IrBodyItem {
@@ -156,6 +160,7 @@ pub(crate) struct IrRelation {
    pub relation: RelationIdentity,
    pub indices: Vec<usize>,
    pub val_type: IndexValType,
+   pub need_id: bool
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -165,7 +170,7 @@ pub enum IndexValType {
 }
 
 impl IrRelation {
-   pub fn new(relation: RelationIdentity, indices: Vec<usize>) -> Self {
+   pub fn new(relation: RelationIdentity, indices: Vec<usize>, need_id: bool) -> Self {
       // TODO this is not the right place for this
       let val_type = if relation.is_lattice //|| indices.len() == relation.field_types.len() 
       {
@@ -173,7 +178,7 @@ impl IrRelation {
       } else {
          IndexValType::Direct((0..relation.field_types.len()).filter(|i| !indices.contains(i)).collect_vec())
       };
-      IrRelation { relation, indices, val_type }
+      IrRelation { relation, indices, val_type, need_id }
    }
 
    pub fn key_type(&self) -> Type {
@@ -219,13 +224,13 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
 
       if rel.is_lattice {
          let indices = (0 .. rel_identity.field_types.len() - 1).collect_vec();
-         let lat_full_index = IrRelation::new(rel_identity.clone(), indices);
+         let lat_full_index = IrRelation::new(rel_identity.clone(), indices, rel.need_id);
          relations_ir_relations.entry(rel_identity.clone()).or_default().insert(lat_full_index.clone());
          lattices_full_indices.insert(rel_identity.clone(), lat_full_index);
       }
 
       let full_indices = (0 .. rel_identity.field_types.len()).collect_vec();
-      let rel_full_index = IrRelation::new(rel_identity.clone(),full_indices);
+      let rel_full_index = IrRelation::new(rel_identity.clone(),full_indices, rel.need_id);
 
       relations_ir_relations.entry(rel_identity.clone()).or_default().insert(rel_full_index.clone());
       // relations_ir_relations.entry(rel_identity.clone()).or_default().insert(rel_no_index.clone());
@@ -354,13 +359,13 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                   }
                }
             }
-            let relation = prog_get_relation(prog, &bcl.rel, bcl.args.len())?;
+            let relation = prog_get_relation(prog, &bcl.rel, &bcl.args)?;
 
             for cond_clause in bcl.cond_clauses.iter() {
                extend_grounded_vars(&mut grounded_vars, cond_clause.bound_vars())?;
             }
             
-            let ir_rel = IrRelation::new(relation.into(), indices);
+            let ir_rel = IrRelation::new(relation.into(), indices, relation.need_id);
             let ir_bcl = IrBodyClause {
                rel: ir_rel,
                args: bcl.args.iter().cloned().map(BodyClauseArg::unwrap_expr).collect(),
@@ -390,9 +395,9 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                }
                true
             }).map(|(i, _expr)| i).collect_vec();
-            let relation = prog_get_relation(prog, &agg.rel, agg.rel_args.len())?;
+            let relation = prog_get_relation(prog, &agg.rel, &agg.rel_args)?;
             
-            let ir_rel = IrRelation::new(relation.into(), indices);
+            let ir_rel = IrRelation::new(relation.into(), indices, relation.need_id);
             let ir_agg_clause = IrAggClause {
                span: agg.agg_kw.span,
                pat: agg.pat.clone(),
@@ -415,13 +420,16 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
          Some(rel) => rel,
          None => return Err(Error::new(hcl_node.rel.span(), format!("relation {} not defined", hcl_node.rel))),
       };
+      let rel_identity = RelationIdentity::from(rel);
       
-      let rel = RelationIdentity::from(rel);
       let head_clause = IrHeadClause {
-         rel,
+         rel: rel_identity,
          args : hcl_node.args.iter().cloned().collect(),
          span: hcl_node.span(),
-         args_span: hcl_node.args.span()
+         args_span: hcl_node.args.span(),
+         required_flag: hcl_node.required_flag,
+         id_name: hcl_node.id_name.clone(),
+         delete_flag: hcl_node.delete_flag,
       };
       head_clauses.push(head_clause);
    }
@@ -436,7 +444,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
       };  
       let bcl2_vars = bcl2.args.iter().filter_map(expr_to_ident).collect_vec();
       let indices = get_indices_given_grounded_variables(&bcl1.args, &bcl2_vars);
-      let new_cl1_ir_relation = IrRelation::new(bcl1.rel.relation.clone(), indices);
+      let new_cl1_ir_relation = IrRelation::new(bcl1.rel.relation.clone(), indices, bcl1.rel.need_id);
       vec![new_cl1_ir_relation]
    } else {vec![]};
 
@@ -474,12 +482,17 @@ pub fn get_indices_given_grounded_variables(args: &[Expr], vars: &[Ident]) -> Ve
    res
 }
 
-pub(crate) fn prog_get_relation<'a>(prog: &'a AscentProgram, name: &Ident, arity: usize) -> syn::Result<&'a RelationNode> {
+pub(crate) fn prog_get_relation<'a, T: ToTokens>(prog: &'a AscentProgram, name: &Ident, args: &Punctuated<T, Comma>) -> syn::Result<&'a RelationNode> {
    let relation = prog.relations.iter().find(|r| name == &r.name);
+   let arity = args.len();
    match relation {
       Some(rel) => {
          if rel.field_types.len() != arity {
-            Err(Error::new(name.span(), format!("Wrong arity for relation {}. Actual arity: {}", name, rel.field_types.len())))
+            Err(Error::new(
+               name.span(), 
+               format!("Wrong arity for relation {}. Actual arity: {}, but get {} : {:?}",
+                              name, rel.field_types.len(), arity,
+                              args.iter().map(|arg| quote!{#arg}.to_string()).collect::<Vec<_>>().join(", "))))
          } else {
             Ok(rel)
          }

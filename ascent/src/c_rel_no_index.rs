@@ -29,6 +29,12 @@ impl<V> Default for CRelNoIndex<V> {
 impl<V> CRelNoIndex<V> {
    
    pub fn hash_usize(&self, _key: &()) -> usize { 0 }
+
+   pub fn clear(&mut self) {
+      self.vec.iter().for_each(|v| {
+         v.write().clear();
+      });
+   }
 }
 
 impl<V> Freezable for CRelNoIndex<V> {

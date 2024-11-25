@@ -75,6 +75,24 @@ impl<'a, K: Eq + std::hash::Hash, V: 'a + Clone> RelIndexRead<'a> for HashBrownR
    }
 }
 
+impl<'a, K: Eq + std::hash::Hash, V: 'a + Clone> RelIndexRead<'a> for LatticeMap<K, V> {
+   type IteratorType = std::iter::Once<&'a V>;
+   type Key = K;
+   type Value = &'a V;
+
+
+   #[inline]
+   fn index_get(&'a self, key: &K) -> Option<Self::IteratorType> {
+      let res = self.0.get(key)?;
+      Some(std::iter::once(res))
+   }
+
+   #[inline(always)]
+   fn len(&self) -> usize {
+      self.0.len()
+   }
+}
+
 impl<'a, K: Eq + std::hash::Hash + 'a, V: 'a + Clone> RelIndexReadAll<'a> for HashBrownRelFullIndexType<K, V> {
 
    type Key = &'a K;
@@ -89,6 +107,19 @@ impl<'a, K: Eq + std::hash::Hash + 'a, V: 'a + Clone> RelIndexReadAll<'a> for Ha
    }
 }
 
+impl<'a, K: Eq + std::hash::Hash + 'a, V: 'a + Clone> RelIndexReadAll<'a> for LatticeMap<K, V> {
+
+   type Key = &'a K;
+   type Value = &'a V;
+   type ValueIteratorType = std::iter::Once<&'a V>;
+
+   type AllIteratorType = std::iter::Map<hashbrown::hash_map::Iter<'a, K, V>, for <'aa, 'bb> fn ((&'aa K, &'bb V)) -> (&'aa K, std::iter::Once<&'bb V>)>;
+
+   fn iter_all(&'a self) -> Self::AllIteratorType {
+      let res: Self::AllIteratorType = self.0.iter().map(|(k, v)| (k, std::iter::once(v)));
+      res
+   }
+}
 
 impl<'a, K: Eq + std::hash::Hash, V: 'a + Clone> RelIndexRead<'a> for LatticeIndexType<K, V> {
    type IteratorType = std::collections::hash_set::Iter<'a, V>;

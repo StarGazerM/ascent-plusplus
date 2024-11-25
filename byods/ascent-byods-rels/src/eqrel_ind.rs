@@ -6,7 +6,7 @@ use std::mem::transmute;
 use std::rc::Rc;
 
 use ascent::internal::{
-   RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll, RelIndexWrite, ToRelIndex,
+   FullRelCounter, RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll, RelIndexWrite, ToRelIndex
 };
 use rustc_hash::FxHasher;
 
@@ -55,6 +55,11 @@ impl<T: Clone + Hash + Eq> ToRelIndex<EqRelIndCommon<T>> for ToEqRelIndNone<T> {
 
    type RelIndexWrite<'a> = EqRelIndNone<'a, T> where T: 'a;
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut EqRelIndCommon<T>) -> Self::RelIndexWrite<'a> { EqRelIndNone(rel) }
+   
+   type RelIndexDelete<'a> = EqRelIndNone<'a, T> where T: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut EqRelIndCommon<T>) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 
@@ -70,6 +75,11 @@ impl<T: Clone + Hash + Eq> ToRelIndex<EqRelIndCommon<T>> for ToEqRelInd0<T> {
 
    type RelIndexWrite<'a> = EqRelInd0<'a, T> where T: 'a;
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut EqRelIndCommon<T>) -> Self::RelIndexWrite<'a> { EqRelInd0(rel) }
+   
+   type RelIndexDelete<'a> = EqRelInd0<'a, T> where T: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut EqRelIndCommon<T>) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 pub struct ToEqRelInd0_1<T>(PhantomData<T>);
@@ -83,7 +93,7 @@ pub struct EqRelInd0_1Write<'a, T: Clone + Hash + Eq>(&'a mut EqRelIndCommon<T>)
 
 impl <'a, T: Clone + Hash + Eq> RelIndexWrite for EqRelInd0_1Write<'a, T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = FullRelCounter;
 
    fn index_insert(&mut self, key: Self::Key, value: Self::Value) {
       self.0.index_insert(key, value)
@@ -98,7 +108,7 @@ impl <'a, T: Clone + Hash + Eq> RelIndexMerge for EqRelInd0_1Write<'a, T> {
 
 impl <T: Clone + Hash + Eq> RelFullIndexWrite for EqRelIndCommon<T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = FullRelCounter;
 
    fn insert_if_not_present(&mut self, key: &Self::Key, _v: Self::Value) -> bool {
       Rc::get_mut(&mut self.combined).unwrap().add(key.0.clone(), key.1.clone())
@@ -151,6 +161,11 @@ impl<T: Clone + Hash + Eq> ToRelIndex<EqRelIndCommon<T>> for ToEqRelInd0_1<T> {
 
    type RelIndexWrite<'a> = EqRelInd0_1Write<'a, T> where T: 'a;
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut EqRelIndCommon<T>) -> Self::RelIndexWrite<'a> { EqRelInd0_1Write(rel) }
+   
+   type RelIndexDelete<'a> = EqRelInd0_1Write<'a, T> where T: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, _rel: &'a mut EqRelIndCommon<T>) -> Self::RelIndexDelete<'a> {
+        todo!()
+    }
 }
 
 impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelInd0<'a, T> {
@@ -242,13 +257,13 @@ impl<T: Clone + Hash + Eq> Default for EqRelIndCommon<T> {
 
 impl<'a, T: Clone + Hash + Eq + 'a> RelIndexRead<'a> for EqRelIndCommon<T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   type IteratorType = std::iter::Once<()>;
+   type IteratorType = std::iter::Once<FullRelCounter>;
 
    fn index_get(&'a self, (x, y): &Self::Key) -> Option<Self::IteratorType> {
       if self.combined.contains(x, y) && !self.old.contains(x, y) {
-         Some(std::iter::once(()))
+         Some(std::iter::once(1.into()))
       } else {
          None
       }
@@ -264,14 +279,14 @@ impl<'a, T: Clone + Hash + Eq + 'a> RelIndexRead<'a> for EqRelIndCommon<T> {
 
 impl<'a, T: Clone + Hash + Eq + 'a> RelIndexReadAll<'a> for EqRelIndCommon<T> {
    type Key = (&'a T, &'a T);
-   type Value = ();
+   type Value = FullRelCounter;
 
-   type ValueIteratorType = std::iter::Once<()>;
+   type ValueIteratorType = std::iter::Once<FullRelCounter>;
 
    type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
    fn iter_all(&'a self) -> Self::AllIteratorType {
-      Box::new(self.iter_all_added().map(|x| (x, std::iter::once(()))))
+      Box::new(self.iter_all_added().map(|x| (x, std::iter::once(1.into()))))
    }
 }
 
@@ -285,7 +300,7 @@ impl<'a, T: Clone + Hash + Eq> RelFullIndexRead<'a> for EqRelIndCommon<T> {
 
 impl<'a, T: Clone + Hash + Eq> RelIndexWrite for EqRelIndCommon<T> {
    type Key = (T, T);
-   type Value = ();
+   type Value = FullRelCounter;
 
    fn index_insert(&mut self, key: Self::Key, _value: Self::Value) { 
       Rc::get_mut(&mut self.combined).unwrap().add(key.0, key.1);

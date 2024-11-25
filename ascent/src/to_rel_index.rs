@@ -18,6 +18,9 @@ pub trait ToRelIndex<Rel> {
    
    type RelIndexWrite<'a> where Self: 'a, Rel: 'a;
    fn to_rel_index_write<'a>(&'a mut self, rel: &'a mut Rel) -> Self::RelIndexWrite<'a>;
+
+   type RelIndexDelete<'a> where Self: 'a, Rel: 'a;
+   fn to_rel_index_delete<'a>(&'a mut self, rel: &'a mut Rel) -> Self::RelIndexDelete<'a>;
 }
 
 impl<T, Rel> ToRelIndex0<Rel> for T where T: ToRelIndex<Rel> {
