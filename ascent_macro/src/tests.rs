@@ -644,5 +644,5 @@ fn test_macro_delta() {
       baz(a, c) <-- bar(a, b), baz(b, c), bar(a, c);
    };
 
-   write_to_scratchpad(inp);
+   write_par_to_scratchpad(inp);
 }

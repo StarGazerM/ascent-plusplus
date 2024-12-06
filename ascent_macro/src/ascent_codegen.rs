@@ -519,17 +519,31 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
          (quote! {let before_rule = ::ascent::internal::Instant::now();}, 
           quote!{_self.#rule_time_field += before_rule.elapsed();})
       } else {(quote!{}, quote!{})};
+      let size_check_code_list = rule.body_items.iter().filter_map(|bi| {
+         if let MirBodyItem::Clause(clause) = bi {
+            if clause.rel.version == MirRelationVersion::Delta {
+            let rel = expr_for_rel(&clause.rel, mir);
+               Some(quote! {
+                  #rel.len() > 0
+               })
+            } else {None}
+         } else {None}
+      });
+      // connect the size check code with logical and
+      let size_check_code = size_check_code_list.reduce(|a, b| quote!{#a && #b}).unwrap_or(quote!{true});
       evaluate_rules.push(if rule_parallelism { quote! {
          ascent::internal::comment(#msg);
-         __scope.spawn(|_| {
-            #before_rule_var
-            #rule_compiled
-            #update_rule_time_field
-         });
+         if #size_check_code {
+            __scope.spawn(|_| {
+               #before_rule_var
+               #rule_compiled
+               #update_rule_time_field
+            });
+         }
       }} else { quote! {
          #before_rule_var
          ascent::internal::comment(#msg);
-         {
+         if #size_check_code {
             #rule_compiled
          }
          #update_rule_time_field
