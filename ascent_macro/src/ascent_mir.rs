@@ -350,10 +350,10 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
             }
          }
       }
-      if let Some(n) = force_cls {
+      if let Some(_) = force_cls {
          let mut select_only = Vec::new();
          for i in 0..dynamic_cls.len() {
-            if n == i {
+            if i == 0 {
                select_only.push(MirRelationVersion::Delta);
             } else {
                select_only.push(MirRelationVersion::TotalDelta);
@@ -399,13 +399,24 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
       }
    }
 
-   
+   let mut forced = false;
+   for bi in &rule.body_items {
+      if let IrBodyItem::Clause(cl) = bi {
+         if cl.froce_delta {
+            forced = true;
+            break;
+         }
+      }
+   }
    let dynamic_cls = rule.body_items.iter().enumerate().filter_map(|(i, cl)| match cl {
       IrBodyItem::Clause(cl) if dynamic_relations.contains(&cl.rel.relation) => Some(i),
       _ => None,
    }).collect_vec();
 
    let version_combinations = if dynamic_cls.is_empty() {vec![vec![]]} else {versions(&dynamic_cls[..], rule.simple_join_start_index, rule)};
+   if forced && version_combinations.len() > 1 {
+      panic!("forced delta clause cannot be combined with other clauses");
+   }
 
    let mut mir_body_items = Vec::with_capacity(version_combinations.len());
 
@@ -425,11 +436,20 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
          let pre_first_clause_vars = bcls.iter().take(ind).flat_map(MirBodyItem::bound_vars);
          !intersects(pre_first_clause_vars, bcls[ind + 1].bound_vars())
       });
-      MirRule {
-         body_items: bcls,
-         head_clause: rule.head_clauses.clone(),
-         simple_join_start_index: rule.simple_join_start_index,
-         reorderable
+      if forced {
+         MirRule {
+            body_items: bcls,
+            head_clause: rule.head_clauses.clone(),
+            simple_join_start_index: rule.simple_join_start_index,
+            reorderable: false
+         }
+      } else {
+         MirRule {
+            body_items: bcls,
+            head_clause: rule.head_clauses.clone(),
+            simple_join_start_index: rule.simple_join_start_index,
+            reorderable
+         }
       }
    }).collect()
 }

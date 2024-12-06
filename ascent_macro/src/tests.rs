@@ -630,3 +630,19 @@ fn test_macro_lattices_slow () {
    };
    write_to_scratchpad(inp);
 }
+
+#[test]
+fn test_macro_delta() {
+   let inp = quote! {
+      relation foo(i32, i32);
+      relation bar(i32, i32);
+      relation baz(i32, i32);
+      relation foobar(i32, i32);
+
+      foo(a, c) <-- bar(a, b), baz(b, c), bar(a, c);
+      bar(a, c) <-- bar(a, b), baz(b, c), bar(a, c);
+      baz(a, c) <-- bar(a, b), baz(b, c), bar(a, c);
+   };
+
+   write_to_scratchpad(inp);
+}
