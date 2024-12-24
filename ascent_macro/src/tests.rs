@@ -646,3 +646,30 @@ fn test_macro_delta() {
 
    write_par_to_scratchpad(inp);
 }
+
+#[test]
+fn test_macro_incremental() {
+   let inp = quote! {
+      struct TCIncremental;
+      relation edge_incremental(i32, i32);
+      relation path_incremental(i32, i32);
+      relation edge(i32, i32);
+      relation path(i32, i32);
+      relation outside();
+
+      edge(x, y) <-- edge_incremental(x, y);
+      path(x, y) <-- path_incremental(x, y);
+      edge_incremental(x, y) <-- outside(), let x = 0, let y = 0;
+      path_incremental(x, y) <-- outside(), let x = 0, let y = 0;
+
+      path(x, y) <-- delta edge(x, y);
+      path(x, z) <-- delta path(x, y), edge(y, z);
+
+      path_incremental(x, y) <-- path(x, y);
+      edge_incremental(x, y) <-- edge(x, y);
+      outside() <-- edge(x, y);
+      outside() <-- path(x, y);
+   };
+
+   write_par_to_scratchpad(inp);
+}

@@ -83,7 +83,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       });
    }
 
-   let update_indices_body = compile_update_indices_function_body(mir);
+   let update_indices_body = compile_update_indices_function(mir);
    let relation_sizes_body = compile_relation_sizes_body(mir);
    let scc_times_summary_body = compile_scc_times_summary_body(mir);
 
@@ -165,9 +165,13 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
          #[doc = "Runs the Ascent program to a fixed point."]
          pub fn run(&mut self) {
+            self.run_with_init_flag(true);
+         }
+
+         pub fn run_with_init_flag(&mut self, init_flag: bool) {
             macro_rules! __check_return_conditions {() => {};}
             #run_usings
-            self.update_indices_priv();
+            if init_flag { self.update_indices_priv() };
             let _self = self;
             #(#sccs_compiled)*
          }
@@ -252,12 +256,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
 
          #run_timeout_func
          // TODO remove pub update_indices at some point
-         #[allow(noop_method_call, suspicious_double_ref_op)]
-         fn update_indices_priv(&mut self) {
-            let before = ::ascent::internal::Instant::now();
-            #update_indices_body
-            self.update_indices_duration += before.elapsed();
-         }
+         #update_indices_body
 
          #[deprecated = "Explicit call to update_indices not required anymore."]
          pub fn update_indices(&mut self) {
@@ -675,7 +674,68 @@ fn compile_scc_times_summary_body(mir: &AscentMir) -> proc_macro2::TokenStream {
    }
 }
 
-fn compile_update_indices_function_body(mir: &AscentMir) -> proc_macro2::TokenStream {
+fn compile_update_indices_relation_code(
+   r: &RelationIdentity, indices_set: &HashSet<IrRelation>, par: bool,
+   index_insert_fn: &proc_macro2::TokenStream,
+   rel_index_write_trait: &proc_macro2::TokenStream
+) -> proc_macro2::TokenStream {
+   let _ref = if !par { quote!{&mut} } else { quote!{&} }.with_span(r.name.span());
+   let ind_common = rel_ind_common_var_name(r);
+   let rel_index_write_trait = rel_index_write_trait.clone().with_span(r.name.span());
+   let _self = quote_spanned!{r.name.span().resolved_at(Span::call_site())=> self };
+   let to_rel_index_fn = if !par { quote!{to_rel_index_write} } else { quote!{to_c_rel_index_write} };
+   let to_rel_index = if r.is_lattice { quote!{} } else {
+      quote! {.#to_rel_index_fn(#_ref #_self.#ind_common) }
+   };
+
+   let mut update_indices = vec![];
+   for ind in indices_set.iter().sorted_by_cached_key(|rel| rel.ir_name()) {
+      let ind_name = &ind.ir_name();
+      let selection_tuple : Vec<Expr> = ind.indices.iter().map(|&i| {
+         let ind = syn::Index::from(i); 
+         parse_quote_spanned! {r.name.span()=> tuple.#ind.clone()}
+      }).collect_vec();
+      let selection_tuple = tuple_spanned(&selection_tuple, r.name.span());
+      let entry_val = index_get_entry_val_for_insert(
+         ind, &parse_quote_spanned!{r.name.span()=> tuple}, &parse_quote_spanned!{r.name.span()=> _i});
+      let _pre_ref = if r.is_lattice {quote!()} else {_ref.clone()};
+      update_indices.push(quote_spanned! {r.name.span()=>
+         let selection_tuple = #selection_tuple;
+         let rel_ind = #_ref #_self.#ind_name;
+         #rel_index_write_trait::#index_insert_fn(#_pre_ref rel_ind #to_rel_index, selection_tuple, #entry_val);
+      });
+
+   }
+
+   let rel_name = &r.name;
+   let maybe_lock = if r.is_lattice && par {
+      quote_spanned!{r.name.span()=> let tuple = tuple.read().unwrap(); }
+   } else { quote!{} };
+   if !par {
+      quote_spanned! {r.name.span()=>
+         for (_i, tuple) in #_self.#rel_name.iter().enumerate() {
+            #maybe_lock
+            #(#update_indices)*
+         }
+      }
+   } else {
+      quote_spanned! {r.name.span()=>
+         (0..#_self.#rel_name.len()).into_par_iter().for_each(|_i| {
+            let tuple = &#_self.#rel_name[_i];
+            #maybe_lock
+            #(#update_indices)*
+         });
+      }
+   }
+}
+
+fn update_indices_relation_func_name(r: &RelationIdentity) -> Ident {
+   Ident::new(&format!("update_indices_{}", r.name), r.name.span())
+}
+
+fn compile_update_indices_relation_function(
+   r: &RelationIdentity, indices_set: &HashSet<IrRelation>, mir: &AscentMir
+) -> proc_macro2::TokenStream {
    let par = mir.is_parallel;
    let mut res = vec![];
    if par {
@@ -686,65 +746,41 @@ fn compile_update_indices_function_body(mir: &AscentMir) -> proc_macro2::TokenSt
    } else {
       (quote! {ascent::internal::CRelIndexWrite}, quote!{index_insert})
    };
-   let sorted_relations_ir_relations = mir.relations_ir_relations.iter().sorted_by_key(|(rel, _)| &rel.name);
-   for (r,indices_set) in sorted_relations_ir_relations {
-      
-      let _ref = if !par { quote!{&mut} } else { quote!{&} }.with_span(r.name.span());
-      let ind_common = rel_ind_common_var_name(r);
-      let rel_index_write_trait = rel_index_write_trait.clone().with_span(r.name.span());
-      let _self = quote_spanned!{r.name.span().resolved_at(Span::call_site())=> self };
-      let to_rel_index_fn = if !par { quote!{to_rel_index_write} } else { quote!{to_c_rel_index_write} };
-      let to_rel_index = if r.is_lattice { quote!{} } else {
-         quote! {.#to_rel_index_fn(#_ref #_self.#ind_common) }
-      };
-
-      let mut update_indices = vec![];
-      for ind in indices_set.iter().sorted_by_cached_key(|rel| rel.ir_name()) {
-         let ind_name = &ind.ir_name();
-         let selection_tuple : Vec<Expr> = ind.indices.iter().map(|&i| {
-            let ind = syn::Index::from(i); 
-            parse_quote_spanned! {r.name.span()=> tuple.#ind.clone()}
-         }).collect_vec();
-         let selection_tuple = tuple_spanned(&selection_tuple, r.name.span());
-         let entry_val = index_get_entry_val_for_insert(
-            ind, &parse_quote_spanned!{r.name.span()=> tuple}, &parse_quote_spanned!{r.name.span()=> _i});
-         let _pre_ref = if r.is_lattice {quote!()} else {_ref.clone()};
-         update_indices.push(quote_spanned! {r.name.span()=>
-            let selection_tuple = #selection_tuple;
-            let rel_ind = #_ref #_self.#ind_name;
-            #rel_index_write_trait::#index_insert_fn(#_pre_ref rel_ind #to_rel_index, selection_tuple, #entry_val);
-         });
-
-      }
-
-      
-
-      let rel_name = &r.name;
-      let maybe_lock = if r.is_lattice && mir.is_parallel {
-         quote_spanned!{r.name.span()=> let tuple = tuple.read().unwrap(); }
-      } else { quote!{} };
-      if !par {
-         res.push(quote_spanned! {r.name.span()=>
-            for (_i, tuple) in #_self.#rel_name.iter().enumerate() {
-               #maybe_lock
-               #(#update_indices)*
-            }
-         });
-      } else {
-         res.push(quote_spanned! {r.name.span()=>
-            (0..#_self.#rel_name.len()).into_par_iter().for_each(|_i| {
-               let tuple = &#_self.#rel_name[_i];
-               #maybe_lock
-               #(#update_indices)*
-            });
-         });
-      }
-   }
-
-   quote! {
+   res.push(compile_update_indices_relation_code(r, indices_set, par, &index_insert_fn, &rel_index_write_trait));
+   let func_name = update_indices_relation_func_name(r);
+   let func_body = quote! {
       use ascent::internal::ToRelIndex0;
       use #rel_index_write_trait;
       #(#res)*
+   };
+   quote! {
+      #[allow(noop_method_call, suspicious_double_ref_op)]
+      pub fn #func_name(&mut self) {
+         #func_body
+      }
+   }
+}
+
+fn compile_update_indices_function(mir: &AscentMir) -> proc_macro2::TokenStream {
+   let mut update_calls = vec![];
+   let mut update_funcs = vec![];
+
+   let sorted_relations_ir_relations = mir.relations_ir_relations.iter().sorted_by_key(|(rel, _)| &rel.name);
+   for (r,indices_set) in sorted_relations_ir_relations {
+      let func_name = update_indices_relation_func_name(r);
+      update_calls.push(quote! { self.#func_name(); });
+      update_funcs.push(compile_update_indices_relation_function(r, indices_set, mir));
+   }
+
+   quote! {
+      #[allow(noop_method_call, suspicious_double_ref_op)]
+      pub fn update_indices_priv(&mut self) {
+         let before = ::ascent::internal::Instant::now();
+         #(#update_calls)*
+         self.update_indices_duration += before.elapsed();
+      }
+
+      #(#update_funcs)*
    }
 }
 

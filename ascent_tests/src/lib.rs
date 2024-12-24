@@ -16,3 +16,4 @@ mod macros_tests;
 
 mod provenance;
 mod dynamic_programming;
+mod incremental;
