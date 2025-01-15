@@ -25,14 +25,12 @@ mod c_rel_no_index;
 mod to_rel_index;
 mod tuple_of_borrowed;
 mod rel_index_boilerplate;
-pub mod tag;
 
 pub use ascent_macro::{ascent, ascent_run};
 #[cfg(feature = "par")]
 pub use ascent_macro::{ascent_par, ascent_run_par};
 
 pub use ascent_base::*;
-pub use tag::*;
 
 pub use hashbrown;
 #[cfg(feature = "par")]

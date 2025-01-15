@@ -1,9 +1,10 @@
 #![cfg(test)]
 use ascent::ascent;
 use ascent::ascent_run;
+use ascent::ascent_par;
+use ascent::ascent_run_par;
 use itertools::Itertools;
 
-use crate::ascent_run_m_par;
 use crate::assert_rels_eq;
 use crate::utils::rels_equal;
 
@@ -21,7 +22,7 @@ where
 
 #[test]
 fn test_ascent_agg3(){
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32, i32);
       relation bar(i32, i32, i32);
       relation baz(i32, i32);
@@ -44,7 +45,7 @@ fn test_ascent_agg3(){
 #[test]
 fn test_ascent_agg4(){
    use ascent::aggregators::*;
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32, i32);
       relation bar(i32, i32, i32);
       relation baz(i32, i32, i32);
@@ -69,7 +70,7 @@ fn test_ascent_agg4(){
 #[test]
 fn test_ascent_negation(){
    use ascent::aggregators::*;
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32, i32);
       relation bar(i32, i32, i32);
       relation baz(i32, i32);
@@ -102,7 +103,7 @@ fn test_ascent_negation(){
 #[test]
 fn test_ascent_negation2(){
    use ascent::aggregators::*;
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32, i32);
       relation bar(i32, i32);
       relation baz(i32, i32);
@@ -135,7 +136,7 @@ fn test_ascent_negation2(){
 #[test]
 fn test_ascent_negation3(){
    use ascent::aggregators::*;
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32, i32);
       relation bar(i32, i32, i32);
       relation baz(i32, i32);
@@ -160,7 +161,7 @@ fn test_ascent_negation3(){
 #[test]
 fn test_ascent_agg_simple(){
    use ascent::aggregators::*;
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32);
       foo(0); foo(10);
 

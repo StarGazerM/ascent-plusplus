@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use ascent_tests::ascent_m_par;
 use stopwatch::Stopwatch;
-use ascent::{ascent};
+use ascent::{ascent, ascent_par};
 use ascent::lattice::Dual;
 
 mod tc {
@@ -95,7 +95,7 @@ fn bench_lattice(){
 
 
 fn bench_tc_path_join_path(nodes_count: i32) {
-   ascent_m_par! {
+   ascent_par! {
       // #![include_rule_times]
       struct TCPathJoinPath;
       relation edge(i32, i32);

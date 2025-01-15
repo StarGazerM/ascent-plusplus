@@ -8,7 +8,7 @@ use syn::{Expr, Type};
 use crate::{ascent_mir::MirRelationVersion::*, ascent_syntax::Signatures, syn_utils::pattern_get_vars};
 use crate::utils::{expr_to_ident, pat_to_ident, tuple_type, intersects};
 use crate::ascent_syntax::{CondClause, GeneratorNode, RelationIdentity};
-use crate::ascent_hir::{AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrRelation, IrRule, RelationMetadata};
+use crate::ascent_hir::{AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrExternDB, IrHeadClause, IrRelation, IrRule, RelationMetadata};
 
 pub(crate) struct AscentMir {
    pub sccs: Vec<MirScc>,
@@ -19,6 +19,7 @@ pub(crate) struct AscentMir {
    pub relations_metadata: HashMap<RelationIdentity, RelationMetadata>,
    pub lattices_full_indices: HashMap<RelationIdentity, IrRelation>,
    pub signatures: Signatures,
+   pub extern_dbs: Vec<IrExternDB>,
    pub config: AscentConfig,
    pub is_parallel: bool,
 }
@@ -105,6 +106,7 @@ impl MirBodyItem {
 #[derive(Clone)]
 pub(crate) struct MirBodyClause {
    pub rel: MirRelation,
+   pub extern_db_name: Option<Ident>,
    pub args: Vec<Expr>,
    pub rel_args_span: Span,
    pub args_span: Span,
@@ -126,6 +128,7 @@ impl MirBodyClause {
    pub fn from(ir_body_clause: IrBodyClause, rel: MirRelation) -> MirBodyClause{
       MirBodyClause {
          rel,
+         extern_db_name: ir_body_clause.extern_db_name,
          args: ir_body_clause.args,
          rel_args_span: ir_body_clause.rel_args_span,
          args_span: ir_body_clause.args_span,
@@ -145,9 +148,13 @@ pub(crate) struct MirRelation {
    pub val_type: IndexValType,
 }
 
-pub(crate) fn ir_relation_version_var_name(ir_name: &Ident, version : MirRelationVersion) -> Ident{
-   let name = format!("{}_{}", ir_name, version.to_string());
-   Ident::new(&name, ir_name.span())
+pub(crate) fn ir_relation_version_var_name(ir_name: &Ident, db_name: &proc_macro2::TokenStream, version : MirRelationVersion) -> proc_macro2::TokenStream{
+   let rt = Ident::new(&format!("runtime_{}", version.to_string()), ir_name.span());
+   // Ident::new(&name, ir_name.span())
+   // let _self = Ident::new("_self", ir_name.span());
+   quote_spanned! { ir_name.span() =>
+      #db_name.#rt.#ir_name
+   }
 }
 
 // pub(crate) fn ir_relation_counter(ir_name: &Ident) -> Ident{
@@ -156,8 +163,9 @@ pub(crate) fn ir_relation_version_var_name(ir_name: &Ident, version : MirRelatio
 // }
 
 impl MirRelation {
-   pub fn var_name(&self) -> Ident {
-      ir_relation_version_var_name(&self.ir_name, self.version)
+   pub fn var_name(&self) -> proc_macro2::TokenStream {
+      let db = quote! { _self };
+      ir_relation_version_var_name(&self.ir_name, &db, self.version)
    }
 
    #[allow(dead_code)]
@@ -302,6 +310,7 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
       lattices_full_indices: hir.lattices_full_indices.clone(),
       // relations_no_indices: hir.relations_no_indices.clone(),
       relations_metadata: hir.relations_metadata.clone(),
+      extern_dbs: hir.extern_dbs.clone(),
       signatures: hir.signatures.clone(),
       config: hir.config.clone(),
       is_parallel: hir.is_parallel,
@@ -386,6 +395,7 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
             let mir_relation = MirRelation::from(hir_bcl.rel.clone(), ver);
             let mir_bcl = MirBodyClause{
                rel: mir_relation,
+               extern_db_name: hir_bcl.extern_db_name.clone(),
                args : hir_bcl.args.clone(),
                rel_args_span: hir_bcl.rel_args_span,
                args_span: hir_bcl.args_span,

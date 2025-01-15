@@ -313,6 +313,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
    }
    new_cond_clauses.extend(body_clause.cond_clauses);
    BodyClauseNode{
+      extern_db_name: body_clause.extern_db_name,
       args: new_args,
       cond_clauses: new_cond_clauses,
       rel: body_clause.rel,
@@ -428,6 +429,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
              desugared_body_items.push(
                 BodyItemNode::Clause(BodyClauseNode {
                    rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+                   extern_db_name: None,
                    args: f.args.clone(),
                    id_var: f.id_var.clone(),
                    cond_clauses: vec![],
@@ -467,6 +469,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           let var_do_clause_id = gensym.next_ident(&format!("{}_do__", f.name), f.name.span());
          let do_clause_used = BodyClauseNode {
              rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+             extern_db_name: None,
              args: do_clause_arg,
              id_var: Some(syn::parse2(quote!{#var_do_clause_id}).unwrap()),
              cond_clauses: vec![],
@@ -474,6 +477,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
          };
           let use_result_clause = BodyClauseNode {
              rel: f.name.clone(),
+             extern_db_name: None,
              args: Punctuated::from_iter(vec![
                 BodyClauseArg::Expr(parse2(quote!{#var_do_clause_id}).unwrap()),
                 BodyClauseArg::Expr(parse2(quote!{#ret_v}).unwrap())
@@ -503,6 +507,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                    generate_call_body_items.push(
                       BodyItemNode::Clause(BodyClauseNode {
                          rel: Ident::new(&format!("{}_do", other_f.name), other_f.name.span()),
+                         extern_db_name: None,
                          args: other_f.args.clone(),
                          id_var: None,
                          cond_clauses: vec![],
@@ -567,6 +572,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           if let Some (ret_var) = &f.return_var {
             let new_do_clause = BodyClauseNode{
                rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+               extern_db_name: None,
                args: f.args.clone(),
                id_var: Some(syn::parse2(quote!{#do_call_id}).unwrap()),
                cond_clauses: vec![],
@@ -742,6 +748,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           name: Ident::new(&format!("{}_id", rel.name), rel.name.span()),
           field_types: new_field_types,
           initialization: rel.initialization.clone(),
+          source_db: None,
           _semi_colon: rel._semi_colon.clone(),
           is_lattice: rel.is_lattice,
           need_id: false,
@@ -762,12 +769,12 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        name: Ident::new(&format!("{}_do", rel.name), rel.name.span()),
        field_types: rel.field_types.clone(),
        initialization: None,
+       source_db: None,
        _semi_colon: syn::token::Semi::default(),
        is_lattice: false,
        need_id: true,
     };
     let usize_type = Type::Verbatim(quote!{usize});
-    // let tag_type = Type::Verbatim(quote!{ascent::RelationTag});
     let res_relation = RelationNode{
        attrs: rel.attrs.clone(),
        name: rel.name.clone(),
@@ -775,6 +782,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           usize_type.clone(), rel.return_type
        ]),
        initialization: None,
+       source_db: None,
        _semi_colon: syn::token::Semi::default(),
        is_lattice: false,
        need_id: true,

@@ -12,10 +12,12 @@ use std::hash::Hash;
 
 use ascent::ascent;
 use ascent::ascent_run;
+use ascent::ascent_par;
+use ascent::ascent_run_par;
 
 use LambdaCalcExpr::*;
 use crate::ascent_maybe_par::lat_to_vec;
-use crate::{utils::*, assert_rels_eq, ascent_m_par, ascent_run_m_par};
+use crate::{utils::*, assert_rels_eq};
 use itertools::Itertools;
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -59,7 +61,7 @@ fn I() -> LambdaCalcExpr {lam("x", Ref("x"))}
 
 #[test]
 fn test_dl_lambda(){
-   ascent_m_par!{
+   ascent_par!{
       relation output(LambdaCalcExpr);
       relation input(LambdaCalcExpr);
       relation eval(LambdaCalcExpr, LambdaCalcExpr);
@@ -182,7 +184,7 @@ fn _test_dl_lambda2(){
 #[test]
 fn test_dl_patterns(){
    // ascent!{
-   ascent_m_par!{
+   ascent_par!{
       #![measure_rule_times]
       relation foo(i32, Option<i32>);
       relation bar(i32, i32);
@@ -200,7 +202,7 @@ fn test_dl_patterns(){
 
 #[test]
 fn test_dl_pattern_args(){
-   ascent_m_par!{
+   ascent_par!{
       relation foo(i32, Option<i32>);
       relation bar(i32, i32);
       foo(1, None);
@@ -218,7 +220,7 @@ fn test_dl_pattern_args(){
 
 #[test]
 fn test_dl2(){
-   ascent_m_par!{
+   ascent_par!{
       relation bar(i32, i32);
       relation foo1(i32, i32);
       relation foo2(i32, i32);
@@ -248,7 +250,7 @@ fn test_dl2(){
 
 #[test]
 fn test_ascent_expressions_and_inits(){
-   ascent_m_par!{
+   ascent_par!{
       relation foo(i32, i32) = vec![(1, 2)].into_iter().collect();
       foo(2, 3);
       foo(3, 5);
@@ -269,7 +271,7 @@ fn test_ascent_expressions_and_inits(){
 
 #[test]
 fn test_dl_cross_join(){
-   ascent_m_par!{
+   ascent_par!{
       relation foo(i32, i32);
       relation bar(i32, i32);
       relation baz(i32, i32, i32, i32);
@@ -288,7 +290,7 @@ fn test_dl_cross_join(){
 
 #[test]
 fn test_dl_vars_bound_in_patterns(){
-   ascent_m_par!{
+   ascent_par!{
       relation foo(i32, Option<i32>);
       relation bar(i32, i32);
       relation baz(i32, i32, i32);
@@ -348,7 +350,7 @@ fn test_dl_generators2(){
 
 #[test]
 fn test_dl_multiple_head_clauses(){
-   ascent_m_par!{
+   ascent_par!{
       relation foo(Vec<i32>, Vec<i32>);
       relation foo2(Vec<i32>);
       relation foo1(Vec<i32>);
@@ -372,7 +374,7 @@ fn test_dl_multiple_head_clauses(){
 
 #[test]
 fn test_dl_multiple_head_clauses2(){
-   ascent_m_par!{
+   ascent_par!{
       relation foo(Vec<i32>);
       relation foo_left(Vec<i32>);
       relation foo_right(Vec<i32>);
@@ -457,7 +459,7 @@ fn test_dl_disjunctions(){
 
 #[test]
 fn test_dl_repeated_vars(){
-   ascent_m_par!{
+   ascent_par!{
       relation foo(i32);
       relation bar(i32, i32);
       relation res(i32);
@@ -492,7 +494,7 @@ fn test_dl_repeated_vars(){
 
 #[test]
 fn test_dl_lattice1(){
-   ascent_m_par!{
+   ascent_par!{
       lattice shortest_path(i32, i32, Dual<u32>);
       relation edge(i32, i32, u32);
 
@@ -591,7 +593,7 @@ fn test_ascentception(){
 #[test]
 fn test_ascent_run_tc(){
    fn compute_tc(inp: Vec<(i32, i32)>) -> Vec<(i32,i32)> {
-      ascent_run_m_par!{
+      ascent_run_par!{
          relation r(i32, i32) = FromIterator::from_iter(inp);
          relation tc(i32, i32);
          tc(x, y) <-- r(x, y);
@@ -604,7 +606,7 @@ fn test_ascent_run_tc(){
 #[test]
 fn test_ascent_run_tc_generic(){
    fn compute_tc<TNode: Clone + Hash + Eq + Sync + Send>(r: &[(TNode, TNode)]) -> Vec<(TNode,TNode)> {
-      ascent_run_m_par!{
+      ascent_run_par!{
          struct TC<TNode: Clone + Hash + Eq + Sync + Send>;
          relation tc(TNode, TNode);
          tc(x.clone(), y.clone()) <-- for (x, y) in r.iter();
@@ -633,7 +635,7 @@ fn test_ascent_tc_generic(){
 #[test]
 fn test_ascent_negation_through_lattices(){
    use ascent::lattice::set::Set;
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32, i32);
       relation bar(i32, i32);
 
@@ -676,7 +678,7 @@ fn test_ascent_run_explicit_decl(){
 
 #[test]
 fn test_ascent_fac(){
-   ascent_m_par!{
+   ascent_par!{
       struct Fac;
       relation fac(u64, u64);
       relation do_fac(u64);
@@ -716,7 +718,7 @@ fn test_consuming_ascent_run_tc(){
 
 #[test]
 fn test_ascent_simple_join(){
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation bar(i32, i32);
       relation foo(i32, i32);
       relation baz(i32, i32);
@@ -734,7 +736,7 @@ fn test_ascent_simple_join(){
 
 #[test]
 fn test_ascent_simple_join2(){
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation bar(i32, i32);
       relation foo(i32, i32);
       relation baz(i32, i32);
@@ -753,7 +755,7 @@ fn test_ascent_simple_join2(){
 
 #[test]
 fn test_ascent_simple_join3(){
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation bar(i32, i32);
       relation foo(i32, i32);
       relation baz(i32, i32);
@@ -789,7 +791,7 @@ fn test_ascent_simple_join4() {
    ];
 
    for (prop, expected) in test_cases {
-      let res = ascent_run_m_par! {
+      let res = ascent_run_par! {
          relation rel(i32, i32) = input_rel.iter().cloned().collect();
 
          rel(y, x) <-- if prop.symmetric, rel(x, y);
@@ -802,7 +804,7 @@ fn test_ascent_simple_join4() {
 
 #[test]
 fn test_ascent_simple_join5() {
-   let res = ascent_run_m_par! {
+   let res = ascent_run_par! {
       relation foo(i32, i32);
       foo(1,2), foo(2, 3);
       foo(x, z) <-- let x = &42, foo(x, y), foo(y, z);
@@ -824,7 +826,7 @@ fn test_ascent_simple_join5() {
 
 #[test]
 fn test_ascent_wildcards(){
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32, i32, i32);
       relation bar(i32, i32);
       relation baz(i32);
@@ -849,7 +851,7 @@ fn min<'a>(inp: impl Iterator<Item = (&'a i32,)>) -> impl Iterator<Item = i32> {
 
 #[test]
 fn test_ascent_agg(){
-   let res = ascent_run_m_par!{
+   let res = ascent_run_par!{
       relation foo(i32, i32);
       relation bar(i32, i32, i32);
       relation baz(i32, i32, i32);
@@ -889,7 +891,7 @@ fn test_run_timeout() {
 #[test]
 fn test_ascent_bounded_set() {
    use ascent::lattice::bounded_set::BoundedSet;
-   ascent_m_par! { struct AscentProgram<const N: usize>;
+   ascent_par! { struct AscentProgram<const N: usize>;
 
       lattice num_store(BoundedSet<N, i32>);
       relation init(i32);
@@ -911,7 +913,7 @@ fn test_ascent_bounded_set() {
 fn test_issue3() {
    #![allow(non_snake_case)]
 
-   ascent_m_par!{
+   ascent_par!{
       relation a__(i32, i32);
       relation c__(i32, i32, i32);
       relation e__(i32);
@@ -933,7 +935,7 @@ fn test_issue3() {
 
 #[test]
 fn test_repeated_vars_simple_joins() {
-   ascent_m_par! {
+   ascent_par! {
       relation foo1(i32, i32);
       relation foo2(i32, i32);
       relation bar(i32, i32);

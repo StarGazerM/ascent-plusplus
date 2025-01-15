@@ -22,7 +22,7 @@ derive_more = "0.99.17"
 syn = "1.0.109" 
 paste = "1.0"
 hashbrown = { version = "0.14", features = ["raw"] }
-rayon = { version = "1.5", optional = true }
+# rayon = { version = "1.5", optional = true }
 
 [dev-dependencies]
 proptest = "1"
@@ -33,4 +33,4 @@ separator = "0.4.1"
 [features]
 default = ["par"]
 compact = []
-par = ["ascent/par", "hashbrown/rayon",  "rayon"]
+par = ["ascent/par", "hashbrown/rayon",]

@@ -1,7 +1,8 @@
 use ascent_tests::ascent_m_par;
 use std::time::Instant;
+use ascent::ascent_par;
 
-ascent_m_par!{
+ascent_par!{
     struct TC;
     relation edge(i32, i32);
     relation path(i32, i32);

@@ -57,6 +57,13 @@ impl AscentConfig {
    }
 }
 
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub(crate) struct IrExternDB {
+   pub db_type: Ident,
+   pub db_name: Ident,
+}
+
+
 pub(crate) struct AscentIr {
    pub relations_ir_relations: HashMap<RelationIdentity, HashSet<IrRelation>>,
    pub relations_full_indices: HashMap<RelationIdentity, IrRelation>,
@@ -64,6 +71,7 @@ pub(crate) struct AscentIr {
    // pub relations_no_indices: HashMap<RelationIdentity, IrRelation>,
    pub relations_metadata: HashMap<RelationIdentity, RelationMetadata>,
    pub rules: Vec<IrRule>,
+   pub extern_dbs: Vec<IrExternDB>, 
    pub signatures: Signatures,
    pub config: AscentConfig,
    pub is_parallel: bool,
@@ -132,6 +140,7 @@ impl IrBodyItem {
 #[derive(Clone)]
 pub(crate) struct IrBodyClause {
    pub rel : IrRelation,
+   pub extern_db_name: Option<Ident>,
    pub args : Vec<Expr>,
    pub rel_args_span: Span,
    pub args_span: Span,
@@ -153,6 +162,7 @@ pub(crate) struct IrAggClause {
    pub aggregator: Expr,
    pub bound_args: Vec<Ident>,
    pub rel: IrRelation,
+   pub extern_db_name: Option<Ident>,
    pub rel_args: Vec<Expr>
 }
 
@@ -362,7 +372,19 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
          relations_ir_relations.entry(extra_rel.relation.clone()).or_default().insert(extra_rel.clone());
       }
    }
+   for extra_index in &prog.extra_indices {
+      let rel = prog.relations.iter().find(|r| &extra_index.rel_name == &r.name).unwrap();
+      let rel_identity = RelationIdentity::from(rel);
+      let indices : Vec<usize> =
+         extra_index.arg_pos.iter()
+         .map(|i| i.base10_parse().unwrap())
+         .collect_vec();
+      let ir_rel = IrRelation::new(rel_identity.clone(), indices, rel.need_id);
+      relations_ir_relations.entry(rel_identity.clone()).or_default().insert(ir_rel.clone());
+   }
+
    let signatures = prog.signatures.clone().unwrap_or_else(|| parse2(quote! {pub struct AscentProgram;}).unwrap());
+   let extern_dbs = prog.extern_dbs.iter().map(|db| IrExternDB {db_type: db.db_type.clone(), db_name: db.db_name.clone()}).collect();
    Ok(AscentIr {
       rules: ir_rules.into_iter().map(|(rule, _extra_rels)| rule).collect_vec(),
       relations_ir_relations,
@@ -371,6 +393,7 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       relations_metadata,
       // relations_no_indices,
       signatures,
+      extern_dbs,
       config,
       is_parallel
    })
@@ -463,6 +486,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
             let ir_rel = IrRelation::new(relation.into(), indices, relation.need_id);
             let ir_bcl = IrBodyClause {
                rel: ir_rel,
+               extern_db_name: bcl.extern_db_name.clone(),
                args: bcl.args.iter().cloned().map(BodyClauseArg::unwrap_expr).collect(),
                rel_args_span: bcl.rel.span().join(bcl.args.span()).unwrap_or_else(|| bcl.rel.span()),
                args_span: bcl.args.span(),
@@ -500,6 +524,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                aggregator: agg.aggregator.get_expr(),
                bound_args: agg.bound_args.iter().cloned().collect_vec(),
                rel: ir_rel,
+               extern_db_name: agg.extern_db_name.clone(),
                rel_args: agg.rel_args.iter().cloned().collect_vec(),
             };
             body_items.push(IrBodyItem::Agg(ir_agg_clause));

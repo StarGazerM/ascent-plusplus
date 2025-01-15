@@ -317,6 +317,27 @@ fn test_macro_lattices(){
 }
 
 #[test]
+fn test_simple() {
+   let input = quote! {
+      relation bar(i32, i32);
+      relation foo(i32, i32);
+      relation baz(i32, i32);
+
+      foo(1, 2);
+      foo(10, 2);
+      bar(2, 3);
+      bar(2, 1);
+
+      baz(*x, *z) <-- foo(x, y) if *x != 10, bar(y, ?z) if *z < 4, if x != z;
+      
+      baz(*x, *z) <-- foo(x, y) if *x != 10, bar(y, z) if *z * x != 444, if x != z;
+      foo(*x, *y), bar(*x, *y) <-- baz(x, y);
+   };
+
+   write_to_scratchpad(input);
+}
+
+#[test]
 fn test_no_generic(){
    let input = quote!{
       struct AscentProgram;
@@ -440,8 +461,11 @@ fn exp_items_in_fn(){
 }
 
 fn write_to_scratchpad_base(tokens: TokenStream, prefix: TokenStream, is_ascent_run: bool, is_parallel: bool) -> TokenStream {
-   let code = ascent_impl(tokens, is_ascent_run, is_parallel);
-   let code = code.unwrap();
+   let code = ascent_impl(tokens, is_ascent_run, is_parallel).unwrap();
+   let code = quote! {
+      #prefix
+      #code
+   };
    let template = std::fs::read_to_string("src/scratchpad_template.rs").unwrap();
    let code_in_template = template.replace("todo!(\"here\");", &code.to_string());
    std::fs::write("src/scratchpad.rs", prefix.to_string()).unwrap();
@@ -452,6 +476,11 @@ fn write_to_scratchpad_base(tokens: TokenStream, prefix: TokenStream, is_ascent_
 
 fn write_to_scratchpad(tokens: TokenStream) -> TokenStream {
    write_to_scratchpad_base(tokens, quote!{}, false, false)
+}
+
+fn write_duo_to_scratchpad(tokens1: TokenStream, tokens2: TokenStream) -> TokenStream {
+   let p2 = ascent_impl(tokens2, false, false).unwrap();
+   write_to_scratchpad_base(tokens1, p2, false, false)
 }
 
 fn write_with_prefix_to_scratchpad(tokens: TokenStream, prefix: TokenStream) -> TokenStream {
@@ -673,3 +702,29 @@ fn test_macro_incremental() {
 
    write_par_to_scratchpad(inp);
 }
+
+#[test]
+fn test_extern_database() {
+   let inp1 = quote! {
+      struct TC;
+
+      relation edge(i32, i32);
+      relation path(i32, i32);
+      
+      index path ();
+   };
+
+   let inp2 = quote! {
+      struct ExtTest;
+      extern TC tc;
+
+      relation edge(i32, i32);
+      relation path(i32, i32) in tc;
+      
+      edge(x, y) <-- tc.path(x, y);
+      
+   };
+
+   write_duo_to_scratchpad(inp1, inp2);
+}
+

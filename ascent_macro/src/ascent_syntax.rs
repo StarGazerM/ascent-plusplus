@@ -1,7 +1,7 @@
 #![deny(warnings)]
 extern crate proc_macro;
 use proc_macro2::TokenStream;
-use syn::{ImplGenerics, TypeGenerics};
+use syn::{ImplGenerics, LitInt, TypeGenerics};
 use syn::{
    braced, parenthesized, parse2, punctuated::Punctuated, spanned::Spanned, Attribute, Error, Expr,
    Generics, Ident, Pat, Result, Token, Type, Visibility,
@@ -29,6 +29,7 @@ mod kw {
    syn::custom_keyword!(lattice);
    syn::custom_keyword!(function);
    syn::custom_keyword!(provenance);
+   syn::custom_keyword!(index);
    syn::custom_keyword!(delta);
    syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
@@ -106,6 +107,27 @@ fn parse_generics_with_where_clause(input: ParseStream) -> Result<Generics> {
    Ok(res)
 }
 
+#[derive(Clone, Parse)]
+pub struct ExternDatabase {
+   pub _extern_kw: Token![extern],
+   pub db_type: Ident,
+   pub db_name: Ident,
+   pub _semi_colon: Token![;],
+}
+
+
+#[derive(Clone, Parse)]
+pub struct ExtraIndex {
+   pub _index_kw: kw::index,
+   pub rel_name: Ident,
+   #[paren]
+   pub _arg_pos_paren: syn::token::Paren,
+   #[inside(_arg_pos_paren)]
+   #[call(Punctuated::parse_terminated)]
+   pub arg_pos: Punctuated<LitInt, Token![,]>,
+   pub _semi_colon: Token![;],
+}
+
 pub struct FunctionNode {
    pub attrs: Vec<Attribute>,
    pub name: Ident,
@@ -138,6 +160,7 @@ pub struct RelationNode{
    pub name: Ident,
    pub field_types : Punctuated<Type, Token![,]>,
    pub initialization: Option<Expr>,
+   pub source_db: Option<Ident>,
    pub _semi_colon: Token![;],
    pub is_lattice: bool,
    pub need_id: bool,
@@ -167,12 +190,20 @@ impl Parse for RelationNode {
          Some(input.parse::<Expr>()?)
       } else {None};
 
+      let source_db : Option<Ident>;
+      if input.peek(Token![in]) {
+         input.parse::<Token![in]>()?;
+         source_db = Some(input.parse()?);
+      } else {
+         source_db = None;
+      };
+
       let _semi_colon = input.parse::<Token![;]>()?;
       if is_lattice && field_types.empty_or_trailing() {
          return Err(input.error("empty lattice is not allowed"));
       }
       Ok(RelationNode{
-         attrs: vec![], name, field_types, _semi_colon, is_lattice,
+         attrs: vec![], name, field_types, source_db, _semi_colon, is_lattice,
          initialization, need_id,
          // is_function
       })
@@ -275,6 +306,7 @@ pub struct GeneratorNode {
 #[derive(Clone)]
 pub struct BodyClauseNode {
    pub rel : Ident,
+   pub extern_db_name: Option<Ident>,
    pub args : Punctuated<BodyClauseArg, Token![,]>,
    pub cond_clauses: Vec<CondClause>,
    pub id_var : Option<Expr>,
@@ -413,7 +445,18 @@ impl Parse for BodyClauseNode{
       if delta_flag {
          input.parse::<kw::delta>()?;
       }
-      let rel : Ident = input.parse()?;
+      // let rel : Ident = input.parse()?;
+      let rel : Ident;
+      let extern_db_name;
+      if input.peek2(Token![.]) {
+         let db_name = input.parse::<Ident>()?;
+         input.parse::<Token![.]>()?;
+         rel = input.parse::<Ident>()?;
+         extern_db_name = Some(db_name);
+      } else {
+         rel = input.parse::<Ident>()?;
+         extern_db_name = None;
+      }
       let args_content;
       parenthesized!(args_content in input);
       let args = args_content.parse_terminated(BodyClauseArg::parse, Token![,])?;
@@ -426,7 +469,7 @@ impl Parse for BodyClauseNode{
       while let Ok(cl) = input.parse(){
          cond_clauses.push(cl);
       }
-      Ok(BodyClauseNode{rel, args, cond_clauses, id_var, delta_flag})
+      Ok(BodyClauseNode{rel, extern_db_name, args, cond_clauses, id_var, delta_flag})
    }
 }
 
@@ -534,6 +577,8 @@ pub struct AggClauseNode {
    pub bound_args: Punctuated<Ident, Token![,]>,
    pub _in_kw: Token![in],
    pub rel : Ident,
+   pub _dot: Option<Token![.]>,
+   pub extern_db_name: Option<Ident>,
    #[paren]
    _rel_arg_paren: syn::token::Paren,
    #[inside(_rel_arg_paren)]
@@ -669,7 +714,9 @@ pub(crate) struct AscentProgram {
    pub attributes: Vec<syn::Attribute>,
    pub macros: Vec<MacroDefNode>,
    pub macro_invocs: Vec<syn::ExprMacro>,
-   pub functions: Vec<FunctionNode>
+   pub functions: Vec<FunctionNode>,
+   pub extern_dbs: Vec<ExternDatabase>,
+   pub extra_indices: Vec<ExtraIndex>
 }
 
 impl Parse for AscentProgram {
@@ -685,6 +732,8 @@ impl Parse for AscentProgram {
       };
       let mut rules = vec![];
       let mut relations = vec![];
+      let mut extern_dbs = vec![];
+      let mut extra_indices = vec![];
       let mut functions = vec![];
       let mut macros = vec![];
       let mut macro_invocs = vec![];
@@ -694,6 +743,12 @@ impl Parse for AscentProgram {
             let mut relation_node = RelationNode::parse(input)?;
             relation_node.attrs = attrs;
             relations.push(relation_node);
+         } else if input.peek(Token![extern]) {
+            let extern_db = ExternDatabase::parse(input)?;
+            extern_dbs.push(extern_db);
+         } else if input.peek(kw::index) {
+            let extra_index = ExtraIndex::parse(input)?;
+            extra_indices.push(extra_index);
          } else if input.peek(kw::function) {
             let mut function_node = FunctionNode::parse(input)?;
             function_node.attrs = attrs;
@@ -715,7 +770,10 @@ impl Parse for AscentProgram {
             rules.push(RuleNode::parse(input)?);
          }
       }
-      Ok(AscentProgram{rules, relations, signatures, attributes, macros, macro_invocs, functions})
+      Ok(AscentProgram{
+         rules, relations, signatures, attributes, macros, macro_invocs,
+         functions, extern_dbs, extra_indices
+      })
    }
 }
 
@@ -723,6 +781,7 @@ impl Parse for AscentProgram {
 pub(crate) struct RelationIdentity {
    pub name: Ident,
    pub field_types: Vec<Type>,
+   pub extern_db_name: Option<Ident>,
    pub is_lattice: bool,
    pub need_id: bool
 }
@@ -732,6 +791,7 @@ impl From<&RelationNode> for RelationIdentity{
       RelationIdentity {
          name: relation_node.name.clone(),
          field_types: relation_node.field_types.iter().cloned().collect(),
+         extern_db_name: relation_node.source_db.clone(),
          is_lattice: relation_node.is_lattice,
          need_id: relation_node.need_id
       }
