@@ -227,7 +227,7 @@ fn test_macro_agg() {
          foo(x),
          agg min_z = min(z) in bar(x, _, z);
    };
-   write_to_scratchpad(inp);
+   write_par_to_scratchpad(inp);
 }
 
 #[test]
@@ -726,5 +726,19 @@ fn test_extern_database() {
    };
 
    write_duo_to_scratchpad(inp1, inp2);
+}
+
+#[test]
+fn test_run_timeout() {
+   let input = quote! {
+      #![generate_run_timeout]
+      /// A diverging Ascent program
+      struct Diverging;
+      /// foooooooooooo
+      relation foo(u128);
+      foo(0);
+      foo(x + 1) <-- foo(x);
+   };
+   write_to_scratchpad(input);
 }
 

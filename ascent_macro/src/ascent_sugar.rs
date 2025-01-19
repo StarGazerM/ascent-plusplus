@@ -16,7 +16,7 @@ use quote::ToTokens;
 use itertools::Itertools;
 
 use ascent_base::util::update;
-use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode};
+use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode, WormholePath};
 use crate::utils::{
    expr_to_ident, expr_to_ident_mut, flatten_punctuated, is_wild_card,
    punctuated_map, punctuated_singleton, punctuated_try_map, punctuated_try_unwrap, spans_eq,
@@ -752,6 +752,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           _semi_colon: rel._semi_colon.clone(),
           is_lattice: rel.is_lattice,
           need_id: false,
+         is_hole: false,
        };
        vec![rel, new_rel]
     } else {
@@ -759,7 +760,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
     }
  }
  
- fn desugar_function(rel: FunctionNode) -> Vec<RelationNode> {
+ fn desugar_function(rel: &FunctionNode) -> Vec<RelationNode> {
        // do rule associated with function
        // do rule takes 0..n-1 arguments
     // let mut arg_vec = rel.field_types.iter().cloned().collect_vec();
@@ -773,23 +774,59 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        _semi_colon: syn::token::Semi::default(),
        is_lattice: false,
        need_id: true,
+       is_hole: false,
     };
     let usize_type = Type::Verbatim(quote!{usize});
     let res_relation = RelationNode{
        attrs: rel.attrs.clone(),
        name: rel.name.clone(),
        field_types: Punctuated::from_iter(vec![
-          usize_type.clone(), rel.return_type
+          usize_type.clone(), rel.return_type.clone()
        ]),
        initialization: None,
        source_db: None,
        _semi_colon: syn::token::Semi::default(),
        is_lattice: false,
        need_id: true,
+       is_hole: false,
     };
  
     vec![do_relation, res_relation]
  }
+
+ fn add_wormhole(wormhole_name: &Ident) -> RelationNode {
+   let hole_rel_name = Ident::new(&format!("{}_wormhole", wormhole_name), wormhole_name.span());
+   parse2(quote_spanned! {wormhole_name.span()=>
+      relation #hole_rel_name (&'static str);
+   }).unwrap()
+}
+
+fn wormhole_path_to_rules(hole_path: &WormholePath, relations: &Vec<RelationNode>) -> Vec<RuleNode> {
+   let hole_rel_name = Ident::new(
+      &format!("{}_wormhole", hole_path.hole_name), hole_path.hole_name.span());
+   // TODO: add error handling 
+   let mut input_rel_arity = 0;
+   for rel in relations.iter() {
+      if rel.name == hole_path.rel_name {
+         input_rel_arity = rel.field_types.len();
+         break;
+      }
+   }
+   let default_args = (0..input_rel_arity).into_iter()
+      .map(|_| quote! {Default::default()})
+      .collect_vec();
+   let input_rel_name = hole_path.rel_name.clone();
+
+   let relnode_in : RuleNode = syn::parse2(
+      quote_spanned! { hole_path.hole_name.span() =>
+         #hole_rel_name ("") <-- #input_rel_name #(#default_args)*, if false;
+      }).unwrap();
+   let relnode_out : RuleNode = syn::parse2(
+      quote_spanned! { hole_path.hole_name.span() =>
+         #input_rel_name #(#default_args)* <-- #hole_rel_name (""), , if false;
+      }).unwrap();
+   vec![relnode_in, relnode_out]
+}
  
  pub(crate) fn desugar_ascent_program(mut prog: AscentProgram) -> Result<AscentProgram> {
     let macros = prog.macros.iter().map(|m| (m.name.clone(), m)).collect::<HashMap<_,_>>();
@@ -804,14 +841,25 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        prog.relations.extend(expanded_prog.relations);
     }
  
-    let rules_macro_expanded = 
+    let mut rules_macro_expanded = 
        prog.rules.into_iter()
        .map(|r| rule_expand_macro_invocations(r, &macros))
        .collect::<Result<Vec<_>>>()?;
  
-    let relation_from_functions = prog.functions.into_iter()
+    let relation_from_functions = prog.functions.iter()
        .flat_map(desugar_function)
        .collect_vec();
+    let relation_from_hole = prog.wormhole_paths.iter()
+      .map(|w| w.rel_name.clone())
+      .dedup()
+      .map(|w| add_wormhole(&w))
+      .collect_vec();
+    prog.relations.extend(relation_from_hole);
+    let rule_from_hole = prog.wormhole_paths.iter()
+      .flat_map(|w| wormhole_path_to_rules(w, &prog.relations))
+      .collect_vec();
+    rules_macro_expanded.extend(rule_from_hole); 
+
     prog.relations.extend(relation_from_functions);
     prog.functions = vec![];
     prog.relations = prog.relations.into_iter()

@@ -11,6 +11,26 @@ use crate::ascent_mir::{AscentMir, MirBodyItem, MirRelation, MirRelationVersion,
 use crate::ascent_mir::MirRelationVersion::*;
 
 pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::TokenStream {
+   let par_usings = if mir.is_parallel {quote! {
+      use ascent::rayon::iter::ParallelBridge;
+      use ascent::rayon::iter::ParallelIterator;
+      use ascent::internal::CRelIndexRead;
+      use ascent::internal::CRelIndexReadAll;
+      use ascent::internal::Freezable;
+   }} else {quote!{}};
+
+   let more_usings = if !mir.is_parallel {quote! {
+      use ascent::internal::RelIndexWrite;
+   }} else { quote! {
+      use ascent::internal::CRelIndexWrite;
+   }};
+
+   let run_usings = quote! {
+      use core::cmp::PartialEq;
+      use ascent::internal::{RelIndexRead, RelIndexReadAll, ToRelIndex0, TupleOfBorrowed};
+      #more_usings
+      #par_usings
+   };
    
    let mut relation_fields = vec![];
    let mut field_defaults = vec![];
@@ -71,19 +91,116 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       }
    }
 
-   
+   let generate_run_timeout = !is_ascent_run && mir.config.generate_run_partial;
+   let run_args_decl = if generate_run_timeout {quote!{, timeout: ::std::time::Duration}} else {quote!{}};
+   let run_args = if generate_run_timeout {quote!{timeout}} else {quote!{}};
+   let run_extra_prep = if generate_run_timeout {quote!{let __start_time = ::ascent::internal::Instant::now();}} else {quote!{}};
+   let return_condition = if generate_run_timeout {
+      quote! {
+         macro_rules! __check_return_conditions {() => {
+            if timeout < ::std::time::Duration::MAX && __start_time.elapsed() >= timeout {return false;}
+         };}
+      }
+   } else {
+      quote! {
+         macro_rules! __check_return_conditions {() => {};}
+      }
+   };
    let mut sccs_compiled = vec![];
+   let mut sccs_compiled_run = vec![];
+   let mut sccs_functions = vec![];
    for (i, _scc) in sccs_ordered.iter().enumerate() {
       let msg = format!("scc {}", i);
-      let scc_compiled = compile_mir_scc(mir, i);
-      sccs_compiled.push(quote!{
-         ascent::internal::comment(#msg);
-         {
-            let _scc_start_time = ::ascent::internal::Instant::now();
-            #scc_compiled
-            _self.scc_times[#i] += _scc_start_time.elapsed();
-         }
-      });
+      let (scc_pre, scc_loop_body, scc_post) = compile_mir_scc(mir, i);
+      if !is_ascent_run {
+         let scc_name = get_scc_name(mir, i);
+         let scc_once_name = Ident::new(&format!("{}_exec", scc_name), Span::call_site());
+         let scc_func_once = quote! {
+            #[allow(unused_assignments, unused_variables, dead_code)]
+            pub fn #scc_once_name (&mut self) -> bool {
+               #run_usings
+               let _self = self;
+               let _scc_start_time = ::ascent::internal::Instant::now();
+               #scc_loop_body
+               _self.scc_times[#i] += _scc_start_time.elapsed();
+               need_break
+            }
+         };
+         let scc_func_body = if mir.sccs[i].is_looping {quote! {
+            #return_condition
+            let _self = self;
+            #run_usings
+            #scc_pre
+            loop {
+               let need_brack = _self.#scc_once_name();
+               if need_brack {break;}
+               __check_return_conditions!();
+            }
+            #scc_post
+         }} else {quote! {
+            let _self = self;
+            #run_usings
+            #scc_pre
+            _self.#scc_once_name();
+            #scc_post
+         }};
+         sccs_functions.push(scc_func_once);
+         let scc_func = quote! {
+            #[allow(unused_assignments, unused_variables, dead_code)]
+            pub fn #scc_name(&mut self #run_args_decl) -> bool {
+               #run_extra_prep
+               ascent::internal::comment(#msg);
+               {
+                  #scc_func_body
+               }
+               true
+            }
+         };
+         sccs_functions.push(scc_func);
+         let scc_call = quote! {
+            let res = _self.#scc_name(#run_args);
+            if !res {return false;}
+         };
+         sccs_compiled.push(scc_call);
+      } else {
+         let run_body = if mir.sccs[i].is_looping {
+            quote! {
+               ascent::internal::comment(#msg);
+               {
+                  let _scc_start_time = ::ascent::internal::Instant::now();
+                  #scc_pre
+                  loop {
+                     #scc_loop_body
+                     if need_break {break;}
+                     __check_return_conditions!();
+                  }
+                  #scc_post
+                  _self.scc_times[#i] += _scc_start_time.elapsed();
+               }
+            }
+         } else {
+            quote! {
+               ascent::internal::comment(#msg);
+               {
+                  let _scc_start_time = ::ascent::internal::Instant::now();
+                  #scc_pre
+                  #scc_loop_body
+                  #scc_post
+                  _self.scc_times[#i] += _scc_start_time.elapsed();
+               }
+            }
+         };
+         sccs_compiled_run.push(run_body);
+      }
+
+      // sccs_compiled.push(quote!{
+      //    ascent::internal::comment(#msg);
+      //    {
+      //       let _scc_start_time = ::ascent::internal::Instant::now();
+      //       #scc_compiled
+      //       _self.scc_times[#i] += _scc_start_time.elapsed();
+      //    }
+      // });
    }
 
    let update_indices_body = compile_update_indices_function(mir);
@@ -132,51 +249,30 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          _self.update_indices_priv();
       })
    }
-
-   let par_usings = if mir.is_parallel {quote! {
-      use ascent::rayon::iter::ParallelBridge;
-      use ascent::rayon::iter::ParallelIterator;
-      use ascent::internal::CRelIndexRead;
-      use ascent::internal::CRelIndexReadAll;
-      use ascent::internal::Freezable;
-   }} else {quote!{}};
-
-   let more_usings = if !mir.is_parallel {quote! {
-      use ascent::internal::RelIndexWrite;
-   }} else { quote! {
-      use ascent::internal::CRelIndexWrite;
-   }};
-
-   let run_usings = quote! {
-      use core::cmp::PartialEq;
-      use ascent::internal::{RelIndexRead, RelIndexReadAll, ToRelIndex0, TupleOfBorrowed};
-      #more_usings
-      #par_usings
-   };
    
-   let generate_run_timeout = !is_ascent_run && mir.config.generate_run_partial; 
    let run_func = if is_ascent_run {quote!{}} 
    else if generate_run_timeout {
       quote! {
          #[doc = "Runs the Ascent program to a fixed point."]
-         pub fn run(&mut self) {
-            self.run_timeout(::std::time::Duration::MAX);
+         pub fn run(&mut self) -> bool {
+            self.run_timeout(::std::time::Duration::MAX)
          }
       } 
    } else {
       quote! {
          #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
          #[doc = "Runs the Ascent program to a fixed point."]
-         pub fn run(&mut self) {
-            self.run_with_init_flag(true);
+         pub fn run(&mut self) -> bool {
+            self.run_with_init_flag(true)
          }
 
-         pub fn run_with_init_flag(&mut self, init_flag: bool) {
-            macro_rules! __check_return_conditions {() => {};}
-            #run_usings
+         pub fn run_with_init_flag(&mut self, init_flag: bool) -> bool {
+            // macro_rules! __check_return_conditions {() => {};}
+            // #run_usings
             if init_flag { self.update_indices_priv() };
             let _self = self;
             #(#sccs_compiled)*
+            true
          }
       }
    };
@@ -184,12 +280,9 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       quote! {
          #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
          #[doc = "Runs the Ascent program to a fixed point or until the timeout is reached. In case of a timeout returns false"]
-         pub fn run_timeout(&mut self, timeout: ::std::time::Duration) -> bool {
+         pub fn run_timeout(&mut self #run_args_decl) -> bool {
             let __start_time = ::ascent::internal::Instant::now();
-            macro_rules! __check_return_conditions {() => {
-               if timeout < ::std::time::Duration::MAX && __start_time.elapsed() >= timeout {return false;}
-            };}
-            #run_usings
+            // #run_usings
             self.update_indices_priv();
             let _self = self;
             #(#sccs_compiled)*
@@ -203,7 +296,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          #run_usings
          let _self = &mut __run_res;
          #(#relation_initializations)*
-         #(#sccs_compiled)*
+         #(#sccs_compiled_run)*
       }
    };
 
@@ -289,6 +382,8 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          #(#relation_fields)*
       }
       impl #impl_impl_generics #struct_name #impl_ty_generics #impl_where_clause {
+         #(#sccs_functions)*
+
          #run_func
 
          #run_timeout_func
@@ -448,7 +543,19 @@ fn rule_time_field_name(scc_ind: usize, rule_ind: usize) ->Ident {
    Ident::new(&format!("rule{}_{}_duration", scc_ind, rule_ind), Span::call_site())
 }
 
-fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream {
+fn get_scc_name(mir: &AscentMir, scc_ind: usize) -> Ident {
+   // find if out are in scc contains a wormhole relation
+   let mut scc_name = Ident::new(&format!("scc_{}", scc_ind), Span::call_site());
+   for (rel, _) in &mir.sccs[scc_ind].dynamic_relations {
+      if rel.is_hole {
+         scc_name = Ident::new(&format!("scc_{}", rel.name), Span::call_site());
+      }
+   }
+   scc_name
+}
+
+fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> 
+   (proc_macro2::TokenStream, proc_macro2::TokenStream, proc_macro2::TokenStream) {
 
    let scc = &mir.sccs[scc_ind];
    let mut move_total_to_delta = vec![];
@@ -639,9 +746,8 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
       quote! {__changed.load(std::sync::atomic::Ordering::Relaxed)}
    };
 
-   let evaluate_rules_loop = if scc.is_looping { quote! {
-      #[allow(unused_assignments, unused_variables)]
-      loop {
+   let eval_once = if scc.is_looping {
+      quote! {
          #changed_var_def_code
 
          #(#freeze_code)*
@@ -651,13 +757,12 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
          #(#unfreeze_code)*
          #(#shift_delta_to_total_new_to_delta)*
          _self.scc_iters[#scc_ind] += 1;
-         if !#check_changed_code {break;}
-         __check_return_conditions!();
+         // if !#check_changed_code {break;}
+         let need_break = !#check_changed_code;
+         // __check_return_conditions!();
       }
-
-   }} else {quote! {
-      #[allow(unused_assignments, unused_variables)]
-      {
+   } else {
+      quote! {
          // let mut __changed = false;
          #changed_var_def_code
          let mut __default_id = 0;
@@ -670,18 +775,22 @@ fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> proc_macro2::TokenStream 
          #(#shift_delta_to_total_new_to_delta)*
          #(#shift_delta_to_total_new_to_delta)*
          _self.scc_iters[#scc_ind] += 1;
-         __check_return_conditions!();
+         let need_break = true;
+         // __check_return_conditions!();
       }
-   }};
-   quote! {
-      // define variables for delta and new versions of dynamic relations in the scc
-      // move total versions of dynamic indices to delta
-      #(#move_total_to_delta)*
+   };
+   // quote! {
+   //    // define variables for delta and new versions of dynamic relations in the scc
+   //    // move total versions of dynamic indices to delta
+   //    #(#move_total_to_delta)*
 
-      #evaluate_rules_loop
+   //    #evaluate_rules_loop
 
-      #(#move_total_to_field)*
-   }
+   //    #(#move_total_to_field)*
+   // }
+   (quote! {#(#move_total_to_delta)*},
+    quote! {#eval_once},
+    quote! {#(#move_total_to_field)*})
 }
 
 

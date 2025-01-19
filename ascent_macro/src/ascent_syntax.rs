@@ -31,6 +31,7 @@ mod kw {
    syn::custom_keyword!(provenance);
    syn::custom_keyword!(index);
    syn::custom_keyword!(delta);
+   syn::custom_keyword!(wormhole);
    syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
    syn::custom_keyword!(agg);
@@ -128,6 +129,15 @@ pub struct ExtraIndex {
    pub _semi_colon: Token![;],
 }
 
+#[derive(Clone, Parse)]
+pub struct WormholePath {
+   pub _wormhole_kw: kw::wormhole,
+   pub hole_name: Ident,
+   pub _kw_arrow: kw::LongLeftArrow,
+   pub rel_name: Ident,
+   pub _semi_colon: Token![;],
+}
+
 pub struct FunctionNode {
    pub attrs: Vec<Attribute>,
    pub name: Ident,
@@ -164,6 +174,7 @@ pub struct RelationNode{
    pub _semi_colon: Token![;],
    pub is_lattice: bool,
    pub need_id: bool,
+   pub is_hole: bool,
    // pub is_function: bool,
 }
 impl Parse for RelationNode {
@@ -182,6 +193,8 @@ impl Parse for RelationNode {
          true
       } else {false};
       let name : Ident = input.parse()?;
+      // check if name contains "_wormhole"
+      let is_hole = name.to_string().contains("_wormhole");
       let content;
       parenthesized!(content in input);
       let field_types = content.parse_terminated(Type::parse, Token![,])?;
@@ -204,7 +217,7 @@ impl Parse for RelationNode {
       }
       Ok(RelationNode{
          attrs: vec![], name, field_types, source_db, _semi_colon, is_lattice,
-         initialization, need_id,
+         initialization, need_id, is_hole
          // is_function
       })
    }
@@ -716,7 +729,8 @@ pub(crate) struct AscentProgram {
    pub macro_invocs: Vec<syn::ExprMacro>,
    pub functions: Vec<FunctionNode>,
    pub extern_dbs: Vec<ExternDatabase>,
-   pub extra_indices: Vec<ExtraIndex>
+   pub extra_indices: Vec<ExtraIndex>,
+   pub wormhole_paths: Vec<WormholePath>,
 }
 
 impl Parse for AscentProgram {
@@ -737,6 +751,7 @@ impl Parse for AscentProgram {
       let mut functions = vec![];
       let mut macros = vec![];
       let mut macro_invocs = vec![];
+      let mut wormhole_paths = vec![];
       while !input.is_empty() {
          let attrs = if !struct_attrs.is_empty() {std::mem::take(&mut struct_attrs)} else {Attribute::parse_outer(input)?};
          if input.peek(kw::relation) || input.peek(kw::lattice){
@@ -746,6 +761,9 @@ impl Parse for AscentProgram {
          } else if input.peek(Token![extern]) {
             let extern_db = ExternDatabase::parse(input)?;
             extern_dbs.push(extern_db);
+         } else if input.peek(kw::wormhole) {
+            let wormhole_path = WormholePath::parse(input)?;
+            wormhole_paths.push(wormhole_path);
          } else if input.peek(kw::index) {
             let extra_index = ExtraIndex::parse(input)?;
             extra_indices.push(extra_index);
@@ -772,7 +790,7 @@ impl Parse for AscentProgram {
       }
       Ok(AscentProgram{
          rules, relations, signatures, attributes, macros, macro_invocs,
-         functions, extern_dbs, extra_indices
+         functions, extern_dbs, extra_indices, wormhole_paths
       })
    }
 }
@@ -783,7 +801,8 @@ pub(crate) struct RelationIdentity {
    pub field_types: Vec<Type>,
    pub extern_db_name: Option<Ident>,
    pub is_lattice: bool,
-   pub need_id: bool
+   pub need_id: bool,
+   pub is_hole: bool,
 }
 
 impl From<&RelationNode> for RelationIdentity{
@@ -793,7 +812,8 @@ impl From<&RelationNode> for RelationIdentity{
          field_types: relation_node.field_types.iter().cloned().collect(),
          extern_db_name: relation_node.source_db.clone(),
          is_lattice: relation_node.is_lattice,
-         need_id: relation_node.need_id
+         need_id: relation_node.need_id,
+         is_hole: relation_node.is_hole,
       }
    }
 } 
