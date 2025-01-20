@@ -35,7 +35,7 @@ fn compile_update_indices_relation_code(
    let to_rel_index = if r.is_lattice {
       quote! {}
    } else {
-      quote! {.#to_rel_index_fn(#_ref #_self.#ind_common) }
+      quote! {.#to_rel_index_fn(#_ref #_self.runtime_total.#ind_common) }
    };
 
    let mut update_indices = vec![];
@@ -58,7 +58,7 @@ fn compile_update_indices_relation_code(
       let _pre_ref = if r.is_lattice { quote!() } else { _ref.clone() };
       update_indices.push(quote_spanned! {r.name.span()=>
          let selection_tuple = #selection_tuple;
-         let rel_ind = #_ref #_self.#ind_name;
+         let rel_ind = #_ref #_self.runtime_total.#ind_name;
          #rel_index_write_trait::#index_insert_fn(#_pre_ref rel_ind #to_rel_index, selection_tuple, #entry_val);
       });
    }

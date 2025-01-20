@@ -8,12 +8,12 @@ use crate::{ascent_mir::{ir_relation_version_var_name, AscentMir, MirRelation, M
 
 
 pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) -> 
-   (proc_macro2::TokenStream, proc_macro2::TokenStream, proc_macro2::TokenStream) {
+   (proc_macro2::TokenStream, proc_macro2::TokenStream) {
 
    let scc = &mir.sccs[scc_ind];
    let mut move_total_to_delta = vec![];
    let mut shift_delta_to_total_new_to_delta = vec![];
-   let mut move_total_to_field = vec![];
+   // let mut move_total_to_field = vec![];
    let mut freeze_code = vec![];
    // let mut def_relation_cnt = vec![];
    let mut unfreeze_code = vec![];
@@ -42,7 +42,7 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
       //    let mut #new_var_name : #ty = Default::default();
       // });
       move_total_to_delta.push(quote_spanned! {ir_name.span()=>
-         #delta_var_name = ::std::mem::take(&mut #_self.#total_field);
+         #delta_var_name = ::std::mem::take(&mut #_self.runtime_total.#total_field);
          #total_var_name = Default::default();
          #new_var_name = Default::default();
       });
@@ -76,9 +76,9 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
          },
       }
       
-      move_total_to_field.push(quote_spanned!{ir_name.span()=>
-         #_self.#total_field = std::mem::take(&mut #total_var_name);
-      });
+      // move_total_to_field.push(quote_spanned!{ir_name.span()=>
+      //    #_self.#total_field = std::mem::take(&mut #total_var_name);
+      // });
 
       if mir.is_parallel {
          freeze_code.push(quote_spanned!{ir_name.span()=>
@@ -114,25 +114,25 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
          Either::Left(rel) => (rel_ind_common_var_name(rel), rel_ind_common_type(rel, mir)),
          Either::Right(rel_ind) => (rel_ind.ir_name(), rel_index_type(rel_ind, mir)),
       };
-      let total_var_name = ir_relation_version_var_name(&ir_name, &_self, MirRelationVersion::Total);
+      // let total_var_name = ir_relation_version_var_name(&ir_name, &_self, MirRelationVersion::Total);
       let total_field = &ir_name;
 
       if mir.is_parallel {
          move_total_to_delta.push(quote_spanned!{ir_name.span()=>
-            #_self.#total_field.freeze();
+            #_self.runtime_total.#total_field.freeze();
          });
       }
 
       // move_total_to_delta.push(quote_spanned! {ir_name.span()=>
       //    let #total_var_name: #ty = std::mem::take(&mut #_self.#total_field);
       // });
-      move_total_to_delta.push(quote_spanned! {ir_name.span()=>
-         #total_var_name = std::mem::take(&mut #_self.#total_field);
-      });
+      // move_total_to_delta.push(quote_spanned! {ir_name.span()=>
+      //    #total_var_name = std::mem::take(&mut #_self.#total_field);
+      // });
 
-      move_total_to_field.push(quote_spanned!{ir_name.span()=>
-         #_self.#total_field = std::mem::take(&mut #total_var_name);
-      });
+      // move_total_to_field.push(quote_spanned!{ir_name.span()=>
+      //    #_self.#total_field = std::mem::take(&mut #total_var_name);
+      // });
    }
    
    let rule_parallelism = mir.config.inter_rule_parallelism && mir.is_parallel;
@@ -242,6 +242,5 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
    //    #(#move_total_to_field)*
    // }
    (quote! {#(#move_total_to_delta)*},
-    quote! {#eval_once},
-    quote! {#(#move_total_to_field)*})
+    quote! {#eval_once})
 }

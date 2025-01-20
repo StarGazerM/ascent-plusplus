@@ -29,8 +29,8 @@ ascent! {
 fn run_tc_incremental() {
     let mut tc = TCIncremental::default();
     let data = vec![(1, 2), (2, 3)];
-    tc.edge_incremental_indices_none.0 = data.into_iter().map(|p| ((), p)).collect();
-    let l = tc.edge_incremental_indices_none.0.len();
+    tc.runtime_total.edge_incremental_indices_none.0 = data.into_iter().map(|p| ((), p)).collect();
+    let l = tc.runtime_total.edge_incremental_indices_none.0.len();
     tc.run_with_init_flag(false);
 
     println!("path_incremental: {:?}", &(tc.path));

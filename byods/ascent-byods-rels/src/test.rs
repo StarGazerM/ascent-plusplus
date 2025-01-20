@@ -136,7 +136,7 @@ fn test_trrel_uf_in_ascent() {
       // included to pull all rules into the same SCC
       seed(0) <-- if false, tr(1000, 2000);
    };
-   assert_eq!(res.__tr_ind_common.count_exact() as u32, (ub + 1).pow(2));
+   assert_eq!(res.runtime_total.__tr_ind_common.count_exact() as u32, (ub + 1).pow(2));
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn test_trrel_uf_ternary_in_ascent() {
       // included to pull all rules into the same SCC
       seed(0) <-- if false, tr(_, 1000, 2000);
    };
-   assert_eq!(res.__tr_ind_common.0.map[&1].count_exact() as u32, (ub + 1).pow(2));
+   assert_eq!(res.runtime_total.__tr_ind_common.0.map[&1].count_exact() as u32, (ub + 1).pow(2));
 }
 
 #[test]

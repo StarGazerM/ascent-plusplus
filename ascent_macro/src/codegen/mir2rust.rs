@@ -46,7 +46,9 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
    };
 
    let mut relation_fields = vec![];
+   let mut relation_fields_runtime = vec![];
    let mut field_defaults = vec![];
+   let mut field_defaults_runtime = vec![];
 
    let sorted_relations_ir_relations = mir.relations_ir_relations.iter().sorted_by_key(|(rel, _)| &rel.name);
    for (rel, rel_indices) in sorted_relations_ir_relations {
@@ -60,13 +62,18 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       let rel_type = rel_type(rel, mir);
       let rel_ind_common = rel_ind_common_var_name(rel);
       let rel_ind_common_type = rel_ind_common_type(rel, mir);
-      relation_fields.push(quote! {
+      relation_fields_runtime.push(quote! {
          #(#rel_attrs)*
          #[doc = #rel_indices_comment]
          pub #name: #rel_type,
          pub #rel_ind_common: #rel_ind_common_type,
       });
-      field_defaults.push(quote! {#name : Default::default(), #rel_ind_common: Default::default(),});
+      relation_fields.push(quote! {
+         #(#rel_attrs)*
+         pub #name: #rel_type,
+      });
+      field_defaults_runtime.push(quote! {#name : Default::default(), #rel_ind_common: Default::default(),});
+      field_defaults.push(quote! {#name : Default::default(),});
       if rel.is_lattice && mir.is_parallel {
          let lattice_mutex_name = lattice_insertion_mutex_var_name(rel);
          relation_fields.push(quote! {
@@ -82,10 +89,10 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       for ind in sorted_indices {
          let name = &ind.ir_name();
          let rel_index_type = rel_index_type(ind, mir);
-         relation_fields.push(quote! {
+         relation_fields_runtime.push(quote! {
             pub #name: #rel_index_type,
          });
-         field_defaults.push(quote! {#name : Default::default(),});
+         field_defaults_runtime.push(quote! {#name : Default::default(),});
       }
    }
 
@@ -136,7 +143,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
    let mut sccs_functions = vec![];
    for (i, _scc) in sccs_ordered.iter().enumerate() {
       let msg = format!("scc {}", i);
-      let (scc_pre, scc_loop_body, scc_post) = compile_mir_scc(mir, i);
+      let (scc_pre, scc_loop_body) = compile_mir_scc(mir, i);
       if !is_ascent_run {
          let scc_name = get_scc_name(mir, i);
          let scc_once_name = Ident::new(&format!("{}_exec", scc_name), Span::call_site());
@@ -162,7 +169,6 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                   if need_brack {break;}
                   __check_return_conditions!();
                }
-               #scc_post
             }
          } else {
             quote! {
@@ -170,7 +176,6 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                #run_usings
                #scc_pre
                _self.#scc_once_name();
-               #scc_post
             }
          };
          sccs_functions.push(scc_func_once);
@@ -203,7 +208,6 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                      if need_break {break;}
                      __check_return_conditions!();
                   }
-                  #scc_post
                   _self.scc_times[#i] += _scc_start_time.elapsed();
                }
             }
@@ -214,7 +218,6 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                   let _scc_start_time = ::ascent::internal::Instant::now();
                   #scc_pre
                   #scc_loop_body
-                  #scc_post
                   _self.scc_times[#i] += _scc_start_time.elapsed();
                }
             }
@@ -422,7 +425,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          #(#external_dbs_decl)*
       }
       #vis struct #runtime_struct_name #ty_impl_generics #ty_where_clause  {
-         #(#relation_fields)*
+         #(#relation_fields_runtime)*
       }
       impl #impl_impl_generics #struct_name #impl_ty_generics #impl_where_clause {
          #(#sccs_functions)*
@@ -453,7 +456,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       impl #impl_impl_generics Default for #runtime_struct_name #impl_ty_generics #impl_where_clause {
          fn default() -> Self {
             let mut _self = #runtime_struct_name {
-               #(#field_defaults)*
+               #(#field_defaults_runtime)*
             };
             _self
          }

@@ -39,7 +39,6 @@ fn test_reach() {
     sr.do_reach = vec![(1, 5)];
     sr.run();
 
-    println!("{:?}", &(sr.do_reach));
     println!("{:?}", &(sr.reach));
 }
 
