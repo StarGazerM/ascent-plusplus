@@ -5,7 +5,7 @@ mod ascent_mir;
 mod utils;
 mod ascent_hir;
 mod scratchpad;
-mod ascent_codegen;
+mod codegen;
 mod ascent_syntax;
 mod ascent_sugar;
 mod ascent_monotonic;
@@ -21,7 +21,7 @@ use ascent_syntax::AscentProgram;
 use ascent_sugar::desugar_ascent_program;
 use proc_macro::TokenStream;
 use syn::Result;
-use crate::{ascent_codegen::compile_mir, ascent_hir::compile_ascent_program_to_hir, ascent_mir::compile_hir_to_mir};
+use crate::{codegen::mir2rust::compile_mir, ascent_hir::compile_ascent_program_to_hir, ascent_mir::compile_hir_to_mir};
 
 /// The main macro of the ascent library. Allows writing logical inference rules similar to Datalog.
 /// 
