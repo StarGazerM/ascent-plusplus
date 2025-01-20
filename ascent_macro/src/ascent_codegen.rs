@@ -308,9 +308,9 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          let name = &db.db_name;
          let ty = &db.db_type;
          if mir.is_parallel {
-            quote_spanned!{ty.span()=> #name: std::sync::Arc::new(Default::default()), }
+            quote_spanned!{ty.span()=> #name: Default::default(), }
          } else {
-            quote_spanned!{ty.span()=> #name: std::rc::Rc::new(Default::default()), }
+            quote_spanned!{ty.span()=> #name: Default::default(), }
          }
       });
    let summary = mir_summary(mir);
@@ -351,9 +351,9 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       let name = db.db_name.clone();
       let ty = &db.db_type;
       let ptr_ty = if mir.is_parallel {
-         quote_spanned!{ty.span()=> std::sync::Arc<#ty>}
+         quote_spanned!{ty.span()=> std::sync::Arc<std::cell::RefCell<#ty>>}
       } else {
-         quote_spanned!{ty.span()=> std::rc::Rc<#ty>}
+         quote_spanned!{ty.span()=> std::rc::Rc<std::cell::RefCell<#ty>>}
       };
       quote_spanned! { name.span() =>
          pub #name: #ptr_ty,
@@ -1453,7 +1453,7 @@ fn convert_head_arg(arg: Expr) -> Expr {
 fn expr_for_rel(rel: &MirRelation, extern_db_name: &Option<Ident>, mir: &AscentMir) -> proc_macro2::TokenStream {
    fn expr_for_rel_inner(ir_name: &Ident, extern_db_name: &Option<Ident>, version: MirRelationVersion, _mir: &AscentMir, mir_rel: &MirRelation) -> (TokenStream, bool) {
       let db = if let Some(db_name) = extern_db_name {
-         quote! { _self.#db_name }
+         quote! { _self.#db_name.borrow() }
       } else {
          quote! { _self }
       };

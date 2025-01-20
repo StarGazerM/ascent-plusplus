@@ -16,6 +16,7 @@ pub(crate) struct AscentConfig {
    pub include_rule_times: bool,
    pub generate_run_partial: bool,
    pub inter_rule_parallelism: bool,
+   // pub stream_processing: bool,
    pub default_ds: DsAttributeContents,
 }
 
@@ -23,6 +24,7 @@ impl AscentConfig {
    const MEASURE_RULE_TIMES_ATTR: &'static str = "measure_rule_times";
    const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
+   // const STREAM_PROCESSING_ATTR: &'static str = "stream_processing";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
       let include_rule_times = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::MEASURE_RULE_TIMES_ATTR))
@@ -31,6 +33,8 @@ impl AscentConfig {
          .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
       let inter_rule_parallelism = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::INTER_RULE_PARALLELISM_ATTR))
          .map(|attr| attr.meta.require_path_only()).transpose()?;
+      // let stream_processing = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::STREAM_PROCESSING_ATTR))
+      //    .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
 
       let recognized_attrs = 
          [Self::MEASURE_RULE_TIMES_ATTR, Self::GENERATE_RUN_TIMEOUT_ATTR, Self::INTER_RULE_PARALLELISM_ATTR, REL_DS_ATTR];
@@ -52,6 +56,7 @@ impl AscentConfig {
          attrs,
          include_rule_times,
          generate_run_partial,
+         // stream_processing,
          default_ds
       })
    }
