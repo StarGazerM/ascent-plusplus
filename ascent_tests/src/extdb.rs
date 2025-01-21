@@ -42,3 +42,48 @@ fn test_reach() {
     println!("{:?}", &(sr.reach));
 }
 
+
+ascent! {
+    struct Graph;
+
+    relation edge(i32, i32);
+    index edge (1);
+}
+
+ascent! {
+    struct SSSP;
+
+    extern Graph graph;
+    relation edge(i32, i32) in graph;
+
+    relation do_length(i32, i32);
+
+    lattice ret(i32);
+
+    ret(1) <-- do_length(x, y), graph.edge(x, y);
+    
+    ret(ret_val+1) <--
+        do_length(x, z),
+        graph.edge(y, z),
+        let new_do_length = (*x, *y),
+        let mut g = SSSP::default(),
+        let _ = g.graph = _self.graph.clone(),
+        let _ = g.do_length = vec![new_do_length],
+        let _ = g.run(),
+        if g.ret.len() == 1,
+        let ret_val = g.ret[0].0;
+}
+
+#[test]
+fn test_rec_length() {
+    let g = Graph::default();
+    let g = Rc::new(RefCell::new(g));
+    g.borrow_mut().edge = vec![(1, 2), (2, 3), (3, 4), (4, 5)].into_iter().collect();
+    g.borrow_mut().run();
+    let mut compute_length = SSSP::default();
+    compute_length.graph = g.clone();
+    compute_length.do_length = vec![(1, 5)];
+    compute_length.run();
+
+    println!("{:?}", &(compute_length.ret));
+}
