@@ -16,7 +16,7 @@ use quote::ToTokens;
 use itertools::Itertools;
 
 use ascent_base::util::update;
-use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode, StratumPath};
+use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode, StratumPath, SubQueryNode};
 use crate::utils::{
    expr_to_ident, expr_to_ident_mut, flatten_punctuated, is_wild_card,
    punctuated_map, punctuated_singleton, punctuated_try_map, punctuated_try_unwrap, spans_eq,
@@ -46,6 +46,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
           },
          BodyItemNode::FunctionCall(_) => vec![vec![bitem.clone()]], 
          BodyItemNode::MacroInvocation(m) => panic!("unexpected macro invocation: {:?}", m.mac.path),
+         BodyItemNode::SubQuery(_) => vec![vec![bitem.clone()]],
        }
     }
     fn bitems_desugar(bitems: &[BodyItemNode]) -> Vec<Vec<BodyItemNode>> {
@@ -120,6 +121,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
        BodyItemNode::Agg(agg) => pattern_get_vars(&agg.pat),
        BodyItemNode::Clause(cl) => cl.args.iter().flat_map(|arg| arg.get_vars()).collect(),
        BodyItemNode::Negation(_cl) => vec![],
+       BodyItemNode::SubQuery(_sq) => vec![],
        BodyItemNode::Disjunction(disj) => disj.disjuncts.iter()
                                            .flat_map(|conj| conj.iter().flat_map(body_item_get_bound_vars))
                                            .collect(),
@@ -149,6 +151,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
           }
        },
        BodyItemNode::Negation(_cl) =>(),
+       BodyItemNode::SubQuery(_sq) => (),
        BodyItemNode::Disjunction(disj) =>{
           for conj in disj.disjuncts.iter_mut() {
              for bi in conj.iter_mut() {
@@ -199,6 +202,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
              visit(arg);
           }
        },
+       BodyItemNode::SubQuery(_sq) => {},
        BodyItemNode::Disjunction(disj) => {
           for conj in disj.disjuncts.iter_mut() {
              for bi in conj.iter_mut() {
@@ -377,6 +381,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
              }
           },
           BodyItemNode::Negation(_) => (),
+          BodyItemNode::SubQuery(_) => (),
           BodyItemNode::Disjunction(_) => panic!("unrecognized BodyItemNode variant"),
           BodyItemNode::MacroInvocation(m) => panic!("unexpected macro invocation: {:?}", m.mac.path),
           BodyItemNode::FunctionCall(_) => panic!("function call should already be desugared before repeated vars desugaring"),
@@ -830,9 +835,56 @@ fn stratum_path_to_rules(hole_path: &StratumPath, relations: &Vec<RelationNode>)
       }).unwrap();
    vec![relnode_in, relnode_out]
 }
+
+fn desugar_subquery(subquery: &SubQueryNode) -> Vec<BodyItemNode> {
+   let sub_db_name = &subquery.name;
+   let db_type = &subquery.query_type;
+   let init_args = subquery.query_init.iter().map(|arg| {
+      let arg_name = &arg.rel;
+      let arg_v = &arg.arg;
+      quote_spanned! {arg_name.span() => #arg_name: #arg_v}
+   }).collect::<Vec<_>>();
+   let create_query_db : BodyItemNode = if init_args.len() != 0 { syn::parse2(
+      quote_spanned! {sub_db_name.span() =>
+         let mut #sub_db_name = #db_type {
+            #(#init_args),*
+            , ..Default::default()
+         }
+      }).unwrap()
+   } else { syn::parse2(
+      quote_spanned! {sub_db_name.span() =>
+         let mut #sub_db_name = #db_type::default()
+      }).unwrap()
+   };
+   let run_args = &subquery.query_extern_db;
+   let run_db : BodyItemNode = syn::parse2(
+      quote_spanned! {sub_db_name.span() =>
+         let _ = #sub_db_name.run(#run_args)
+      }).unwrap();
+   vec![create_query_db, run_db]
+}
+
+fn desugar_subquery_runs(rules: &Vec<RuleNode>) -> Vec<RuleNode> {
+   let mut res = vec![];
+   for rule in rules {
+      let mut new_body_items = vec![];
+      for bi in rule.body_items.iter() {
+         match bi {
+            BodyItemNode::SubQuery(sq) => {
+               new_body_items.extend(desugar_subquery(&sq));
+            },
+            _ => new_body_items.push(bi.clone())
+         }
+      }
+      res.push(RuleNode{
+         head_clauses: rule.head_clauses.clone(),
+         body_items: new_body_items});
+   }
+   res
+}
  
  pub(crate) fn desugar_ascent_program(mut prog: AscentProgram) -> Result<AscentProgram> {
-    let macros = prog.macros.iter().map(|m| (m.name.clone(), m)).collect::<HashMap<_,_>>();
+    let macros = &prog.macros.iter().map(|m| (m.name.clone(), m)).collect::<HashMap<_,_>>(); 
  
     for invoke in prog.macro_invocs.iter() {
        let mac_def = macros.get(invoke.mac.path.get_ident().unwrap())
@@ -848,6 +900,7 @@ fn stratum_path_to_rules(hole_path: &StratumPath, relations: &Vec<RelationNode>)
        prog.rules.into_iter()
        .map(|r| rule_expand_macro_invocations(r, &macros))
        .collect::<Result<Vec<_>>>()?;
+     rules_macro_expanded = desugar_subquery_runs(&rules_macro_expanded);
  
     let relation_from_functions = prog.functions.iter()
        .flat_map(desugar_function)

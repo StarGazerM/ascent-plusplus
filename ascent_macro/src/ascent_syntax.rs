@@ -33,6 +33,7 @@ mod kw {
    syn::custom_keyword!(database);
    syn::custom_keyword!(delta);
    syn::custom_keyword!(stratum);
+   // syn::custom_keyword!(query);
    syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
    syn::custom_keyword!(agg);
@@ -238,6 +239,8 @@ pub enum BodyItemNode {
    Generator(GeneratorNode),
    #[peek(kw::agg, name = "aggregate clause")]
    Agg(AggClauseNode),
+   #[peek(Token![do], name = "subquery")]
+   SubQuery(SubQueryNode),
    #[peek_with(peek_macro_invocation, name = "macro invocation")]
    MacroInvocation(syn::ExprMacro),
    #[peek(Ident, name = "body clause")]
@@ -264,6 +267,40 @@ fn peek_clause_head(parse_stream: ParseStream) -> bool {
  
 fn peek_if_or_let(parse_stream: ParseStream) -> bool {
    parse_stream.peek(Token![if]) || parse_stream.peek(Token![let])
+}
+
+
+#[derive(Clone, Parse)]
+pub struct SubQueryInitArg {
+   pub rel: Ident,
+   pub _colon: Token![:],
+   pub arg: Expr,
+}
+
+// syntax sugar subquery
+#[derive(Clone)]
+pub struct SubQueryNode {
+   pub name: Ident,
+   pub query_type : Ident,
+   pub query_init : Punctuated<SubQueryInitArg, Token![,]>,
+   pub query_extern_db: Punctuated<Ident, Token![,]>,
+}
+
+impl Parse for SubQueryNode {
+   fn parse(input: ParseStream) -> Result<Self> {
+      let _ = input.parse::<Token![do]>()?;
+      let name = input.parse()?;
+      let _ : Token![:] = input.parse()?;
+      let query_type = input.parse()?;
+      let query_init;
+      // use curly braces to parse the subquery init
+      braced!(query_init in input);
+      let query_init = query_init.parse_terminated(SubQueryInitArg::parse, Token![,])?;
+      let query_extern_db;
+      parenthesized!(query_extern_db in input);
+      let query_extern_db = query_extern_db.parse_terminated(Ident::parse, Token![,])?;
+      Ok(SubQueryNode{name, query_type, query_init, query_extern_db})
+   }
 }
 
 #[derive(Clone)]
@@ -680,6 +717,7 @@ pub(crate) fn rule_node_summary(rule: &RuleNode) -> String {
          BodyItemNode::Negation(neg) => format!("! {}", neg.rel),
          BodyItemNode::MacroInvocation(m) => format!("{:?}!(..)", m.mac.path),
          BodyItemNode::FunctionCall(f) => format!("%{} -> {:?}", f.name, f.return_var),
+         BodyItemNode::SubQuery(sub_query_node) => format!("subquery {} ...", sub_query_node.name),
       }
    }
    fn hitem_to_str(hitem: &HeadItemNode) -> String {
