@@ -32,7 +32,7 @@ mod kw {
    syn::custom_keyword!(index);
    syn::custom_keyword!(database);
    syn::custom_keyword!(delta);
-   syn::custom_keyword!(wormhole);
+   syn::custom_keyword!(stratum);
    syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
    syn::custom_keyword!(agg);
@@ -132,8 +132,8 @@ pub struct ExtraIndex {
 }
 
 #[derive(Clone, Parse)]
-pub struct WormholePath {
-   pub _wormhole_kw: kw::wormhole,
+pub struct StratumPath {
+   pub _stratum_kw: kw::stratum,
    pub hole_name: Ident,
    pub _kw_arrow: kw::LongLeftArrow,
    pub rel_name: Ident,
@@ -202,8 +202,8 @@ impl Parse for RelationNode {
          true
       } else {false};
       let name : Ident = input.parse()?;
-      // check if name contains "_wormhole"
-      let is_hole = name.to_string().contains("_wormhole");
+      // check if name contains "_stratum"
+      let is_hole = name.to_string().contains("_stratum");
       let content;
       parenthesized!(content in input);
       let field_types = content.parse_terminated(Type::parse, Token![,])?;
@@ -739,7 +739,7 @@ pub(crate) struct AscentProgram {
    pub functions: Vec<FunctionNode>,
    pub extern_dbs: Vec<ExternDatabase>,
    pub extra_indices: Vec<ExtraIndex>,
-   pub wormhole_paths: Vec<WormholePath>,
+   pub stratum_paths: Vec<StratumPath>,
 }
 
 impl Parse for AscentProgram {
@@ -760,7 +760,7 @@ impl Parse for AscentProgram {
       let mut functions = vec![];
       let mut macros = vec![];
       let mut macro_invocs = vec![];
-      let mut wormhole_paths = vec![];
+      let mut stratum_paths = vec![];
       while !input.is_empty() {
          let attrs = if !struct_attrs.is_empty() {std::mem::take(&mut struct_attrs)} else {Attribute::parse_outer(input)?};
          if input.peek(kw::relation) || input.peek(kw::lattice){
@@ -777,9 +777,9 @@ impl Parse for AscentProgram {
                relation_node.is_input = true;
                relations.push(relation_node);
             }
-         } else if input.peek(kw::wormhole) {
-            let wormhole_path = WormholePath::parse(input)?;
-            wormhole_paths.push(wormhole_path);
+         } else if input.peek(kw::stratum) {
+            let stratum_path = StratumPath::parse(input)?;
+            stratum_paths.push(stratum_path);
          } else if input.peek(kw::index) {
             let extra_index = ExtraIndex::parse(input)?;
             extra_indices.push(extra_index);
@@ -806,7 +806,7 @@ impl Parse for AscentProgram {
       }
       Ok(AscentProgram{
          rules, relations, signatures, attributes, macros, macro_invocs,
-         functions, extern_dbs, extra_indices, wormhole_paths
+         functions, extern_dbs, extra_indices, stratum_paths
       })
    }
 }

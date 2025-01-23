@@ -83,7 +83,7 @@ pub fn rule_time_field_name(scc_ind: usize, rule_ind: usize) -> Ident {
 }
 
 pub fn get_scc_name(mir: &AscentMir, scc_ind: usize) -> Ident {
-   // find if out are in scc contains a wormhole relation
+   // find if out are in scc contains a stratum relation
    let mut scc_name = Ident::new(&format!("scc_{}", scc_ind), Span::call_site());
    for (rel, _) in &mir.sccs[scc_ind].dynamic_relations {
       if rel.is_hole {

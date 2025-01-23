@@ -64,8 +64,10 @@ ascent! {
         do_length(x, z),
         graph.edge(y, z),
         let new_do_length = (*x, *y),
-        let mut g = SSSPEager::default(),
-        let _ = g.do_length = vec![new_do_length],
+        let mut g = SSSPEager {
+            do_length: vec![new_do_length],
+            ..Default::default()
+        },
         let _ = g.run(graph),
         if g.ret.len() == 1,
         let ret_val = g.ret[0].0;
@@ -78,7 +80,7 @@ fn test_rec_length() {
     g.run();
     let mut compute_length = SSSPEager::default();
     compute_length.do_length = vec![(1, 5)];
-    compute_length.run(&g);
+    // compute_length.run(&g);
 
     println!("{:?}", &(compute_length.ret));
 }

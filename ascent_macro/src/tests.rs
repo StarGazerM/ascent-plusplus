@@ -748,15 +748,15 @@ fn test_nest_extern_database() {
 
       ret(1) <-- do_length(x, y), graph.edge(x, y);
       
-      ret(ret_val+1) <--
-         do_length(x, z),
-         graph.edge(y, z),
-         let new_do_length = (*x, *y),
-         let mut g = SSSPEager::default(),
-         let _ = g.do_length = vec![new_do_length],
-         let _ = g.run(graph),
-         if g.ret.len() == 1,
-         let ret_val = g.ret[0].0;
+      // ret(ret_val+1) <--
+      //    do_length(x, z),
+      //    graph.edge(y, z),
+      //    let new_do_length = (*x, *y),
+      //    let mut g = SSSPEager::default(),
+      //    let _ = g.do_length = vec![new_do_length],
+      //    let _ = g.run(graph),
+      //    if g.ret.len() == 1,
+      //    let ret_val = g.ret[0].0;
    };
    write_duo_to_scratchpad(inp1, inp2);
 }

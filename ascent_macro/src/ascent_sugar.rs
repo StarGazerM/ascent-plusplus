@@ -16,7 +16,7 @@ use quote::ToTokens;
 use itertools::Itertools;
 
 use ascent_base::util::update;
-use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode, WormholePath};
+use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode, StratumPath};
 use crate::utils::{
    expr_to_ident, expr_to_ident_mut, flatten_punctuated, is_wild_card,
    punctuated_map, punctuated_singleton, punctuated_try_map, punctuated_try_unwrap, spans_eq,
@@ -797,16 +797,16 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
     vec![do_relation, res_relation]
  }
 
- fn add_wormhole(wormhole_name: &Ident) -> RelationNode {
-   let hole_rel_name = Ident::new(&format!("{}_wormhole", wormhole_name), wormhole_name.span());
-   parse2(quote_spanned! {wormhole_name.span()=>
+ fn add_stratum(stratum_name: &Ident) -> RelationNode {
+   let hole_rel_name = Ident::new(&format!("{}_stratum", stratum_name), stratum_name.span());
+   parse2(quote_spanned! {stratum_name.span()=>
       relation #hole_rel_name (&'static str);
    }).unwrap()
 }
 
-fn wormhole_path_to_rules(hole_path: &WormholePath, relations: &Vec<RelationNode>) -> Vec<RuleNode> {
+fn stratum_path_to_rules(hole_path: &StratumPath, relations: &Vec<RelationNode>) -> Vec<RuleNode> {
    let hole_rel_name = Ident::new(
-      &format!("{}_wormhole", hole_path.hole_name), hole_path.hole_name.span());
+      &format!("{}_stratum", hole_path.hole_name), hole_path.hole_name.span());
    // TODO: add error handling 
    let mut input_rel_arity = 0;
    for rel in relations.iter() {
@@ -852,14 +852,14 @@ fn wormhole_path_to_rules(hole_path: &WormholePath, relations: &Vec<RelationNode
     let relation_from_functions = prog.functions.iter()
        .flat_map(desugar_function)
        .collect_vec();
-    let relation_from_hole = prog.wormhole_paths.iter()
+    let relation_from_hole = prog.stratum_paths.iter()
       .map(|w| w.rel_name.clone())
       .dedup()
-      .map(|w| add_wormhole(&w))
+      .map(|w| add_stratum(&w))
       .collect_vec();
     prog.relations.extend(relation_from_hole);
-    let rule_from_hole = prog.wormhole_paths.iter()
-      .flat_map(|w| wormhole_path_to_rules(w, &prog.relations))
+    let rule_from_hole = prog.stratum_paths.iter()
+      .flat_map(|w| stratum_path_to_rules(w, &prog.relations))
       .collect_vec();
     rules_macro_expanded.extend(rule_from_hole); 
 
