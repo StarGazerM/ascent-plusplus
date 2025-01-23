@@ -17,7 +17,7 @@ ascent! {
 ascent! {
     struct SingleReach;
 
-    extern TC tc;
+    extern database TC tc;
     relation path(i32, i32) in tc;
 
     relation do_reach(i32, i32);
@@ -51,9 +51,9 @@ ascent! {
 }
 
 ascent! {
-    struct SSSP;
+    struct SSSPEager;
 
-    extern Graph graph;
+    extern database Graph graph;
     relation edge(i32, i32) in graph;
 
     relation do_length(i32, i32);
@@ -66,7 +66,7 @@ ascent! {
         do_length(x, z),
         graph.edge(y, z),
         let new_do_length = (*x, *y),
-        let mut g = SSSP::default(),
+        let mut g = SSSPEager::default(),
         let _ = g.graph = _self.graph.clone(),
         let _ = g.do_length = vec![new_do_length],
         let _ = g.run(),
@@ -80,10 +80,28 @@ fn test_rec_length() {
     let g = Rc::new(RefCell::new(g));
     g.borrow_mut().edge = vec![(1, 2), (2, 3), (3, 4), (4, 5)].into_iter().collect();
     g.borrow_mut().run();
-    let mut compute_length = SSSP::default();
+    let mut compute_length = SSSPEager::default();
     compute_length.graph = g.clone();
     compute_length.do_length = vec![(1, 5)];
     compute_length.run();
 
     println!("{:?}", &(compute_length.ret));
+}
+
+ascent! {
+    struct SSSPLazy;
+    extern database Graph graph;
+    relation edge(i32, i32) in graph;
+
+    extern relation do_length(i32, i32, i32);
+
+    relation length(i32, i32, i32);
+
+    length(x, y, res+1) <-- do_length(x, y, res), graph.edge(x, y);
+    
+}
+
+#[test]
+fn test_lazy_length() {
+
 }

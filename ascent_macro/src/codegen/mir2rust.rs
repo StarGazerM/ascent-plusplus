@@ -3,8 +3,9 @@ use std::collections::HashSet;
 
 use itertools::Itertools;
 use proc_macro2::Span;
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Ident, Type};
+use syn::{Ident, Token, Type};
 
 use crate::ascent_mir::{mir_summary, AscentMir};
 use crate::codegen::ds::rel_ds_macro_input;
@@ -285,30 +286,54 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          _self.update_indices_priv();
       })
    }
+   // generate run arg for every relation
+   let input_args_decl : Punctuated<syn::FnArg, Token![,]> = mir.relations_ir_relations.keys()
+      .filter(|rel| rel.is_input)
+      .map(|rel| -> syn::FnArg {
+         let name = &rel.name;
+         let ty = rel_type(rel, mir);
+         syn::parse_quote!(#name: &mut #ty)
+      }).collect();
+   let input_args : Punctuated<syn::Expr, Token![,]> = mir.relations_ir_relations.keys()
+      .filter(|rel| rel.is_input)
+      .map(|rel| -> syn::Expr {
+         let name = &rel.name;
+         syn::parse_quote!(#name)
+      }).collect();
+   let swap_input_with_placeholder = mir.relations_ir_relations.keys()
+      .filter(|rel| rel.is_input)
+      .map(|rel| {
+         let name = &rel.name;
+         quote! {
+            std::mem::swap(&mut _self.#name, #name);
+         }
+      }).collect_vec();
 
    let run_func = if is_ascent_run {
       quote! {}
    } else if generate_run_timeout {
       quote! {
          #[doc = "Runs the Ascent program to a fixed point."]
-         pub fn run(&mut self) -> bool {
-            self.run_timeout(::std::time::Duration::MAX)
+         pub fn run(&mut self, #run_args_decl) -> bool {
+            self.run_timeout(::std::time::Duration::MAX #input_args)
          }
       }
    } else {
       quote! {
          #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
          #[doc = "Runs the Ascent program to a fixed point."]
-         pub fn run(&mut self) -> bool {
-            self.run_with_init_flag(true)
+         pub fn run(&mut self, #input_args_decl) -> bool {
+            self.run_with_init_flag(true, #input_args)
          }
 
-         pub fn run_with_init_flag(&mut self, init_flag: bool) -> bool {
+         pub fn run_with_init_flag(&mut self, init_flag: bool, #input_args_decl) -> bool {
             // macro_rules! __check_return_conditions {() => {};}
             // #run_usings
-            if init_flag { self.update_indices_priv() };
             let _self = self;
+            #(#swap_input_with_placeholder)*
+            if init_flag { _self.update_indices_priv() };
             #(#sccs_compiled)*
+            #(#swap_input_with_placeholder)*
             true
          }
       }
@@ -319,9 +344,10 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       quote! {
          #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
          #[doc = "Runs the Ascent program to a fixed point or until the timeout is reached. In case of a timeout returns false"]
-         pub fn run_timeout(&mut self #run_args_decl) -> bool {
+         pub fn run_timeout(&mut self #run_args_decl #input_args_decl) -> bool {
             let __start_time = ::ascent::internal::Instant::now();
             // #run_usings
+            #(#swap_input_with_placeholder)*
             self.update_indices_priv();
             let _self = self;
             #(#sccs_compiled)*

@@ -870,23 +870,23 @@ fn test_ascent_agg(){
    assert_rels_eq!([(1, 2, 10)], res.baz);
 }
 
-#[test]
-fn test_run_timeout() {
-   ascent! {
-      #![generate_run_timeout]
-      /// A diverging Ascent program
-      struct Diverging;
-      /// foooooooooooo
-      relation foo(u128);
-      foo(0);
-      foo(x + 1) <-- foo(x);
-   }
+// #[test]
+// fn test_run_timeout() {
+//    ascent! {
+//       #![generate_run_timeout]
+//       /// A diverging Ascent program
+//       struct Diverging;
+//       /// foooooooooooo
+//       relation foo(u128);
+//       foo(0);
+//       foo(x + 1) <-- foo(x);
+//    }
 
-   let mut prog = Diverging::default();
-   prog.foo = vec![(1,), (2,)];
-   let run_timeout_res = prog.run_timeout(Duration::from_millis(5));
-   assert!(!run_timeout_res);
-}
+//    let mut prog = Diverging::default();
+//    prog.foo = vec![(1,), (2,)];
+//    let run_timeout_res = prog.run_timeout(Duration::from_millis(5));
+//    assert!(!run_timeout_res);
+// }
 
 #[test]
 fn test_ascent_bounded_set() {

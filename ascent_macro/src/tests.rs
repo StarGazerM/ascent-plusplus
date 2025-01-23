@@ -716,7 +716,7 @@ fn test_extern_database() {
 
    let inp2 = quote! {
       struct ExtTest;
-      extern TC tc;
+      extern database TC tc;
 
       relation edge(i32, i32);
       relation path(i32, i32) in tc;

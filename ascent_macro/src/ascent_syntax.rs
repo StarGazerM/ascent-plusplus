@@ -30,6 +30,7 @@ mod kw {
    syn::custom_keyword!(function);
    syn::custom_keyword!(provenance);
    syn::custom_keyword!(index);
+   syn::custom_keyword!(database);
    syn::custom_keyword!(delta);
    syn::custom_keyword!(wormhole);
    syn::custom_keyword!(ID);
@@ -111,6 +112,7 @@ fn parse_generics_with_where_clause(input: ParseStream) -> Result<Generics> {
 #[derive(Clone, Parse)]
 pub struct ExternDatabase {
    pub _extern_kw: Token![extern],
+   pub _database: kw::database,
    pub db_type: Ident,
    pub db_name: Ident,
    pub _semi_colon: Token![;],
@@ -175,10 +177,17 @@ pub struct RelationNode{
    pub is_lattice: bool,
    pub need_id: bool,
    pub is_hole: bool,
+   pub is_input: bool,
    // pub is_function: bool,
 }
 impl Parse for RelationNode {
    fn parse(input: ParseStream) -> Result<Self> {
+      let is_input = if input.peek(Token![extern]) {
+         input.parse::<Token![extern]>()?;
+         true
+      } else {
+         false
+      };
       let is_lattice = input.peek(kw::lattice);
       let is_function = input.peek(kw::function);
       if is_lattice {
@@ -217,7 +226,7 @@ impl Parse for RelationNode {
       }
       Ok(RelationNode{
          attrs: vec![], name, field_types, source_db, _semi_colon, is_lattice,
-         initialization, need_id, is_hole
+         initialization, need_id, is_hole, is_input
          // is_function
       })
    }
@@ -759,8 +768,15 @@ impl Parse for AscentProgram {
             relation_node.attrs = attrs;
             relations.push(relation_node);
          } else if input.peek(Token![extern]) {
-            let extern_db = ExternDatabase::parse(input)?;
-            extern_dbs.push(extern_db);
+            if input.peek2(kw::database) {
+               let extern_db = ExternDatabase::parse(input)?;
+               extern_dbs.push(extern_db);
+            } else {
+               let mut relation_node = RelationNode::parse(input)?;
+               relation_node.attrs = attrs;
+               relation_node.is_input = true;
+               relations.push(relation_node);
+            }
          } else if input.peek(kw::wormhole) {
             let wormhole_path = WormholePath::parse(input)?;
             wormhole_paths.push(wormhole_path);
@@ -803,6 +819,7 @@ pub(crate) struct RelationIdentity {
    pub is_lattice: bool,
    pub need_id: bool,
    pub is_hole: bool,
+   pub is_input: bool,
 }
 
 impl From<&RelationNode> for RelationIdentity{
@@ -814,6 +831,7 @@ impl From<&RelationNode> for RelationIdentity{
          is_lattice: relation_node.is_lattice,
          need_id: relation_node.need_id,
          is_hole: relation_node.is_hole,
+         is_input: relation_node.is_input,
       }
    }
 } 

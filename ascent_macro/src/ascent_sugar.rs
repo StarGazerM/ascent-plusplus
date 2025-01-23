@@ -752,7 +752,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           _semi_colon: rel._semi_colon.clone(),
           is_lattice: rel.is_lattice,
           need_id: false,
-         is_hole: false,
+          is_hole: false,
+          is_input: rel.is_input,
        };
        vec![rel, new_rel]
     } else {
@@ -775,6 +776,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        is_lattice: false,
        need_id: true,
        is_hole: false,
+       is_input: false,
     };
     let usize_type = Type::Verbatim(quote!{usize});
     let res_relation = RelationNode{
@@ -789,6 +791,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        is_lattice: false,
        need_id: true,
        is_hole: false,
+       is_input: false,
     };
  
     vec![do_relation, res_relation]
