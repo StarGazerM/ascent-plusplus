@@ -1,7 +1,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use ascent::ascent;
+use ascent::{ascent, ascent_par};
 
 ascent! {
     struct TC;
@@ -28,16 +28,14 @@ ascent! {
 
 #[test]
 fn test_reach() {
-    let tc = TC::default();
-    let tc = Rc::new(RefCell::new(tc));
+    let mut tc = TC::default();
     let mut sr = SingleReach::default();
-    sr.tc = tc.clone();
 
     let input_edges = vec![(1, 2), (2, 3), (3, 4), (4, 5)];
-    tc.borrow_mut().edge = input_edges.into_iter().collect();
-    tc.borrow_mut().run();
+    tc.edge = input_edges.into_iter().collect();
+    tc.run();
     sr.do_reach = vec![(1, 5)];
-    sr.run();
+    sr.run(&tc);
 
     println!("{:?}", &(sr.reach));
 }
@@ -67,23 +65,20 @@ ascent! {
         graph.edge(y, z),
         let new_do_length = (*x, *y),
         let mut g = SSSPEager::default(),
-        let _ = g.graph = _self.graph.clone(),
         let _ = g.do_length = vec![new_do_length],
-        let _ = g.run(),
+        let _ = g.run(graph),
         if g.ret.len() == 1,
         let ret_val = g.ret[0].0;
 }
 
 #[test]
 fn test_rec_length() {
-    let g = Graph::default();
-    let g = Rc::new(RefCell::new(g));
-    g.borrow_mut().edge = vec![(1, 2), (2, 3), (3, 4), (4, 5)].into_iter().collect();
-    g.borrow_mut().run();
+    let mut g = Graph::default();
+    g.edge = vec![(1, 2), (2, 3), (3, 4), (4, 5)].into_iter().collect();
+    g.run();
     let mut compute_length = SSSPEager::default();
-    compute_length.graph = g.clone();
     compute_length.do_length = vec![(1, 5)];
-    compute_length.run();
+    compute_length.run(&g);
 
     println!("{:?}", &(compute_length.ret));
 }

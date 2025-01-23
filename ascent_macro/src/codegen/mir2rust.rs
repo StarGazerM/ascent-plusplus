@@ -3,9 +3,8 @@ use std::collections::HashSet;
 
 use itertools::Itertools;
 use proc_macro2::Span;
-use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Ident, Token, Type};
+use syn::{Ident, Type};
 
 use crate::ascent_mir::{mir_summary, AscentMir};
 use crate::codegen::ds::rel_ds_macro_input;
@@ -139,6 +138,36 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          macro_rules! __check_return_conditions {() => {};}
       }
    };
+   let extern_db_args_decl  = mir.extern_dbs.iter()
+      .map(|db| {
+         let name = &db.db_name;
+         let ty = &db.db_type;
+         quote!(#name: & #ty)
+      }).collect_vec();
+   let extern_db_args = mir.extern_dbs.iter()
+      .map(|db| {
+         let name = &db.db_name;
+         quote!(#name)
+      }).collect_vec();
+   // generate run arg for every relation
+   let input_args_decl = mir.relations_ir_relations.keys()
+      .filter(|rel| rel.is_input)
+      .map(|rel| {
+         let name = &rel.name;
+         let ty = rel_type(rel, mir);
+         quote!(#name: & #ty)
+      })
+      .chain(extern_db_args_decl.into_iter())
+      .collect_vec();
+   let input_args = mir.relations_ir_relations.keys()
+      .filter(|rel| rel.is_input)
+      .map(|rel|{
+         let name = &rel.name;
+         quote!{#name}
+      })
+      .chain(extern_db_args.into_iter())
+      .collect_vec();
+
    let mut sccs_compiled = vec![];
    let mut sccs_compiled_run = vec![];
    let mut sccs_functions = vec![];
@@ -150,7 +179,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          let scc_once_name = Ident::new(&format!("{}_exec", scc_name), Span::call_site());
          let scc_func_once = quote! {
             #[allow(unused_assignments, unused_variables, dead_code)]
-            pub fn #scc_once_name (&mut self) -> bool {
+            pub fn #scc_once_name(&mut self, #(#input_args_decl,)*) -> bool {
                #run_usings
                let _self = self;
                let _scc_start_time = ::ascent::internal::Instant::now();
@@ -166,7 +195,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                #run_usings
                #scc_pre
                loop {
-                  let need_brack = _self.#scc_once_name();
+                  let need_brack = _self.#scc_once_name(#(#input_args,)*);
                   if need_brack {break;}
                   __check_return_conditions!();
                }
@@ -176,13 +205,13 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                let _self = self;
                #run_usings
                #scc_pre
-               _self.#scc_once_name();
+               _self.#scc_once_name(#(#input_args,)*);
             }
          };
          sccs_functions.push(scc_func_once);
          let scc_func = quote! {
             #[allow(unused_assignments, unused_variables, dead_code)]
-            pub fn #scc_name(&mut self #run_args_decl) -> bool {
+            pub fn #scc_name(&mut self #run_args_decl, #(#input_args_decl,)*) -> bool {
                #run_extra_prep
                ascent::internal::comment(#msg);
                {
@@ -193,7 +222,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          };
          sccs_functions.push(scc_func);
          let scc_call = quote! {
-            let res = _self.#scc_name(#run_args);
+            let res = _self.#scc_name(#(#input_args,)* #run_args);
             if !res {return false;}
          };
          sccs_compiled.push(scc_call);
@@ -286,20 +315,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          _self.update_indices_priv();
       })
    }
-   // generate run arg for every relation
-   let input_args_decl : Punctuated<syn::FnArg, Token![,]> = mir.relations_ir_relations.keys()
-      .filter(|rel| rel.is_input)
-      .map(|rel| -> syn::FnArg {
-         let name = &rel.name;
-         let ty = rel_type(rel, mir);
-         syn::parse_quote!(#name: &mut #ty)
-      }).collect();
-   let input_args : Punctuated<syn::Expr, Token![,]> = mir.relations_ir_relations.keys()
-      .filter(|rel| rel.is_input)
-      .map(|rel| -> syn::Expr {
-         let name = &rel.name;
-         syn::parse_quote!(#name)
-      }).collect();
+
    let swap_input_with_placeholder = mir.relations_ir_relations.keys()
       .filter(|rel| rel.is_input)
       .map(|rel| {
@@ -314,19 +330,19 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
    } else if generate_run_timeout {
       quote! {
          #[doc = "Runs the Ascent program to a fixed point."]
-         pub fn run(&mut self, #run_args_decl) -> bool {
-            self.run_timeout(::std::time::Duration::MAX #input_args)
+         pub fn run(&mut self, #(#input_args_decl,)* #run_args_decl) -> bool {
+            self.run_timeout(#(#input_args,)* ::std::time::Duration::MAX)
          }
       }
    } else {
       quote! {
          #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
          #[doc = "Runs the Ascent program to a fixed point."]
-         pub fn run(&mut self, #input_args_decl) -> bool {
-            self.run_with_init_flag(true, #input_args)
+         pub fn run(&mut self, #(#input_args_decl,)*) -> bool {
+            self.run_with_init_flag(true, #(#input_args,)*)
          }
 
-         pub fn run_with_init_flag(&mut self, init_flag: bool, #input_args_decl) -> bool {
+         pub fn run_with_init_flag(&mut self, init_flag: bool,#(#input_args_decl,)*) -> bool {
             // macro_rules! __check_return_conditions {() => {};}
             // #run_usings
             let _self = self;
@@ -344,7 +360,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       quote! {
          #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
          #[doc = "Runs the Ascent program to a fixed point or until the timeout is reached. In case of a timeout returns false"]
-         pub fn run_timeout(&mut self #run_args_decl #input_args_decl) -> bool {
+         pub fn run_timeout(&mut self, #(#input_args_decl,)* #run_args_decl) -> bool {
             let __start_time = ::ascent::internal::Instant::now();
             // #run_usings
             #(#swap_input_with_placeholder)*
@@ -369,15 +385,6 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
 
    let relation_initializations_for_default_impl = if is_ascent_run { vec![] } else { relation_initializations };
 
-   let extern_db_default = mir.extern_dbs.iter().map(|db| {
-      let name = &db.db_name;
-      let ty = &db.db_type;
-      if mir.is_parallel {
-         quote_spanned! {ty.span()=> #name: Default::default(), }
-      } else {
-         quote_spanned! {ty.span()=> #name: Default::default(), }
-      }
-   });
    let summary = mir_summary(mir);
 
    let (ty_impl_generics, ty_ty_generics, ty_where_clause) = mir.signatures.split_ty_generics_for_impl();
@@ -419,18 +426,6 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
    }
 
    // generate shared pointer for all external database
-   let external_dbs_decl = mir.extern_dbs.iter().map(|db| {
-      let name = db.db_name.clone();
-      let ty = &db.db_type;
-      let ptr_ty = if mir.is_parallel {
-         quote_spanned! {ty.span()=> std::sync::Arc<std::cell::RefCell<#ty>>}
-      } else {
-         quote_spanned! {ty.span()=> std::rc::Rc<std::cell::RefCell<#ty>>}
-      };
-      quote_spanned! { name.span() =>
-         pub #name: #ptr_ty,
-      }
-   });
 
    let sccs_count = sccs_ordered.len();
    let res = quote! {
@@ -448,7 +443,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          pub runtime_new: #runtime_struct_name #ty_ty_generics,
          pub runtime_delta: #runtime_struct_name #ty_ty_generics,
 
-         #(#external_dbs_decl)*
+         // #(#external_dbs_decl)*
       }
       #vis struct #runtime_struct_name #ty_impl_generics #ty_where_clause  {
          #(#relation_fields_runtime)*
@@ -500,7 +495,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                runtime_new: Default::default(),
                runtime_delta: Default::default(),
 
-               #(#extern_db_default)*
+               // #(#extern_db_default)*
             };
             #(#relation_initializations_for_default_impl)*
             _self
