@@ -87,21 +87,3 @@ fn test_rec_length() {
 
     println!("{:?}", &(compute_length.ret));
 }
-
-ascent! {
-    struct SSSPLazy;
-    extern database Graph graph;
-    relation edge(i32, i32) in graph;
-
-    extern relation do_length(i32, i32, i32);
-
-    relation length(i32, i32, i32);
-
-    length(x, y, res+1) <-- do_length(x, y, res), graph.edge(x, y);
-    
-}
-
-#[test]
-fn test_lazy_length() {
-
-}
