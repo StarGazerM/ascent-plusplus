@@ -324,6 +324,46 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
             std::mem::swap(&mut _self.#name, #name);
          }
       }).collect_vec();
+   
+   let mut clear_in_stmts = vec![];
+   let mut clear_out_stmts = vec![];
+   for i in mir.io.ins.iter() {
+      let rels = &mir.relations_ir_relations[i];
+      let name = &i.name;
+      for rel in rels.iter() {
+         // TODO: add clear function on Index trait
+         let ir_name = &rel.ir_name();
+         let ir_name = if !rel.is_full_index() {
+            quote! {#ir_name.0}
+         } else { 
+            quote! {#ir_name}
+         };
+         clear_in_stmts.push(quote! {
+            _self.#name.clear();
+            _self.runtime_total.#ir_name.clear();
+            _self.runtime_new.#ir_name.clear();
+            _self.runtime_delta.#ir_name.clear();
+         });
+      }
+   }
+   for o in mir.io.outs.iter() {
+      let rels = &mir.relations_ir_relations[o];
+      let name = &o.name;
+      for rel in rels.iter() {
+         let ir_name = &rel.ir_name();
+         let ir_name = if !rel.is_full_index() {
+            quote! {#ir_name.0}
+         } else { 
+            quote! {#ir_name}
+         };
+         clear_out_stmts.push(quote! {
+            _self.#name.clear();
+            _self.runtime_total.#ir_name.clear();
+            _self.runtime_new.#ir_name.clear();
+            _self.runtime_delta.#ir_name.clear();
+         });
+      }
+   }
 
    let run_func = if is_ascent_run {
       quote! {}
@@ -346,10 +386,12 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
             // macro_rules! __check_return_conditions {() => {};}
             // #run_usings
             let _self = self;
+            #(#clear_out_stmts)*
             #(#swap_input_with_placeholder)*
             if init_flag { _self.update_indices_priv() };
             #(#sccs_compiled)*
             #(#swap_input_with_placeholder)*
+            #(#clear_in_stmts)*
             true
          }
       }
@@ -363,10 +405,12 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          pub fn run_timeout(&mut self, #(#input_args_decl,)* #run_args_decl) -> bool {
             let __start_time = ::ascent::internal::Instant::now();
             // #run_usings
-            #(#swap_input_with_placeholder)*
-            self.update_indices_priv();
             let _self = self;
+            #(#clear_out_stmts)*
+            #(#swap_input_with_placeholder)*
+            _self.update_indices_priv();
             #(#sccs_compiled)*
+            #(#swap_input_with_placeholder)*
             true
          }
       }
@@ -378,8 +422,10 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          macro_rules! __check_return_conditions {() => {};}
          #run_usings
          let _self = &mut __run_res;
+         #(#clear_out_stmts)*
          #(#relation_initializations)*
          #(#sccs_compiled_run)*
+         #(#clear_in_stmts)*
       }
    };
 

@@ -33,7 +33,6 @@ mod kw {
    syn::custom_keyword!(database);
    syn::custom_keyword!(delta);
    syn::custom_keyword!(stratum);
-   // syn::custom_keyword!(query);
    syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
    syn::custom_keyword!(agg);
@@ -131,6 +130,21 @@ pub struct ExtraIndex {
    pub arg_pos: Punctuated<LitInt, Token![,]>,
    pub _semi_colon: Token![;],
 }
+
+#[derive(Clone, Parse)]
+pub struct InStream {
+   pub _input_kw: Token![await],
+   pub rel_name: Ident,
+   pub _semi_colon: Token![;],
+}
+
+#[derive(Clone, Parse)]
+pub struct OutStream {
+   pub _output_kw: Token![yield],
+   pub rel_name: Ident,
+   pub _semi_colon: Token![;],
+}
+
 
 #[derive(Clone, Parse)]
 pub struct StratumPath {
@@ -778,6 +792,8 @@ pub(crate) struct AscentProgram {
    pub extern_dbs: Vec<ExternDatabase>,
    pub extra_indices: Vec<ExtraIndex>,
    pub stratum_paths: Vec<StratumPath>,
+   pub in_streams: Vec<InStream>,
+   pub out_streams: Vec<OutStream>,
 }
 
 impl Parse for AscentProgram {
@@ -799,6 +815,8 @@ impl Parse for AscentProgram {
       let mut macros = vec![];
       let mut macro_invocs = vec![];
       let mut stratum_paths = vec![];
+      let mut in_streams = vec![];
+      let mut out_streams = vec![];
       while !input.is_empty() {
          let attrs = if !struct_attrs.is_empty() {std::mem::take(&mut struct_attrs)} else {Attribute::parse_outer(input)?};
          if input.peek(kw::relation) || input.peek(kw::lattice){
@@ -815,6 +833,12 @@ impl Parse for AscentProgram {
                relation_node.is_input = true;
                relations.push(relation_node);
             }
+         } else if input.peek(Token![await]) {
+            let in_stream = InStream::parse(input)?;
+            in_streams.push(in_stream);
+         } else if input.peek(Token![yield]) {
+            let out_stream = OutStream::parse(input)?;
+            out_streams.push(out_stream);
          } else if input.peek(kw::stratum) {
             let stratum_path = StratumPath::parse(input)?;
             stratum_paths.push(stratum_path);
@@ -844,7 +868,8 @@ impl Parse for AscentProgram {
       }
       Ok(AscentProgram{
          rules, relations, signatures, attributes, macros, macro_invocs,
-         functions, extern_dbs, extra_indices, stratum_paths
+         functions, extern_dbs, extra_indices, stratum_paths, in_streams,
+         out_streams
       })
    }
 }

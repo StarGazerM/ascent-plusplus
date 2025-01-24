@@ -70,8 +70,7 @@ ascent! {
     ret(1) <-- do_length(x, y), graph.edge(x, y);
     
     incomming_length(mono!(g.ret) + 1) <--
-        do_length(x, z),
-        graph.edge(y, z),
+        do_length(x, z), graph.edge(y, z),
         do g : SSSPEager {
             do_length : vec![(*x, *y)]
         } (graph);

@@ -8,7 +8,7 @@ use syn::{Expr, Type};
 use crate::{ascent_mir::MirRelationVersion::*, ascent_syntax::Signatures, syn_utils::pattern_get_vars};
 use crate::utils::{expr_to_ident, pat_to_ident, tuple_type, intersects};
 use crate::ascent_syntax::{CondClause, GeneratorNode, RelationIdentity};
-use crate::ascent_hir::{AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrExternDB, IrHeadClause, IrRelation, IrRule, RelationMetadata};
+use crate::ascent_hir::{AscentConfig, AscentIO, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrExternDB, IrHeadClause, IrRelation, IrRule, RelationMetadata};
 
 pub(crate) struct AscentMir {
    pub sccs: Vec<MirScc>,
@@ -20,6 +20,7 @@ pub(crate) struct AscentMir {
    pub lattices_full_indices: HashMap<RelationIdentity, IrRelation>,
    pub signatures: Signatures,
    pub extern_dbs: Vec<IrExternDB>,
+   pub io: AscentIO,
    pub config: AscentConfig,
    pub is_parallel: bool,
 }
@@ -312,6 +313,7 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
       relations_metadata: hir.relations_metadata.clone(),
       extern_dbs: hir.extern_dbs.clone(),
       signatures: hir.signatures.clone(),
+      io: hir.io.clone(),
       config: hir.config.clone(),
       is_parallel: hir.is_parallel,
    })

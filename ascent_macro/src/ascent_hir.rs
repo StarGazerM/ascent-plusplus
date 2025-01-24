@@ -79,6 +79,7 @@ pub(crate) struct AscentIr {
    pub extern_dbs: Vec<IrExternDB>, 
    pub signatures: Signatures,
    pub config: AscentConfig,
+   pub io: AscentIO,
    pub is_parallel: bool,
 }
 
@@ -183,6 +184,12 @@ pub(crate) struct IrRelation {
 pub enum IndexValType {
    Reference,
    Direct(Vec<usize>)
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct AscentIO {
+   pub ins : Vec<RelationIdentity>,
+   pub outs: Vec<RelationIdentity>,
 }
 
 impl IrRelation {
@@ -388,6 +395,31 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       relations_ir_relations.entry(rel_identity.clone()).or_default().insert(ir_rel.clone());
    }
 
+   // pick out io relations
+   let mut ins_rel = vec![];
+   for i in prog.in_streams.iter() {
+      let rel = prog.relations.iter().find(|r| &i.rel_name == &r.name);
+      let rel = match rel {
+         Some(rel) => rel,
+         None => return Err(Error::new(i.rel_name.span(), format!("Input Relation {} not defined", i.rel_name))),
+      };
+      ins_rel.push(RelationIdentity::from(rel));
+   }
+   let mut outs_rel = vec![];
+   for o in prog.out_streams.iter() {
+      let rel = prog.relations.iter().find(|r| &o.rel_name == &r.name);
+      let rel = match rel {
+         Some(rel) => rel,
+         None => return Err(Error::new(o.rel_name.span(), format!("Output Relation {} not defined", o.rel_name))),
+      };
+      outs_rel.push(RelationIdentity::from(rel));
+   }
+
+   let io = AscentIO {
+      ins: ins_rel,
+      outs: outs_rel,
+   };
+
    let signatures = prog.signatures.clone().unwrap_or_else(|| parse2(quote! {pub struct AscentProgram;}).unwrap());
    let extern_dbs = prog.extern_dbs.iter().map(|db| IrExternDB {db_type: db.db_type.clone(), db_name: db.db_name.clone()}).collect();
    Ok(AscentIr {
@@ -399,6 +431,7 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       // relations_no_indices,
       signatures,
       extern_dbs,
+      io,
       config,
       is_parallel
    })

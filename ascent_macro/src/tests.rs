@@ -762,6 +762,21 @@ fn test_nest_extern_database() {
 }
 
 #[test]
+fn test_io() {
+   let inp = quote! {
+      relation input(i32, i32);
+      relation output(i32, i32);
+
+      await input;
+      yield output;
+
+      input(1, 2);
+      output(x, y) <-- input(x, y);
+   };
+   write_to_scratchpad(inp);
+}
+
+#[test]
 fn test_run_timeout() {
    let input = quote! {
       #![generate_run_timeout]
