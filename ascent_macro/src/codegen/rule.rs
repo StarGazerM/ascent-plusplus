@@ -418,15 +418,20 @@ fn head_clauses_structs_and_update_code(
          .collect_vec();
       let new_row_to_be_pushed = tuple_spanned(&new_row_to_be_pushed, hcl.span);
 
+      let db_name = if let Some(db_name) = &hcl.extern_db_name {
+         quote! {#db_name.borrow_mut()}
+      } else {
+         quote! {_self}
+      };
       let push_code = if !mir.is_parallel {
          quote! {
-            #new_id_name = _self.#head_rel_name.len();
-            _self.#head_rel_name.push(#new_row_to_be_pushed);
+            #new_id_name = #db_name.#head_rel_name.len();
+            #db_name.#head_rel_name.push(#new_row_to_be_pushed);
             __default_id = #new_id_name;
          }
       } else {
          quote! {
-            #new_id_name = _self.#head_rel_name.push(#new_row_to_be_pushed);
+            #new_id_name = #db_name.#head_rel_name.push(#new_row_to_be_pushed);
             __default_id = #new_id_name;
          }
       };
@@ -439,22 +444,29 @@ fn head_clauses_structs_and_update_code(
          }
       };
       let update_rel_code = if !hcl.delete_flag {
-         quote_spanned! {hcl.span=>
-            if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
-               &__new_row, ())
-            {
+         if let Some(_) = &hcl.extern_db_name {
+            quote_spanned! {hcl.span=>
                #push_code
-               #(#update_indices)*
-               #set_changed_true_code
-            } else {
-               #skip_unchanged_code
+               // #set_changed_true_code
+            }
+         } else {
+            quote_spanned! {hcl.span=>
+               if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
+                  &__new_row, ())
+               {
+                  #push_code
+                  #(#update_indices)*
+                  #set_changed_true_code
+               } else {
+                  #skip_unchanged_code
+               }
             }
          }
       } else {
          quote! {}
       };
       if !hcl.rel.is_lattice {
-         let add_row = quote_spanned! {hcl.span=>
+         let add_row = if hcl.extern_db_name.is_none() { quote_spanned! {hcl.span=>
             let __new_row: #row_type = #new_row_tuple;
             #def_id_code
 
@@ -463,6 +475,12 @@ fn head_clauses_structs_and_update_code(
                #update_rel_code
             } else {
                 #skip_unchanged_code
+            }
+         }} else {
+            quote_spanned! {hcl.span=>
+               let __new_row: #row_type = #new_row_tuple;
+               #def_id_code
+               #update_rel_code
             }
          };
          add_rows.push(add_row);

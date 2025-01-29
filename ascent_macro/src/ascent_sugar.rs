@@ -528,6 +528,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           let generated_do_rule = RuleNode {
              head_clauses:  Punctuated::from_iter(vec![HeadItemNode::HeadClause(HeadClauseNode{
                 rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+                extern_db_name: None,
                 args: f.args.iter().map(|arg| match arg {
                     BodyClauseArg::Expr(expr) => expr.clone(),
                     _ => panic!("Pattern is not allowed in head!, found {:?}", arg),
@@ -589,6 +590,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
             desugared_body_items.insert(0, BodyItemNode::Clause(pattern_desugared_do));
             desugared_head_items.push(HeadItemNode::HeadClause(HeadClauseNode{
                 rel: f.name.clone(),
+                extern_db_name: None,
                 args: Punctuated::from_iter(vec![
                     parse2::<Expr>(quote!{#do_call_id}).unwrap(),
                     parse2::<Expr>(quote!{#ret_var}).unwrap()
@@ -601,6 +603,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           } else {
             desugared_head_items.push(HeadItemNode::HeadClause(HeadClauseNode{
                 rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+                extern_db_name: None,
                 args: f.args.iter().map(|arg| match arg {
                     BodyClauseArg::Expr(expr) => expr.clone(),
                     _ => panic!("Pattern is not allowed in head!, found {:?}", arg),

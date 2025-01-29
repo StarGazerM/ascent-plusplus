@@ -108,7 +108,7 @@ pub fn expr_for_rel(rel: &MirRelation, extern_db_name: &Option<Ident>, mir: &Asc
       mir_rel: &MirRelation,
    ) -> (TokenStream, bool) {
       let db = if let Some(db_name) = extern_db_name {
-         quote! { #db_name }
+         quote! { #db_name.borrow() }
       } else {
          quote! { _self }
       };

@@ -1,6 +1,6 @@
 #![deny(warnings)]
 use itertools::{Either, Itertools};
-use crate::ascent_mir::{mir_rule_summary, MirBodyItem, MirRelationVersion::*};
+use crate::ascent_mir::{mir_rule_summary, MirBodyItem, MirRelationVersion::*, MirScc};
 
 use crate::codegen::rule::compile_mir_rule;
 use crate::codegen::util::{expr_for_rel, rule_time_field_name};
@@ -188,6 +188,8 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
       quote! { #(#evaluate_rules)* }
    };
 
+   let eval_ext_dbs = generated_ext_dbs(scc, mir);
+
    let changed_var_def_code = if !mir.is_parallel {
       quote! { let mut __changed = false; }
    } else {
@@ -209,6 +211,7 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
 
          #(#unfreeze_code)*
          #(#shift_delta_to_total_new_to_delta)*
+         #(#eval_ext_dbs)*
          _self.scc_iters[#scc_ind] += 1;
          // if !#check_changed_code {break;}
          let need_break = !#check_changed_code;
@@ -227,6 +230,7 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
 
          #(#shift_delta_to_total_new_to_delta)*
          #(#shift_delta_to_total_new_to_delta)*
+         #(#eval_ext_dbs)*
          _self.scc_iters[#scc_ind] += 1;
          let need_break = true;
          // __check_return_conditions!();
@@ -243,4 +247,19 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
    // }
    (quote! {#(#move_total_to_delta)*},
     quote! {#eval_once})
+}
+
+fn generated_ext_dbs(scc: &MirScc, mir: &AscentMir) -> Vec<proc_macro2::TokenStream> {
+   let used_db_set = scc.dynamic_relations.iter().filter_map(|(rel, _)| rel.extern_db_name.clone()).collect::<std::collections::HashSet<_>>();
+   used_db_set.iter().map(
+      |ext_db_name| {
+         let ext_db = mir.extern_dbs.iter().find(|db| db.db_name == *ext_db_name).unwrap();
+         let args = &ext_db.db_args;
+         quote! {
+            #ext_db_name.borrow_mut().run(
+               #(#args.clone()),*
+            );
+         }
+      }
+   ).collect_vec()
 }

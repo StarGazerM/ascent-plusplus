@@ -115,6 +115,11 @@ pub struct ExternDatabase {
    pub _database: kw::database,
    pub db_type: Ident,
    pub db_name: Ident,
+   #[paren]
+   pub _arg_pos_paren: syn::token::Paren,
+   #[inside(_arg_pos_paren)]
+   #[call(Punctuated::parse_terminated)]
+   pub args: Punctuated<Expr, Token![,]>,
    pub _semi_colon: Token![;],
 }
 
@@ -297,7 +302,7 @@ pub struct SubQueryNode {
    pub name: Ident,
    pub query_type : Ident,
    pub query_init : Punctuated<SubQueryInitArg, Token![,]>,
-   pub query_extern_db: Punctuated<Ident, Token![,]>,
+   pub query_extern_db: Punctuated<Expr, Token![,]>,
 }
 
 impl Parse for SubQueryNode {
@@ -312,7 +317,7 @@ impl Parse for SubQueryNode {
       let query_init = query_init.parse_terminated(SubQueryInitArg::parse, Token![,])?;
       let query_extern_db;
       parenthesized!(query_extern_db in input);
-      let query_extern_db = query_extern_db.parse_terminated(Ident::parse, Token![,])?;
+      let query_extern_db = query_extern_db.parse_terminated(Expr::parse, Token![,])?;
       Ok(SubQueryNode{name, query_type, query_init, query_extern_db})
    }
 }
@@ -581,6 +586,7 @@ impl HeadItemNode {
 #[derive(Clone)]
 pub struct HeadClauseNode {
    pub rel : Ident,
+   pub extern_db_name: Option<Ident>,
    pub args : Punctuated<Expr, Token![,]>,
    pub required_flag: bool,
    pub id_name: Option<Ident>,
@@ -627,12 +633,19 @@ impl Parse for HeadClauseNode{
       if input.peek(Token![~]) {
          delete_flag = true;
          input.parse::<Token![~]>()?;
-      }  
-      let rel : Ident = input.parse()?;
+      }
+      let mut rel : Ident = input.parse()?;
+      let mut extern_db_name = None;
+      if input.peek(Token![.]) {
+         extern_db_name = Some(rel);
+         input.parse::<Token![.]>()?;
+         rel = input.parse::<Ident>()?;
+         // return Err(input.error("unexpected '.'"));
+      }
       let args_content;
       parenthesized!(args_content in input);
       let args = args_content.parse_terminated(Expr::parse, Token![,])?;
-      Ok(HeadClauseNode{rel, args, required_flag, id_name, delete_flag, exists_var})
+      Ok(HeadClauseNode{rel, extern_db_name, args, required_flag, id_name, delete_flag, exists_var})
    }
 }
 

@@ -142,7 +142,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       .map(|db| {
          let name = &db.db_name;
          let ty = &db.db_type;
-         quote!(#name: & #ty)
+         quote!(#name: Rc<RefCell<#ty>>)
       }).collect_vec();
    let extern_db_args = mir.extern_dbs.iter()
       .map(|db| {
@@ -155,7 +155,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       .map(|rel| {
          let name = &rel.name;
          let ty = rel_type(rel, mir);
-         quote!(#name: & #ty)
+         quote!(#name: Rc<RefCell<#ty>>)
       })
       .chain(extern_db_args_decl.into_iter())
       .collect_vec();
@@ -195,8 +195,8 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                #run_usings
                #scc_pre
                loop {
-                  let need_brack = _self.#scc_once_name(#(#input_args,)*);
-                  if need_brack {break;}
+                  let need_break = _self.#scc_once_name(#(#input_args.clone(),)*);
+                  if need_break {break;}
                   __check_return_conditions!();
                }
             }
@@ -222,7 +222,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          };
          sccs_functions.push(scc_func);
          let scc_call = quote! {
-            let res = _self.#scc_name(#(#input_args,)* #run_args);
+            let res = _self.#scc_name(#(#input_args.clone(),)* #run_args);
             if !res {return false;}
          };
          sccs_compiled.push(scc_call);

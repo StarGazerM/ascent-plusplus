@@ -704,7 +704,7 @@ fn test_macro_incremental() {
 }
 
 #[test]
-fn test_extern_database() {
+fn test_extern_database1() {
    let inp1 = quote! {
       struct TC;
 
@@ -716,7 +716,7 @@ fn test_extern_database() {
 
    let inp2 = quote! {
       struct ExtTest;
-      extern database TC tc;
+      extern database TC tc();
 
       relation edge(i32, i32);
       relation path(i32, i32) in tc;
@@ -729,34 +729,58 @@ fn test_extern_database() {
 }
 
 #[test]
+fn test_extern_database2() {
+   let inp1 = quote! {
+      struct Graph;
+
+      relation edge(i32, i32);
+      index edge (0, 1);
+   };
+
+   let inp2 = quote! {
+      struct Printer;
+
+      extern database Graph graph();
+      relation edge(i32, i32) in graph;
+
+      relation print(i32, i32);
+
+      print(x, y) <-- print(x, y), graph.edge(y, x);
+      
+   };
+
+   write_duo_to_scratchpad(inp1, inp2);
+}
+
+#[test]
 fn test_nest_extern_database() {
    let inp1 = quote! {
       struct Graph;
 
       relation edge(i32, i32);
+      relation test(i32, i32);
       index edge (1);
    };
    let inp2 = quote! {
       struct SSSPEager;
 
-      extern database Graph graph;
+      extern database Graph graph();
+      
       relation edge(i32, i32) in graph;
+      relation test(i32, i32) in graph;
 
       relation do_length(i32, i32);
 
       lattice ret(i32);
 
-      ret(1) <-- do_length(x, y), graph.edge(x, y);
+      ret(1), graph.test(x, y) <-- do_length(x, y), graph.edge(x, y);
       
-      // ret(ret_val+1) <--
-      //    do_length(x, z),
-      //    graph.edge(y, z),
-      //    let new_do_length = (*x, *y),
-      //    let mut g = SSSPEager::default(),
-      //    let _ = g.do_length = vec![new_do_length],
-      //    let _ = g.run(graph),
-      //    if g.ret.len() == 1,
-      //    let ret_val = g.ret[0].0;
+      ret(ret_val+1) <--
+         do_length(x, y),
+         do g : SSSPEager {
+            do_length : vec![(*x, *y)]
+        } (graph),
+         let ret_val = g.ret[0].0;
    };
    write_duo_to_scratchpad(inp1, inp2);
 }

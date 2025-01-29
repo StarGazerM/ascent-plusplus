@@ -66,6 +66,7 @@ impl AscentConfig {
 pub(crate) struct IrExternDB {
    pub db_type: Ident,
    pub db_name: Ident,
+   pub db_args: Vec<Expr>,
 }
 
 
@@ -117,6 +118,7 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
 #[derive(Clone)]
 pub(crate) struct IrHeadClause{
    pub rel : RelationIdentity,
+   pub extern_db_name: Option<Ident>,
    pub args : Vec<Expr>,
    pub span: Span,
    pub args_span: Span,
@@ -421,7 +423,11 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
    };
 
    let signatures = prog.signatures.clone().unwrap_or_else(|| parse2(quote! {pub struct AscentProgram;}).unwrap());
-   let extern_dbs = prog.extern_dbs.iter().map(|db| IrExternDB {db_type: db.db_type.clone(), db_name: db.db_name.clone()}).collect();
+   let extern_dbs = prog.extern_dbs.iter().map(|db| IrExternDB {
+      db_type: db.db_type.clone(),
+      db_name: db.db_name.clone(),
+      db_args: db.args.iter().cloned().collect(),
+   }).collect();
    Ok(AscentIr {
       rules: ir_rules.into_iter().map(|(rule, _extra_rels)| rule).collect_vec(),
       relations_ir_relations,
@@ -583,6 +589,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
       
       let head_clause = IrHeadClause {
          rel: rel_identity,
+         extern_db_name: hcl_node.extern_db_name.clone(),
          args : hcl_node.args.iter().cloned().collect(),
          span: hcl_node.span(),
          args_span: hcl_node.args.span(),
