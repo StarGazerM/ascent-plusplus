@@ -142,11 +142,26 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       .map(|db| {
          let name = &db.db_name;
          let ty = &db.db_type;
-         quote!(#name: Rc<RefCell<#ty>>)
+         if mir.is_parallel {
+            quote!(#name: Arc<RwLock<#ty>>)
+         } else {
+            quote!(#name: Rc<RefCell<#ty>>)
+         }
       }).collect_vec();
    let extern_db_args = mir.extern_dbs.iter()
       .map(|db| {
          let name = &db.db_name;
+         quote!(#name)
+      }).collect_vec();
+   let extern_arg_arg_decl = mir.extern_args.iter()
+      .map(|arg| {
+         let name = &arg.name;
+         let ty = &arg.ty;
+         quote!(#name: #ty)
+      }).collect_vec();
+   let extern_arg_args = mir.extern_args.iter()
+      .map(|arg| {
+         let name = &arg.name;
          quote!(#name)
       }).collect_vec();
    // generate run arg for every relation
@@ -155,9 +170,14 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       .map(|rel| {
          let name = &rel.name;
          let ty = rel_type(rel, mir);
-         quote!(#name: Rc<RefCell<#ty>>)
+         if mir.is_parallel {
+            quote!(#name: Arc<RwLock<#ty>>)
+         } else {
+            quote!(#name: Rc<RefCell<#ty>>)
+         }
       })
       .chain(extern_db_args_decl.into_iter())
+      .chain(extern_arg_arg_decl.into_iter())
       .collect_vec();
    let input_args = mir.relations_ir_relations.keys()
       .filter(|rel| rel.is_input)
@@ -166,6 +186,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          quote!{#name}
       })
       .chain(extern_db_args.into_iter())
+      .chain(extern_arg_args.into_iter())
       .collect_vec();
 
    let mut sccs_compiled = vec![];

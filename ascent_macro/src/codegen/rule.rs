@@ -419,7 +419,11 @@ fn head_clauses_structs_and_update_code(
       let new_row_to_be_pushed = tuple_spanned(&new_row_to_be_pushed, hcl.span);
 
       let db_name = if let Some(db_name) = &hcl.extern_db_name {
-         quote! {#db_name.borrow_mut()}
+         if !mir.is_parallel {
+            quote! {#db_name.borrow_mut()}
+         } else {
+            quote! {#db_name.write().unwrap()}
+         }
       } else {
          quote! {_self}
       };

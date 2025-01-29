@@ -69,6 +69,12 @@ pub(crate) struct IrExternDB {
    pub db_args: Vec<Expr>,
 }
 
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub(crate) struct IrExternArg {
+   pub name: Ident,
+   pub ty: Type,
+}
+
 
 pub(crate) struct AscentIr {
    pub relations_ir_relations: HashMap<RelationIdentity, HashSet<IrRelation>>,
@@ -78,6 +84,7 @@ pub(crate) struct AscentIr {
    pub relations_metadata: HashMap<RelationIdentity, RelationMetadata>,
    pub rules: Vec<IrRule>,
    pub extern_dbs: Vec<IrExternDB>, 
+   pub extern_args: Vec<IrExternArg>,
    pub signatures: Signatures,
    pub config: AscentConfig,
    pub io: AscentIO,
@@ -428,6 +435,10 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       db_name: db.db_name.clone(),
       db_args: db.args.iter().cloned().collect(),
    }).collect();
+   let extern_args = prog.extern_args.iter().map(|arg| IrExternArg {
+      name: arg.arg_name.clone(),
+      ty: arg.arg_type.clone(),
+   }).collect();
    Ok(AscentIr {
       rules: ir_rules.into_iter().map(|(rule, _extra_rels)| rule).collect_vec(),
       relations_ir_relations,
@@ -437,6 +448,7 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       // relations_no_indices,
       signatures,
       extern_dbs,
+      extern_args,
       io,
       config,
       is_parallel

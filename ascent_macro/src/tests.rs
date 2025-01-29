@@ -491,6 +491,12 @@ fn write_par_to_scratchpad(tokens: TokenStream) -> TokenStream {
    write_to_scratchpad_base(tokens, quote!{}, false, true)
 }
 
+fn write_duo_par_to_scratchpad(tokens1: TokenStream, tokens2: TokenStream) -> TokenStream {
+   let p2 = ascent_impl(tokens2, false, true).unwrap();
+   write_to_scratchpad_base(tokens1, p2, false, true)
+}
+
+
 #[allow(unused)]
 fn write_ascent_run_to_scratchpad(tokens: TokenStream) -> TokenStream {
    write_to_scratchpad_base(tokens, quote!{}, true, false)
@@ -749,7 +755,7 @@ fn test_extern_database2() {
       
    };
 
-   write_duo_to_scratchpad(inp1, inp2);
+   write_duo_par_to_scratchpad(inp1, inp2);
 }
 
 #[test]
@@ -779,10 +785,26 @@ fn test_nest_extern_database() {
          do_length(x, y),
          do g : SSSPEager {
             do_length : vec![(*x, *y)]
-        } (graph),
+         } (graph),
          let ret_val = g.ret[0].0;
    };
    write_duo_to_scratchpad(inp1, inp2);
+}
+
+
+#[test]
+fn test_extern_arg() {
+   let inp = quote! {
+      struct Foo;
+
+      extern arguement i32 test_foo_arg;
+
+      relation foo(i32, i32);
+      relation bar(i32);
+      foo(x, test_foo_arg) <-- bar(x);
+   };
+
+   write_to_scratchpad(inp);
 }
 
 #[test]

@@ -31,6 +31,7 @@ mod kw {
    syn::custom_keyword!(provenance);
    syn::custom_keyword!(index);
    syn::custom_keyword!(database);
+   syn::custom_keyword!(arguement);
    syn::custom_keyword!(delta);
    syn::custom_keyword!(stratum);
    syn::custom_keyword!(ID);
@@ -120,6 +121,15 @@ pub struct ExternDatabase {
    #[inside(_arg_pos_paren)]
    #[call(Punctuated::parse_terminated)]
    pub args: Punctuated<Expr, Token![,]>,
+   pub _semi_colon: Token![;],
+}
+
+#[derive(Clone, Parse)]
+pub struct ExternArgument {
+   pub _extern_kw: Token![extern],
+   pub _arguement: kw::arguement,
+   pub arg_type: Type,
+   pub arg_name: Ident,
    pub _semi_colon: Token![;],
 }
 
@@ -803,6 +813,7 @@ pub(crate) struct AscentProgram {
    pub macro_invocs: Vec<syn::ExprMacro>,
    pub functions: Vec<FunctionNode>,
    pub extern_dbs: Vec<ExternDatabase>,
+   pub extern_args: Vec<ExternArgument>,
    pub extra_indices: Vec<ExtraIndex>,
    pub stratum_paths: Vec<StratumPath>,
    pub in_streams: Vec<InStream>,
@@ -823,6 +834,7 @@ impl Parse for AscentProgram {
       let mut rules = vec![];
       let mut relations = vec![];
       let mut extern_dbs = vec![];
+      let mut extern_args = vec![];
       let mut extra_indices = vec![];
       let mut functions = vec![];
       let mut macros = vec![];
@@ -840,6 +852,9 @@ impl Parse for AscentProgram {
             if input.peek2(kw::database) {
                let extern_db = ExternDatabase::parse(input)?;
                extern_dbs.push(extern_db);
+            } else if input.peek2(kw::arguement) {
+               let extern_arg = ExternArgument::parse(input)?;
+               extern_args.push(extern_arg);
             } else {
                let mut relation_node = RelationNode::parse(input)?;
                relation_node.attrs = attrs;
@@ -881,8 +896,8 @@ impl Parse for AscentProgram {
       }
       Ok(AscentProgram{
          rules, relations, signatures, attributes, macros, macro_invocs,
-         functions, extern_dbs, extra_indices, stratum_paths, in_streams,
-         out_streams
+         functions, extern_dbs, extern_args, extra_indices, stratum_paths,
+         in_streams, out_streams
       })
    }
 }

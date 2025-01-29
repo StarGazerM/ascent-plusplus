@@ -104,11 +104,15 @@ pub fn rel_ind_common_var_name(relation: &RelationIdentity) -> Ident {
 
 pub fn expr_for_rel(rel: &MirRelation, extern_db_name: &Option<Ident>, mir: &AscentMir) -> proc_macro2::TokenStream {
    fn expr_for_rel_inner(
-      ir_name: &Ident, extern_db_name: &Option<Ident>, version: MirRelationVersion, _mir: &AscentMir,
+      ir_name: &Ident, extern_db_name: &Option<Ident>, version: MirRelationVersion, mir: &AscentMir,
       mir_rel: &MirRelation,
    ) -> (TokenStream, bool) {
       let db = if let Some(db_name) = extern_db_name {
-         quote! { #db_name.borrow() }
+         if mir.is_parallel {
+            quote! { #db_name..read().unwrap() }
+         } else {
+            quote! { #db_name.borrow() }
+         }
       } else {
          quote! { _self }
       };

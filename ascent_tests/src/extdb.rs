@@ -49,6 +49,26 @@ fn test_reach() {
 
 
 ascent! {
+    struct TestExtArg;
+    extern arguement i32 test_arg;
+
+    relation test(i32, i32);
+    relation foo(i32);
+
+    test(x, z) <-- foo(x), let z = test_arg;
+
+    foo(1);
+}
+
+#[test]
+fn test_ext_arg() {
+    let mut test = TestExtArg::default();
+    test.run(1);
+    assert!(test.test.contains(&(1, 1)));
+}
+
+
+ascent! {
     struct Graph;
 
     relation edge(i32, i32);
@@ -65,32 +85,30 @@ ascent! {
     relation print(i32, i32);
     relation empty();
 
+    await print;
+
     empty() <-- print(x, y), let _ = println!("{} {}", x, y);
 }
 
 use ascent::aggregators::sum;
 
 ascent! {
-    struct SSSPEager;
+    struct LongestPath;
     extern database Graph graph();
     extern database Printer pp(graph);
+    extern arguement (i32, i32) do_length;
 
     relation edge(i32, i32) in graph;
-
-    
     relation print(i32, i32) in pp;
 
-    relation do_length(i32, i32);
     relation incomming_length(i32);
     relation ret(i32);
 
-    ret(1) <-- do_length(x, y), graph.edge(x, y);
+    ret(1) <-- let (x, y) = do_length, graph.edge(x, y);
     
     incomming_length(mono!(g.ret) + 1), pp.print(y, z) <--
-        do_length(x, z), graph.edge(y, z),
-        do g : SSSPEager {
-            do_length : vec![(*x, *y)]
-        } (graph.clone(), pp.clone());
+        let (x, z) = do_length, graph.edge(y, z),
+        do g : LongestPath {} (graph.clone(), pp.clone(), (x, *y));
     
     ret(total) <-- agg total = sum(x) in incomming_length(x);
 }
@@ -104,11 +122,9 @@ fn test_rec_length() {
     // pp.run(Rc::new(RefCell::new(g.clone())));
     g.borrow_mut().edge = vec![(1, 2), (2, 3), (3, 4), (4, 5)].into_iter().collect();
     g.borrow_mut().run();
-    let mut compute_length = SSSPEager::default();
-    compute_length.do_length = vec![(1, 5)];
-    compute_length.run(g.clone(), pp.clone());
+    let mut compute_length = LongestPath::default();
+    compute_length.run(g.clone(), pp.clone(), (1, 5));
 
     println!("{:?}", &(compute_length.ret));
     println!("{:?}", &(pp.borrow().print));
-    pp.borrow_mut().run(g.clone());
 }
