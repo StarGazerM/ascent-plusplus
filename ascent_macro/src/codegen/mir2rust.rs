@@ -142,10 +142,14 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       .map(|db| {
          let name = &db.db_name;
          let ty = &db.db_type;
-         if mir.is_parallel {
-            quote!(#name: Arc<RwLock<#ty>>)
+         if db.mut_flag {
+            if mir.is_parallel {
+               quote!(#name: Arc<RwLock<#ty>>)
+            } else {
+               quote!(#name: Rc<RefCell<#ty>>)
+            }
          } else {
-            quote!(#name: Rc<RefCell<#ty>>)
+            quote!(#name: &#ty)
          }
       }).collect_vec();
    let extern_db_args = mir.extern_dbs.iter()

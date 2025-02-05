@@ -114,6 +114,7 @@ fn parse_generics_with_where_clause(input: ParseStream) -> Result<Generics> {
 pub struct ExternDatabase {
    pub _extern_kw: Token![extern],
    pub _database: kw::database,
+   pub mutable: Option<Token![mut]>,
    pub db_type: Ident,
    pub db_name: Ident,
    #[paren]
@@ -128,6 +129,7 @@ pub struct ExternDatabase {
 pub struct ExternArgument {
    pub _extern_kw: Token![extern],
    pub _arguement: kw::arguement,
+   pub _mutable: Option<Token![mut]>,
    pub arg_type: Type,
    pub arg_name: Ident,
    pub _semi_colon: Token![;],

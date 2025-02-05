@@ -67,6 +67,7 @@ pub(crate) struct IrExternDB {
    pub db_type: Ident,
    pub db_name: Ident,
    pub db_args: Vec<Expr>,
+   pub mut_flag: bool,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -434,6 +435,7 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       db_type: db.db_type.clone(),
       db_name: db.db_name.clone(),
       db_args: db.args.iter().cloned().collect(),
+      mut_flag: db.mutable.is_some(),
    }).collect();
    let extern_args = prog.extern_args.iter().map(|arg| IrExternArg {
       name: arg.arg_name.clone(),

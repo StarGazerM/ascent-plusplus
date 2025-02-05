@@ -1,5 +1,5 @@
 #![deny(warnings)]
-use crate::ascent_hir::IndexValType;
+use crate::ascent_hir::{IndexValType, IrExternDB};
 use crate::ascent_mir::{ir_relation_version_var_name, MirRelation, MirRelationVersion};
 use crate::codegen::ds::rel_ds_macro_input;
 use crate::utils::{tuple, tuple_type};
@@ -73,6 +73,15 @@ pub fn rel_type(rel: &RelationIdentity, mir: &AscentMir) -> Type {
    }
 }
 
+pub fn extern_db_by_name(db_name: &Ident, mir: &AscentMir) -> Option<IrExternDB> {
+   for db in mir.extern_dbs.iter() {
+      if db_name == &db.db_name {
+         return Some(db.clone());
+      }
+   }
+   None
+}
+
 pub fn rel_index_to_macro_input(ind: &[usize]) -> TokenStream {
    let indices = ind.iter().cloned().map(syn::Index::from);
    quote! { [#(#indices),*] }
@@ -108,10 +117,18 @@ pub fn expr_for_rel(rel: &MirRelation, extern_db_name: &Option<Ident>, mir: &Asc
       mir_rel: &MirRelation,
    ) -> (TokenStream, bool) {
       let db = if let Some(db_name) = extern_db_name {
-         if mir.is_parallel {
-            quote! { #db_name..read().unwrap() }
+         if let Some(db) = extern_db_by_name(db_name, mir) {
+            if db.mut_flag {
+               if mir.is_parallel {
+                  quote! { #db_name.read().unwrap() }
+               } else {
+                  quote! { #db_name.borrow() }
+               }
+            } else {
+               quote! { #db_name }
+            }
          } else {
-            quote! { #db_name.borrow() }
+            quote! { #db_name  }
          }
       } else {
          quote! { _self }

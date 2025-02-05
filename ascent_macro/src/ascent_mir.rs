@@ -215,6 +215,11 @@ fn get_hir_dep_graph(hir: &AscentIr) -> Vec<(usize,usize)> {
    let mut edges = vec![];
    for (i, rule) in hir.rules.iter().enumerate() {
       for bitem in rule.body_items.iter() {
+         if let IrBodyItem::Clause(bcl) = bitem {
+            if bcl.extern_db_name.is_some() {
+               continue;
+            }
+         }
          if let Some(body_rel) = bitem.rel() {
             let body_rel_identity = &body_rel.relation;
             if let Some(set) = relations_to_rules_in_head.get(body_rel_identity){
@@ -246,7 +251,10 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
       for &rule_ind in scc.iter(){
          let rule = &hir.rules[rule_ind];
          for bitem in rule.body_items.iter() {
-            if let Some(rel) = bitem.rel(){
+            if let Some(rel) = bitem.rel() {
+               if rel.relation.extern_db_name.is_some() {
+                  continue;
+               }
                body_only_relations.entry(rel.relation.clone()).or_default().insert(rel.clone());
             }
          }
