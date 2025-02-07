@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use ascent::{ascent, ascent_par};
+use ascent::{ascent, ascent_par, ascent_use};
 
 macro_rules! mono {
     ($x:expr) => {
@@ -10,31 +10,11 @@ macro_rules! mono {
     };
 }
 
-ascent! {
-    struct TC;
-
-    relation edge(i32, i32);
-    relation path(i32, i32);
-    index path (0, 1);
-
-    path(x, y) <-- edge(x, y);
-    path(x, y) <-- path(x, z), edge(z, y);
-}
-
-
-use macro_magic::export_tokens;
-use ascent::{export_ascent, ascent_use};
-
-#[export_tokens(ExtTC)]
-export_ascent! {
-    relation path(i32, i32) in TC;
-}
-
-#[ascent_use(ExtTC)]
+use crate::utils::*;
+#[ascent_use(crate::utils::ExtTC)]
 ascent! {
     struct SingleReach;
     extern database TC tc();
-    // relation path(i32, i32) in tc;
 
     relation do_reach(i32, i32);
     relation reach(bool);
