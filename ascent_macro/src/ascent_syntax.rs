@@ -952,3 +952,22 @@ impl Parse for DsAttributeContents {
    }
 }
 
+
+#[derive(Clone)]
+pub(crate) struct AscentCall {
+   pub ascent_macro: Ident,
+   pub code: TokenStream,
+}
+
+impl Parse for AscentCall {
+   fn parse(input: ParseStream) -> Result<Self> {
+      let ascent_macro = input.parse()?;
+      // parse the bang
+      let _ = input.parse::<Token![!]>()?;
+      let content;
+      braced!(content in input);
+      let code = content.parse()?;
+      Ok(AscentCall { ascent_macro, code })
+   }
+}
+

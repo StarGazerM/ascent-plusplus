@@ -17,7 +17,7 @@ extern crate quote;
 
 extern crate proc_macro;
 use ascent_monotonic::ascent_check_monotonicity;
-use ascent_syntax::AscentProgram;
+use ascent_syntax::{AscentCall, AscentProgram};
 use ascent_sugar::desugar_ascent_program;
 use proc_macro::TokenStream;
 use syn::Result;
@@ -105,6 +105,59 @@ pub fn ascent_run_par(input: TokenStream) -> TokenStream {
       Ok(res) => res.into(),
       Err(err) => TokenStream::from(err.to_compile_error()),
    }
+}
+
+
+/// An empty macro just used to keep the code
+#[proc_macro]
+pub fn export_ascent(_input: TokenStream) -> TokenStream {
+   quote! {}.into()
+}
+
+
+use macro_magic::import_tokens_attr;
+/// Import an external database relation declaration into the ascent program.
+#[import_tokens_attr]
+#[proc_macro_attribute]
+pub fn ascent_use(attr: TokenStream, input: TokenStream) -> TokenStream {
+
+   // let ascent_macro_call = syn::parse_macro_input!(input as syn::Macro);
+   // let call_name = ascent_macro_call.path;
+   // let ascent_code = ascent_macro_call.tokens;
+   // let export_marco_call = syn::parse_macro_input!(attr as syn::Macro);
+   // let extern_db_code = export_marco_call.tokens;
+   let ascent_code: AscentCall = syn::parse(input).unwrap();
+   let run_code = ascent_code.code;
+   let ascent_call = ascent_code.ascent_macro;
+   let ext_code : AscentCall = syn::parse(attr).unwrap();
+   let used_code = ext_code.code;
+   // print ascent_code to error
+   // if ascent_call is ascent
+   let par = ascent_call.to_string() == "ascent_par";
+   
+   // insert ext_code after the frist ";"
+   // let run_code = run_code.to_string();
+   // let insert_pos = run_code.find(";");
+   // let run_code = run_code[..insert_pos.unwrap()+1].to_string() + &used_code.to_string() + &run_code[insert_pos.unwrap()+1..];
+   // // string to tokenstream
+   // let run_code = syn::parse_str(&run_code).unwrap();
+
+   // let res = ascent_impl(run_code, ascent_call.to_string() == "ascent_run", par);
+   let res = ascent_impl(
+      run_code.into_iter().chain(used_code.into_iter()).collect(),
+      ascent_call.to_string() == "ascent_run", par);
+   
+   match res {
+      Ok(res) => res.into(),
+      Err(err) => TokenStream::from(err.to_compile_error()),
+   }
+   
+   // quote! {
+   //    #ascent_call! {
+   //       #run_code
+   //       #used_code
+   //    }
+   // }.into()
 }
 
 pub(crate) fn ascent_impl(input: proc_macro2::TokenStream, is_ascent_run: bool, is_parallel: bool) -> Result<proc_macro2::TokenStream> {

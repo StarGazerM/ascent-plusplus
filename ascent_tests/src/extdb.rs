@@ -21,11 +21,20 @@ ascent! {
     path(x, y) <-- path(x, z), edge(z, y);
 }
 
+
+use macro_magic::export_tokens;
+use ascent::{export_ascent, ascent_use};
+
+#[export_tokens(ExtTC)]
+export_ascent! {
+    relation path(i32, i32) in TC;
+}
+
+#[ascent_use(ExtTC)]
 ascent! {
     struct SingleReach;
-
     extern database TC tc();
-    relation path(i32, i32) in tc;
+    // relation path(i32, i32) in tc;
 
     relation do_reach(i32, i32);
     relation reach(bool);

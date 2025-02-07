@@ -20,3 +20,4 @@ mod incremental;
 mod extdb;
 mod graph;
 mod io;
+mod sat;

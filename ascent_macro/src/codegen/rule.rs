@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-
 use crate::utils::{expr_to_ident, tuple_spanned};
 use crate::{
    ascent_hir::IndexValType,

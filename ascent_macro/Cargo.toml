@@ -22,6 +22,7 @@ petgraph = "0.6.0"
 derive-syn-parse = "0.2.0"
 lazy_static = "1.4.0"
 duplicate = { version = "1.0.0", default-features = false }
+macro_magic = { version = "*", features = ["proc_support"] }
 
 [dev-dependencies]
 ascent = { path = "../ascent" }
