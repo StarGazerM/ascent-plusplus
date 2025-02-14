@@ -26,8 +26,7 @@ macro_rules! assert_rels_eq {
 }
 
 
-use macro_magic::export_tokens;
-use ascent::{export_ascent, ascent_use, ascent};
+use ascent::{ascent_export, ascent_use, ascent, ascent_no_expand};
 
 ascent! {
    pub struct TC;
@@ -41,8 +40,8 @@ ascent! {
 }
 
 
-#[export_tokens(ExtTC)]
-export_ascent! {
+#[ascent_export(ExtTC)]
+ascent_no_expand! {
    relation path(i32, i32) in TC;
 }
 

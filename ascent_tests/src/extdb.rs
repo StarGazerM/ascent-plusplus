@@ -2,25 +2,29 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use ascent::{ascent, ascent_par, ascent_use};
+use ascent::ascent_export;
+use ascent::{ascent, ascent_par, ascent_use, ascent_uses};
 
-macro_rules! mono {
-    ($x:expr) => {
-        $x[0].0
-    };
+#[ascent_export(Foo)]
+ascent!{
+    relation foo(i32);
 }
 
-use crate::utils::*;
-#[ascent_use(crate::utils::ExtTC)]
+use crate::utils::TC;
+
+#[ascent_uses]
 ascent! {
+    use [Foo, crate::utils::ExtTC];
     struct SingleReach;
     extern database TC tc();
 
     relation do_reach(i32, i32);
     relation reach(bool);
 
-    reach(true) <-- do_reach(x, y), tc.path(x, y);
+// reach(true) <-- do_reach(x, y), tc.path(x, y);
 }
+
+
 
 #[test]
 fn test_reach() {

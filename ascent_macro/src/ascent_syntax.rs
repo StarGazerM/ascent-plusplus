@@ -1,7 +1,7 @@
 #![deny(warnings)]
 extern crate proc_macro;
 use proc_macro2::TokenStream;
-use syn::{ImplGenerics, LitInt, TypeGenerics};
+use syn::{bracketed, ImplGenerics, LitInt, TypeGenerics};
 use syn::{
    braced, parenthesized, parse2, punctuated::Punctuated, spanned::Spanned, Attribute, Error, Expr,
    Generics, Ident, Pat, Result, Token, Type, Visibility,
@@ -953,8 +953,10 @@ impl Parse for DsAttributeContents {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct AscentCall {
+   // parened path list
+   pub used_paths: Punctuated<syn::ExprPath, Token![,]>,
    pub ascent_macro: Ident,
    pub code: TokenStream,
 }
@@ -966,8 +968,19 @@ impl Parse for AscentCall {
       let _ = input.parse::<Token![!]>()?;
       let content;
       braced!(content in input);
+      let used_paths;
+      if content.peek(Token![use]) {
+         content.parse::<Token![use]>()?;
+         let pt;
+         bracketed!(pt in content);
+         used_paths = pt.parse_terminated(syn::ExprPath::parse, Token![,])?;   
+         content.parse::<Token![;]>()?; 
+      } else {
+         used_paths = Punctuated::default();
+      }
+      
       let code = content.parse()?;
-      Ok(AscentCall { ascent_macro, code })
+      Ok(AscentCall { used_paths, ascent_macro, code })
    }
 }
 

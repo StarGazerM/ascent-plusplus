@@ -37,6 +37,7 @@ dependencies = [
  "dashmap",
  "hashbrown 0.14.5",
  "instant",
+ "macro_magic",
  "once_cell",
  "paste",
  "rayon",

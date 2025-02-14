@@ -19,6 +19,6 @@ ascent! {
     // clause A and B share literal x
     relation connected_clause(usize, usize, i32);
 
-    
+    connected_clause(a, b, x) <-- clause(a, x, _, _), clause(b, x, _, _), if a != b;
 }
 

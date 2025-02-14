@@ -27,7 +27,8 @@ mod tuple_of_borrowed;
 mod rel_index_boilerplate;
 
 pub use ascent_macro::{ascent, ascent_run};
-pub use ascent_macro::{export_ascent,ascent_use};
+pub use ascent_macro::{ascent_export, ascent_no_expand, ascent_use,ascent_uses};
+pub use macro_magic;
 #[cfg(feature = "par")]
 pub use ascent_macro::{ascent_par, ascent_run_par};
 
