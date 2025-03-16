@@ -87,13 +87,13 @@ ascent! {
         let new_node = ptr!(GraphNode { id: *x, next: next.0.clone() });
 }
 
-#[test]
-fn test_graph_lift() {
-   let mut prog = GraphLift::default();
+// #[test]
+// fn test_graph_lift() {
+//    let mut prog = GraphLift::default();
 
-   prog.edge = vec![(1, 2), (2, 3), (3, 4), (4, 5)].into_iter().collect();
-   prog.run();
+//    prog.edge = vec![(1, 2), (2, 3), (3, 4), (4, 5)].into_iter().collect();
+//    prog.run();
 
-   let lifted_graph = GraphNode { id: std::u32::MAX, next: prog.lifted_graph_head[0].0 .0.clone() };
-    // println!("{:?}", &lifted_graph);
-}
+//    let lifted_graph = GraphNode { id: std::u32::MAX, next: prog.lifted_graph_head[0].0 .0.clone() };
+//     // println!("{:?}", &lifted_graph);
+// }

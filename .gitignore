@@ -2,6 +2,7 @@ target
 Cargo.lock
 .vscode
 **/scratchpad.rs
+ascent_macro/src/scratchpad.rs
 
 ez3/
 ez3_base/

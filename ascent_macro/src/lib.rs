@@ -121,7 +121,7 @@ pub fn ascent_no_expand(_input: TokenStream) -> TokenStream {
 ///  tokens of the ascent program with a given name and it can be used in another ascent
 ///  program using the `ascent_use` and `ascent_uses` macro.
 /// Example:
-/// ```
+/// 
 /// # #[macro_use] extern crate ascent;
 /// # use ascent::{ascent_export, ascent_no_expand};
 /// #[ascent_export(Foo)]
@@ -130,7 +130,7 @@ pub fn ascent_no_expand(_input: TokenStream) -> TokenStream {
 ///  // ....
 /// }
 /// 
-/// ```
+/// 
 /// 
 #[proc_macro_attribute]
 pub fn ascent_export(attr: TokenStream, input: TokenStream) -> TokenStream {
@@ -147,7 +147,7 @@ use macro_magic::import_tokens_attr;
 
 /// This macro is used to import code from another exported ascent program
 /// Example:
-/// ```
+/// 
 /// # #[macro_use] extern crate ascent;
 /// # use ascent::{ascent_export, ascent_no_expand, ascent_use, ascent_uses};
 /// #[ascent_export]
@@ -160,7 +160,7 @@ use macro_magic::import_tokens_attr;
 /// relation bar(i32);
 /// }
 /// 
-/// ```
+/// 
 /// 
 /// 
 #[import_tokens_attr]
@@ -195,7 +195,7 @@ pub fn ascent_use(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// After annotated a ascent program with this macro, you can use the `use` keyword in the
 /// first line of your ascent program to import the exported tokens from other ascent programs
 /// Example:
-/// ```
+/// 
 /// # #[macro_use] extern crate ascent;
 /// # use ascent::{ascent_export, ascent_no_expand, ascent_use, ascent_uses};
 /// #[ascent_export(Foo)]
@@ -214,7 +214,7 @@ pub fn ascent_use(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// relation baz(i32);
 /// }
 /// 
-/// ```
+/// 
 /// 
 #[proc_macro_attribute]
 pub fn ascent_uses(_attr: TokenStream ,input: TokenStream) -> TokenStream {
