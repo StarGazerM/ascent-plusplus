@@ -1,9 +1,9 @@
 use ascent::ascent_run;
 use ascent::ascent;
+use ascent::ascent_par;
+use ascent::ascent_run_par;
 use std::rc::Rc;
 use ascent::aggregators::mean;
-use crate::ascent_m_par;
-use crate::ascent_run_m_par;
 use crate::assert_rels_eq;
 use crate::utils::rels_equal;
 use std::hash::Hash;
@@ -25,12 +25,13 @@ fn test_generators_conditions_example() {
    assert!(rels_equal(&res.edge, &[(1, 2), (1, 3), (2, 3), (2, 4)]));
 }
 
+// use ascent::ascent_par;
 #[test]
 fn test_agg_example() {
    type Student = u32;
    type Course = u32;
    type Grade = u16;
-   ascent_m_par! {
+   ascent_par! {
       relation student(Student);
       relation course_grade(Student, Course, Grade);
       relation avg_grade(Student, Grade);
@@ -132,7 +133,7 @@ fn test_generic_ty_with_divergent_impl_generics() {
 
 #[test]
 fn test_borrowed_strings() {
-   ascent_m_par! {
+   ascent_par! {
       struct Ancestry<'a>;
       relation parent(&'a str, &'a str);
       relation ancestor(&'a str,&'a str);
@@ -161,7 +162,7 @@ fn test_borrowed_strings() {
 fn test_borrowed_strings_2() {
 
    fn ancestry_fn<'a>(parent_rel: impl Iterator<Item = (&'a str, &'a str)>) -> Vec<(&'a str, &'a str)> {
-      ascent_run_m_par! {
+      ascent_run_par! {
          struct Ancestry<'a>;
          relation parent(&'a str, &'a str) = parent_rel.collect();
          relation ancestor(&'a str,&'a str);

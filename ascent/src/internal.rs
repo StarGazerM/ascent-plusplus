@@ -267,12 +267,17 @@ impl<K: Eq + Hash, V: Hash + Eq> RelIndexWrite for LatticeIndexType<K, V>{
    }
 }
 
-impl<K: Eq + Hash, V: Hash + Eq> RelIndexMerge for LatticeIndexType<K, V>{
+impl<K: Eq + Hash, V: Hash + Eq + Lattice> RelIndexMerge for LatticeIndexType<K, V>{
    #[inline(always)]
    fn move_index_contents(hm1: &mut LatticeIndexType<K, V>, hm2: &mut LatticeIndexType<K, V>) {
-      for (k,v) in hm1.drain(){
+      for (k,mut v) in hm1.drain(){
          let set = hm2.entry(k).or_default();
-         set.extend(v);
+         for l in &mut v.drain() {
+            if l.is_positive() {
+               set.insert(l);
+            }
+         }
+         // set.extend(v);
       }
    }
 }

@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 
 ascent = { path = "../ascent", default-features = false }
-ascent-byods-rels = { path = "../byods/ascent-byods-rels"}
+ascent-byods-rels = { path = "../byods/ascent-byods-rels", default-features = false }
 stopwatch = "0.0.7"
 bencher = "0.1.5"
 derive_more = "0.99.16"
@@ -16,16 +16,18 @@ itertools = "0.12"
 quote = "1.0"
 arrayvec = "0.7"
 const-fnv1a-hash = "1.0.1"
+rand = "0.8.4"
+rayon = { version = "1.5", optional = true }
+macro_magic = "*"
+
 # serde = { version = "1.0", features = ["derive"] }
 # serde_json = "1.0.85"
-
-[dev-dependencies]
-rand = "0.8.4"
 
 [[bench]]
 name = "benches"
 harness = false
 
 [features]
-par = ["ascent/par"]
 default = ["par"]
+compact = []
+par = ["ascent/par"]

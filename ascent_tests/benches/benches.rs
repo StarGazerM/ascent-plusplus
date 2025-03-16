@@ -95,7 +95,7 @@ fn bench_lattice(){
 
 
 fn bench_tc_path_join_path(nodes_count: i32) {
-   ascent_m_par! {
+   ascent_par! {
       // #![include_rule_times]
       struct TCPathJoinPath;
       relation edge(i32, i32);

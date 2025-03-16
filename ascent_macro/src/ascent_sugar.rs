@@ -16,7 +16,7 @@ use quote::ToTokens;
 use itertools::Itertools;
 
 use ascent_base::util::update;
-use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode};
+use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode, StratumPath, SubQueryNode};
 use crate::utils::{
    expr_to_ident, expr_to_ident_mut, flatten_punctuated, is_wild_card,
    punctuated_map, punctuated_singleton, punctuated_try_map, punctuated_try_unwrap, spans_eq,
@@ -46,6 +46,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
           },
          BodyItemNode::FunctionCall(_) => vec![vec![bitem.clone()]], 
          BodyItemNode::MacroInvocation(m) => panic!("unexpected macro invocation: {:?}", m.mac.path),
+         BodyItemNode::SubQuery(_) => vec![vec![bitem.clone()]],
        }
     }
     fn bitems_desugar(bitems: &[BodyItemNode]) -> Vec<Vec<BodyItemNode>> {
@@ -120,6 +121,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
        BodyItemNode::Agg(agg) => pattern_get_vars(&agg.pat),
        BodyItemNode::Clause(cl) => cl.args.iter().flat_map(|arg| arg.get_vars()).collect(),
        BodyItemNode::Negation(_cl) => vec![],
+       BodyItemNode::SubQuery(_sq) => vec![],
        BodyItemNode::Disjunction(disj) => disj.disjuncts.iter()
                                            .flat_map(|conj| conj.iter().flat_map(body_item_get_bound_vars))
                                            .collect(),
@@ -149,6 +151,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
           }
        },
        BodyItemNode::Negation(_cl) =>(),
+       BodyItemNode::SubQuery(_sq) => (),
        BodyItemNode::Disjunction(disj) =>{
           for conj in disj.disjuncts.iter_mut() {
              for bi in conj.iter_mut() {
@@ -199,6 +202,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
              visit(arg);
           }
        },
+       BodyItemNode::SubQuery(_sq) => {},
        BodyItemNode::Disjunction(disj) => {
           for conj in disj.disjuncts.iter_mut() {
              for bi in conj.iter_mut() {
@@ -313,10 +317,12 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
    }
    new_cond_clauses.extend(body_clause.cond_clauses);
    BodyClauseNode{
+      extern_db_name: body_clause.extern_db_name,
       args: new_args,
       cond_clauses: new_cond_clauses,
       rel: body_clause.rel,
-      id_var: body_clause.id_var
+      id_var: body_clause.id_var,
+      delta_flag: body_clause.delta_flag
    }
  }
  fn rule_desugar_pattern_args(rule: RuleNode) -> RuleNode {
@@ -375,6 +381,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
              }
           },
           BodyItemNode::Negation(_) => (),
+          BodyItemNode::SubQuery(_) => (),
           BodyItemNode::Disjunction(_) => panic!("unrecognized BodyItemNode variant"),
           BodyItemNode::MacroInvocation(m) => panic!("unexpected macro invocation: {:?}", m.mac.path),
           BodyItemNode::FunctionCall(_) => panic!("function call should already be desugared before repeated vars desugaring"),
@@ -427,9 +434,11 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
              desugared_body_items.push(
                 BodyItemNode::Clause(BodyClauseNode {
                    rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+                   extern_db_name: None,
                    args: f.args.clone(),
                    id_var: f.id_var.clone(),
-                   cond_clauses: vec![]
+                   cond_clauses: vec![],
+                   delta_flag: false
                 })
              );
           } else {
@@ -464,44 +473,24 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           // };
           let do_clause_arg : Punctuated<BodyClauseArg, Comma> = arg_vec.clone();
           let var_do_clause_id = gensym.next_ident(&format!("{}_do__", f.name), f.name.span());
-          let do_clause_used = BodyClauseNode {
-              rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
-              args: do_clause_arg,
-              id_var: Some(syn::parse2(quote!{#var_do_clause_id}).unwrap()),
-              cond_clauses: vec![]
-          };
-          let arg_expr_vec = arg_vec.iter().map(|arg| match arg {
-             BodyClauseArg::Expr(expr) => expr.clone(),
-             _ => panic!("Pattern is not allowed in body function call!, found {:?}", arg),
-          }).collect::<Vec<Expr>>();
-          let do_clause_delete_head = HeadItemNode::HeadClause(
-               HeadClauseNode {
-                  rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
-                  args: Punctuated::from_iter(arg_expr_vec.clone()),
-                  required_flag: false,
-                  id_name: None,
-                  delete_flag: true,
-                  exists_var: None
-               });
-         //  let mut arg_expr_vec_do_id = arg_expr_vec.clone();
-         //  arg_expr_vec_do_id.push(parse2(quote!{#var_do_clause_id}).unwrap());
-          let do_clause_id_delete_head = HeadItemNode::HeadClause(
-               HeadClauseNode {
-                  rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
-                  args: Punctuated::from_iter(arg_expr_vec.clone()),
-                  required_flag: false,
-                  id_name: Some(var_do_clause_id.clone()),
-                  delete_flag: true,
-                  exists_var: None
-               }); 
+         let do_clause_used = BodyClauseNode {
+             rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+             extern_db_name: None,
+             args: do_clause_arg,
+             id_var: Some(syn::parse2(quote!{#var_do_clause_id}).unwrap()),
+             cond_clauses: vec![],
+             delta_flag: false
+         };
           let use_result_clause = BodyClauseNode {
              rel: f.name.clone(),
+             extern_db_name: None,
              args: Punctuated::from_iter(vec![
                 BodyClauseArg::Expr(parse2(quote!{#var_do_clause_id}).unwrap()),
                 BodyClauseArg::Expr(parse2(quote!{#ret_v}).unwrap())
              ]),
              id_var: f.id_var.clone(),
-             cond_clauses: vec![]
+             cond_clauses: vec![],
+             delta_flag: false,
           };
           let use_result_delete_clause = HeadItemNode::HeadClause(
              HeadClauseNode {
@@ -553,9 +542,11 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                    generate_call_body_items.push(
                       BodyItemNode::Clause(BodyClauseNode {
                          rel: Ident::new(&format!("{}_do", other_f.name), other_f.name.span()),
+                         extern_db_name: None,
                          args: other_f.args.clone(),
                          id_var: None,
-                         cond_clauses: vec![]    
+                         cond_clauses: vec![],
+                         delta_flag: false    
                       })
                    );
                 } else {
@@ -567,6 +558,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           let generated_do_rule = RuleNode {
              head_clauses:  Punctuated::from_iter(vec![HeadItemNode::HeadClause(HeadClauseNode{
                 rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+                extern_db_name: None,
                 args: f.args.iter().map(|arg| match arg {
                     BodyClauseArg::Expr(expr) => expr.clone(),
                     _ => panic!("Pattern is not allowed in head!, found {:?}", arg),
@@ -616,9 +608,11 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           if let Some (ret_var) = &f.return_var {
             let new_do_clause = BodyClauseNode{
                rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+               extern_db_name: None,
                args: f.args.clone(),
                id_var: Some(syn::parse2(quote!{#do_call_id}).unwrap()),
-               cond_clauses: vec![]
+               cond_clauses: vec![],
+               delta_flag: false
             };
             let mut gensym = GenSym::default();
             let pattern_desugared_do = clause_desugar_pattern_args(new_do_clause, &mut gensym);
@@ -626,6 +620,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
             desugared_body_items.insert(0, BodyItemNode::Clause(pattern_desugared_do));
             desugared_head_items.push(HeadItemNode::HeadClause(HeadClauseNode{
                 rel: f.name.clone(),
+                extern_db_name: None,
                 args: Punctuated::from_iter(vec![
                     parse2::<Expr>(quote!{#do_call_id}).unwrap(),
                     parse2::<Expr>(quote!{#ret_var}).unwrap()
@@ -638,6 +633,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           } else {
             desugared_head_items.push(HeadItemNode::HeadClause(HeadClauseNode{
                 rel: Ident::new(&format!("{}_do", f.name), f.name.span()),
+                extern_db_name: None,
                 args: f.args.iter().map(|arg| match arg {
                     BodyClauseArg::Expr(expr) => expr.clone(),
                     _ => panic!("Pattern is not allowed in head!, found {:?}", arg),
@@ -790,11 +786,12 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           name: Ident::new(&format!("{}_id", rel.name), rel.name.span()),
           field_types: new_field_types,
           initialization: rel.initialization.clone(),
+          source_db: None,
           _semi_colon: rel._semi_colon.clone(),
           is_lattice: rel.is_lattice,
           need_id: false,
-          need_delete: rel.need_delete,
-          // is_function: rel.is_function
+          is_hole: false,
+          is_input: rel.is_input,
        };
        vec![rel, new_rel]
     } else {
@@ -802,7 +799,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
     }
  }
  
- fn desugar_function(rel: FunctionNode) -> Vec<RelationNode> {
+ fn desugar_function(rel: &FunctionNode) -> Vec<RelationNode> {
        // do rule associated with function
        // do rule takes 0..n-1 arguments
     // let mut arg_vec = rel.field_types.iter().cloned().collect_vec();
@@ -812,31 +809,115 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        name: Ident::new(&format!("{}_do", rel.name), rel.name.span()),
        field_types: rel.field_types.clone(),
        initialization: None,
+       source_db: None,
        _semi_colon: syn::token::Semi::default(),
        is_lattice: false,
        need_id: true,
-       need_delete: true,
+       is_hole: false,
+       is_input: false,
     };
     let usize_type = Type::Verbatim(quote!{usize});
-    // let tag_type = Type::Verbatim(quote!{ascent::RelationTag});
     let res_relation = RelationNode{
        attrs: rel.attrs.clone(),
        name: rel.name.clone(),
        field_types: Punctuated::from_iter(vec![
-          usize_type.clone(), rel.return_type
+          usize_type.clone(), rel.return_type.clone()
        ]),
        initialization: None,
+       source_db: None,
        _semi_colon: syn::token::Semi::default(),
        is_lattice: false,
        need_id: true,
-       need_delete: true,
+       is_hole: false,
+       is_input: false,
     };
  
     vec![do_relation, res_relation]
  }
+
+ fn add_stratum(stratum_name: &Ident) -> RelationNode {
+   let hole_rel_name = Ident::new(&format!("{}_stratum", stratum_name), stratum_name.span());
+   parse2(quote_spanned! {stratum_name.span()=>
+      relation #hole_rel_name (&'static str);
+   }).unwrap()
+}
+
+fn stratum_path_to_rules(hole_path: &StratumPath, relations: &Vec<RelationNode>) -> Vec<RuleNode> {
+   let hole_rel_name = Ident::new(
+      &format!("{}_stratum", hole_path.hole_name), hole_path.hole_name.span());
+   // TODO: add error handling 
+   let mut input_rel_arity = 0;
+   for rel in relations.iter() {
+      if rel.name == hole_path.rel_name {
+         input_rel_arity = rel.field_types.len();
+         break;
+      }
+   }
+   let default_args = (0..input_rel_arity).into_iter()
+      .map(|_| quote! {Default::default()})
+      .collect_vec();
+   let input_rel_name = hole_path.rel_name.clone();
+
+   let relnode_in : RuleNode = syn::parse2(
+      quote_spanned! { hole_path.hole_name.span() =>
+         #hole_rel_name ("") <-- #input_rel_name #(#default_args)*, if false;
+      }).unwrap();
+   let relnode_out : RuleNode = syn::parse2(
+      quote_spanned! { hole_path.hole_name.span() =>
+         #input_rel_name #(#default_args)* <-- #hole_rel_name (""), , if false;
+      }).unwrap();
+   vec![relnode_in, relnode_out]
+}
+
+fn desugar_subquery(subquery: &SubQueryNode) -> Vec<BodyItemNode> {
+   let sub_db_name = &subquery.name;
+   let db_type = &subquery.query_type;
+   let init_args = subquery.query_init.iter().map(|arg| {
+      let arg_name = &arg.rel;
+      let arg_v = &arg.arg;
+      quote_spanned! {arg_name.span() => #arg_name: #arg_v}
+   }).collect::<Vec<_>>();
+   let create_query_db : BodyItemNode = if init_args.len() != 0 { syn::parse2(
+      quote_spanned! {sub_db_name.span() =>
+         let mut #sub_db_name = #db_type {
+            #(#init_args),*
+            , ..Default::default()
+         }
+      }).unwrap()
+   } else { syn::parse2(
+      quote_spanned! {sub_db_name.span() =>
+         let mut #sub_db_name = #db_type::default()
+      }).unwrap()
+   };
+   let run_args = &subquery.query_extern_db;
+   let run_db : BodyItemNode = syn::parse2(
+      quote_spanned! {sub_db_name.span() =>
+         let _ = #sub_db_name.run(#run_args)
+      }).unwrap();
+   vec![create_query_db, run_db]
+}
+
+fn desugar_subquery_runs(rules: &Vec<RuleNode>) -> Vec<RuleNode> {
+   let mut res = vec![];
+   for rule in rules {
+      let mut new_body_items = vec![];
+      for bi in rule.body_items.iter() {
+         match bi {
+            BodyItemNode::SubQuery(sq) => {
+               new_body_items.extend(desugar_subquery(&sq));
+            },
+            _ => new_body_items.push(bi.clone())
+         }
+      }
+      res.push(RuleNode{
+         head_clauses: rule.head_clauses.clone(),
+         body_items: new_body_items});
+   }
+   res
+}
  
  pub(crate) fn desugar_ascent_program(mut prog: AscentProgram) -> Result<AscentProgram> {
-    let macros = prog.macros.iter().map(|m| (m.name.clone(), m)).collect::<HashMap<_,_>>();
+    let macros = &prog.macros.iter().map(|m| (m.name.clone(), m)).collect::<HashMap<_,_>>(); 
  
     for invoke in prog.macro_invocs.iter() {
        let mac_def = macros.get(invoke.mac.path.get_ident().unwrap())
@@ -848,14 +929,26 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
        prog.relations.extend(expanded_prog.relations);
     }
  
-    let rules_macro_expanded = 
+    let mut rules_macro_expanded = 
        prog.rules.into_iter()
        .map(|r| rule_expand_macro_invocations(r, &macros))
        .collect::<Result<Vec<_>>>()?;
+     rules_macro_expanded = desugar_subquery_runs(&rules_macro_expanded);
  
-    let relation_from_functions = prog.functions.into_iter()
+    let relation_from_functions = prog.functions.iter()
        .flat_map(desugar_function)
        .collect_vec();
+    let relation_from_hole = prog.stratum_paths.iter()
+      .map(|w| w.rel_name.clone())
+      .dedup()
+      .map(|w| add_stratum(&w))
+      .collect_vec();
+    prog.relations.extend(relation_from_hole);
+    let rule_from_hole = prog.stratum_paths.iter()
+      .flat_map(|w| stratum_path_to_rules(w, &prog.relations))
+      .collect_vec();
+    rules_macro_expanded.extend(rule_from_hole); 
+
     prog.relations.extend(relation_from_functions);
     prog.functions = vec![];
     prog.relations = prog.relations.into_iter()

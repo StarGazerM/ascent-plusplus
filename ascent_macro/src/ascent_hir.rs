@@ -16,6 +16,7 @@ pub(crate) struct AscentConfig {
    pub include_rule_times: bool,
    pub generate_run_partial: bool,
    pub inter_rule_parallelism: bool,
+   // pub stream_processing: bool,
    pub default_ds: DsAttributeContents,
 }
 
@@ -23,6 +24,7 @@ impl AscentConfig {
    const MEASURE_RULE_TIMES_ATTR: &'static str = "measure_rule_times";
    const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
+   // const STREAM_PROCESSING_ATTR: &'static str = "stream_processing";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
       let include_rule_times = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::MEASURE_RULE_TIMES_ATTR))
@@ -31,6 +33,8 @@ impl AscentConfig {
          .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
       let inter_rule_parallelism = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::INTER_RULE_PARALLELISM_ATTR))
          .map(|attr| attr.meta.require_path_only()).transpose()?;
+      // let stream_processing = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::STREAM_PROCESSING_ATTR))
+      //    .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
 
       let recognized_attrs = 
          [Self::MEASURE_RULE_TIMES_ATTR, Self::GENERATE_RUN_TIMEOUT_ATTR, Self::INTER_RULE_PARALLELISM_ATTR, REL_DS_ATTR];
@@ -52,10 +56,26 @@ impl AscentConfig {
          attrs,
          include_rule_times,
          generate_run_partial,
+         // stream_processing,
          default_ds
       })
    }
 }
+
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub(crate) struct IrExternDB {
+   pub db_type: Ident,
+   pub db_name: Ident,
+   pub db_args: Vec<Expr>,
+   pub mut_flag: bool,
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub(crate) struct IrExternArg {
+   pub name: Ident,
+   pub ty: Type,
+}
+
 
 pub(crate) struct AscentIr {
    pub relations_ir_relations: HashMap<RelationIdentity, HashSet<IrRelation>>,
@@ -64,8 +84,11 @@ pub(crate) struct AscentIr {
    // pub relations_no_indices: HashMap<RelationIdentity, IrRelation>,
    pub relations_metadata: HashMap<RelationIdentity, RelationMetadata>,
    pub rules: Vec<IrRule>,
+   pub extern_dbs: Vec<IrExternDB>, 
+   pub extern_args: Vec<IrExternArg>,
    pub signatures: Signatures,
    pub config: AscentConfig,
+   pub io: AscentIO,
    pub is_parallel: bool,
 }
 
@@ -103,6 +126,7 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
 #[derive(Clone)]
 pub(crate) struct IrHeadClause{
    pub rel : RelationIdentity,
+   pub extern_db_name: Option<Ident>,
    pub args : Vec<Expr>,
    pub span: Span,
    pub args_span: Span,
@@ -132,10 +156,12 @@ impl IrBodyItem {
 #[derive(Clone)]
 pub(crate) struct IrBodyClause {
    pub rel : IrRelation,
+   pub extern_db_name: Option<Ident>,
    pub args : Vec<Expr>,
    pub rel_args_span: Span,
    pub args_span: Span,
-   pub cond_clauses : Vec<CondClause>
+   pub cond_clauses : Vec<CondClause>,
+   pub froce_delta: bool
 }
 
 impl IrBodyClause {
@@ -152,6 +178,7 @@ pub(crate) struct IrAggClause {
    pub aggregator: Expr,
    pub bound_args: Vec<Ident>,
    pub rel: IrRelation,
+   pub extern_db_name: Option<Ident>,
    pub rel_args: Vec<Expr>
 }
 
@@ -167,6 +194,12 @@ pub(crate) struct IrRelation {
 pub enum IndexValType {
    Reference,
    Direct(Vec<usize>)
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct AscentIO {
+   pub ins : Vec<RelationIdentity>,
+   pub outs: Vec<RelationIdentity>,
 }
 
 impl IrRelation {
@@ -209,7 +242,101 @@ impl IrRelation {
 const REL_DS_ATTR: &str = "ds";
 const RECOGNIIZED_REL_ATTRS: [&str; 1] = [REL_DS_ATTR];
 
+// fn token_steam_contains(tokens: &TokenStream, ident: &Ident) -> bool {
+//    tokens.to_string().contains(ident.to_string().as_str())
+// }
+
+// fn compute_body_item_dep(body_items: Vec<BodyItemNode>) -> Vec<(usize, usize)> {
+//    let mut dep = vec![];
+//    for (i, bitem) in body_items.iter().enumerate() {
+//       if let BodyItemNode::Clause(bcl) = bitem {
+//          let bcl_args =
+//             bcl.args.iter().cloned()
+//             .filter_map(|arg| {
+//                match &arg  {
+//                 BodyClauseArg::Pat(_) => {None},
+//                 BodyClauseArg::Expr(expr) => {expr_to_ident(expr)},
+//                }
+//             })
+//             .collect::<Vec<_>>();
+//          // check all other clauses, if it's arguements are used in any other clause
+//          // if ture meanwhile
+//          // - other clause is a clause, then its bidirectional dependency
+//          // - other clause is a generator, then it depends on the clause
+//          // - other clause is a agg/neg, then that clause depends on this clause
+//          // - other clause is a cond, then that clause depends on this clause
+//          for (j, other_bitem) in body_items.iter().enumerate() {
+//             if i == j {
+//                continue;
+//             }
+//             match other_bitem {
+//                BodyItemNode::Clause(other_bcl) => {
+//                   if other_bcl.args.iter().any(|arg| {
+//                      token_steam_contains(&arg.to_token_stream(), &bcl.rel)
+//                   }) {
+//                      dep.push((i, j));
+//                      dep.push((j, i));
+//                   }
+//                },
+//                BodyItemNode::Generator(gen) => {
+//                   if token_steam_contains(&gen.pattern.to_token_stream(), &bcl.rel) {
+//                      dep.push((j, i));
+//                   }
+//                },
+//                BodyItemNode::Agg(agg) => {
+//                   if agg.bound_args.iter().any(|arg| bcl_args.contains(arg)) {
+//                      dep.push((j, i));
+//                   } else if agg.rel_args.iter().any(|arg| {
+//                      token_steam_contains(&arg.to_token_stream(), &bcl.rel)
+//                   }) {
+//                      dep.push((i, j));
+//                   }
+//                },
+//                BodyItemNode::Cond(cond) => {
+//                   if cond.bound_vars().iter().any(|v| bcl_args.contains(v)) {
+//                      dep.push((j, i));
+//                   } else if token_steam_contains(&cond.expr().to_token_stream(), &bcl.rel) {
+//                      dep.push((i, j));
+//                   }
+//                },
+//                // BodyItemNode::Negation(negation_clause_node) => todo!(),
+//                _ => { 
+//                   // these should already been desugared
+//                }
+//             }
+//          }
+
+//       }
+//    }
+//    dep
+// }
+
+
 pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: bool) -> syn::Result<AscentIr>{
+   // all relations in the body are dynamic
+   let mut dynamic_relation_idents = HashSet::new();
+   for rule in prog.rules.iter(){
+      for bitem in rule.head_clauses.iter() {
+         match &bitem {
+            crate::ascent_syntax::HeadItemNode::MacroInvocation(_) => {},
+            crate::ascent_syntax::HeadItemNode::HeadFuctionReturn(_) => {},
+            crate::ascent_syntax::HeadItemNode::HeadClause(head_clause_node) => {
+               dynamic_relation_idents.insert(head_clause_node.rel.clone());
+            }
+         }
+      }
+   }
+
+   // enumerate all different order version of rules
+   // let mut all_order_rules = vec![];
+   // for rule in prog.rules.iter(){
+   //    let body_items = rule.body_items.clone();
+   //    let dep = compute_body_item_dep(body_items.clone());
+   //    // create digraph from dep
+   //    let mut rule_graph =
+      
+   // }
+
    let ir_rules : Vec<(IrRule, Vec<IrRelation>)> = prog.rules.iter().map(|r| compile_rule_to_ir_rule(r, prog)).try_collect()?;
    let config = AscentConfig::new(prog.attributes.clone(), is_parallel)?;
    let num_relations = prog.relations.len();
@@ -267,7 +394,53 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
          relations_ir_relations.entry(extra_rel.relation.clone()).or_default().insert(extra_rel.clone());
       }
    }
+   for extra_index in &prog.extra_indices {
+      let rel = prog.relations.iter().find(|r| &extra_index.rel_name == &r.name).unwrap();
+      let rel_identity = RelationIdentity::from(rel);
+      let indices : Vec<usize> =
+         extra_index.arg_pos.iter()
+         .map(|i| i.base10_parse().unwrap())
+         .collect_vec();
+      let ir_rel = IrRelation::new(rel_identity.clone(), indices, rel.need_id);
+      relations_ir_relations.entry(rel_identity.clone()).or_default().insert(ir_rel.clone());
+   }
+
+   // pick out io relations
+   let mut ins_rel = vec![];
+   for i in prog.in_streams.iter() {
+      let rel = prog.relations.iter().find(|r| &i.rel_name == &r.name);
+      let rel = match rel {
+         Some(rel) => rel,
+         None => return Err(Error::new(i.rel_name.span(), format!("Input Relation {} not defined", i.rel_name))),
+      };
+      ins_rel.push(RelationIdentity::from(rel));
+   }
+   let mut outs_rel = vec![];
+   for o in prog.out_streams.iter() {
+      let rel = prog.relations.iter().find(|r| &o.rel_name == &r.name);
+      let rel = match rel {
+         Some(rel) => rel,
+         None => return Err(Error::new(o.rel_name.span(), format!("Output Relation {} not defined", o.rel_name))),
+      };
+      outs_rel.push(RelationIdentity::from(rel));
+   }
+
+   let io = AscentIO {
+      ins: ins_rel,
+      outs: outs_rel,
+   };
+
    let signatures = prog.signatures.clone().unwrap_or_else(|| parse2(quote! {pub struct AscentProgram;}).unwrap());
+   let extern_dbs = prog.extern_dbs.iter().map(|db| IrExternDB {
+      db_type: db.db_type.clone(),
+      db_name: db.db_name.clone(),
+      db_args: db.args.iter().cloned().collect(),
+      mut_flag: db.mutable.is_some(),
+   }).collect();
+   let extern_args = prog.extern_args.iter().map(|arg| IrExternArg {
+      name: arg.arg_name.clone(),
+      ty: arg.arg_type.clone(),
+   }).collect();
    Ok(AscentIr {
       rules: ir_rules.into_iter().map(|(rule, _extra_rels)| rule).collect_vec(),
       relations_ir_relations,
@@ -276,6 +449,9 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       relations_metadata,
       // relations_no_indices,
       signatures,
+      extern_dbs,
+      extern_args,
+      io,
       config,
       is_parallel
    })
@@ -368,10 +544,12 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
             let ir_rel = IrRelation::new(relation.into(), indices, relation.need_id);
             let ir_bcl = IrBodyClause {
                rel: ir_rel,
+               extern_db_name: bcl.extern_db_name.clone(),
                args: bcl.args.iter().cloned().map(BodyClauseArg::unwrap_expr).collect(),
                rel_args_span: bcl.rel.span().join(bcl.args.span()).unwrap_or_else(|| bcl.rel.span()),
                args_span: bcl.args.span(),
-               cond_clauses: bcl.cond_clauses.clone()
+               cond_clauses: bcl.cond_clauses.clone(),
+               froce_delta: bcl.delta_flag
             };
             body_items.push(IrBodyItem::Clause(ir_bcl));
          },
@@ -404,6 +582,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                aggregator: agg.aggregator.get_expr(),
                bound_args: agg.bound_args.iter().cloned().collect_vec(),
                rel: ir_rel,
+               extern_db_name: agg.extern_db_name.clone(),
                rel_args: agg.rel_args.iter().cloned().collect_vec(),
             };
             body_items.push(IrBodyItem::Agg(ir_agg_clause));
@@ -424,6 +603,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
       
       let head_clause = IrHeadClause {
          rel: rel_identity,
+         extern_db_name: hcl_node.extern_db_name.clone(),
          args : hcl_node.args.iter().cloned().collect(),
          span: hcl_node.span(),
          args_span: hcl_node.args.span(),

@@ -38,6 +38,10 @@ pub trait Lattice: PartialOrd + Sized {
       self.join_mut(other);
       self
    }
+
+   fn is_positive(&self) -> bool {
+      true
+   }
 }
 
 pub trait BoundedLattice: Lattice {

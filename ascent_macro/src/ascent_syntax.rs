@@ -1,7 +1,7 @@
 #![deny(warnings)]
 extern crate proc_macro;
 use proc_macro2::TokenStream;
-use syn::{ImplGenerics, TypeGenerics};
+use syn::{bracketed, ImplGenerics, LitInt, TypeGenerics};
 use syn::{
    braced, parenthesized, parse2, punctuated::Punctuated, spanned::Spanned, Attribute, Error, Expr,
    Generics, Ident, Pat, Result, Token, Type, Visibility,
@@ -29,6 +29,11 @@ mod kw {
    syn::custom_keyword!(lattice);
    syn::custom_keyword!(function);
    syn::custom_keyword!(provenance);
+   syn::custom_keyword!(index);
+   syn::custom_keyword!(database);
+   syn::custom_keyword!(arguement);
+   syn::custom_keyword!(delta);
+   syn::custom_keyword!(stratum);
    syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
    syn::custom_keyword!(agg);
@@ -105,6 +110,68 @@ fn parse_generics_with_where_clause(input: ParseStream) -> Result<Generics> {
    Ok(res)
 }
 
+#[derive(Clone, Parse)]
+pub struct ExternDatabase {
+   pub _extern_kw: Token![extern],
+   pub _database: kw::database,
+   pub mutable: Option<Token![mut]>,
+   pub db_type: Ident,
+   pub db_name: Ident,
+   #[paren]
+   pub _arg_pos_paren: syn::token::Paren,
+   #[inside(_arg_pos_paren)]
+   #[call(Punctuated::parse_terminated)]
+   pub args: Punctuated<Expr, Token![,]>,
+   pub _semi_colon: Token![;],
+}
+
+#[derive(Clone, Parse)]
+pub struct ExternArgument {
+   pub _extern_kw: Token![extern],
+   pub _arguement: kw::arguement,
+   pub _mutable: Option<Token![mut]>,
+   pub arg_type: Type,
+   pub arg_name: Ident,
+   pub _semi_colon: Token![;],
+}
+
+
+#[derive(Clone, Parse)]
+pub struct ExtraIndex {
+   pub _index_kw: kw::index,
+   pub rel_name: Ident,
+   #[paren]
+   pub _arg_pos_paren: syn::token::Paren,
+   #[inside(_arg_pos_paren)]
+   #[call(Punctuated::parse_terminated)]
+   pub arg_pos: Punctuated<LitInt, Token![,]>,
+   pub _semi_colon: Token![;],
+}
+
+#[derive(Clone, Parse)]
+pub struct InStream {
+   pub _input_kw: Token![await],
+   pub rel_name: Ident,
+   pub _semi_colon: Token![;],
+}
+
+#[derive(Clone, Parse)]
+pub struct OutStream {
+   pub _output_kw: Token![yield],
+   pub rel_name: Ident,
+   pub _semi_colon: Token![;],
+}
+
+
+#[derive(Clone, Parse)]
+pub struct StratumPath {
+   pub _stratum_kw: kw::stratum,
+   pub hole_name: Ident,
+   pub _kw_arrow: kw::LongLeftArrow,
+   pub rel_name: Ident,
+   pub _semi_colon: Token![;],
+}
+
 pub struct FunctionNode {
    pub attrs: Vec<Attribute>,
    pub name: Ident,
@@ -137,14 +204,22 @@ pub struct RelationNode{
    pub name: Ident,
    pub field_types : Punctuated<Type, Token![,]>,
    pub initialization: Option<Expr>,
+   pub source_db: Option<Ident>,
    pub _semi_colon: Token![;],
    pub is_lattice: bool,
    pub need_id: bool,
-   pub need_delete: bool,
+   pub is_hole: bool,
+   pub is_input: bool,
    // pub is_function: bool,
 }
 impl Parse for RelationNode {
    fn parse(input: ParseStream) -> Result<Self> {
+      let is_input = if input.peek(Token![extern]) {
+         input.parse::<Token![extern]>()?;
+         true
+      } else {
+         false
+      };
       let is_lattice = input.peek(kw::lattice);
       let is_function = input.peek(kw::function);
       let need_delete = is_function;
@@ -160,6 +235,8 @@ impl Parse for RelationNode {
          true
       } else {false};
       let name : Ident = input.parse()?;
+      // check if name contains "_stratum"
+      let is_hole = name.to_string().contains("_stratum");
       let content;
       parenthesized!(content in input);
       let field_types = content.parse_terminated(Type::parse, Token![,])?;
@@ -168,13 +245,21 @@ impl Parse for RelationNode {
          Some(input.parse::<Expr>()?)
       } else {None};
 
+      let source_db : Option<Ident>;
+      if input.peek(Token![in]) {
+         input.parse::<Token![in]>()?;
+         source_db = Some(input.parse()?);
+      } else {
+         source_db = None;
+      };
+
       let _semi_colon = input.parse::<Token![;]>()?;
       if is_lattice && field_types.empty_or_trailing() {
          return Err(input.error("empty lattice is not allowed"));
       }
       Ok(RelationNode{
-         attrs: vec![], name, field_types, _semi_colon, is_lattice,
-         initialization, need_id, need_delete,
+         attrs: vec![], name, field_types, source_db, _semi_colon, is_lattice,
+         initialization, need_id, is_hole, is_input
          // is_function
       })
    }
@@ -186,6 +271,8 @@ pub enum BodyItemNode {
    Generator(GeneratorNode),
    #[peek(kw::agg, name = "aggregate clause")]
    Agg(AggClauseNode),
+   #[peek(Token![do], name = "subquery")]
+   SubQuery(SubQueryNode),
    #[peek_with(peek_macro_invocation, name = "macro invocation")]
    MacroInvocation(syn::ExprMacro),
    #[peek(Ident, name = "body clause")]
@@ -212,6 +299,40 @@ fn peek_clause_head(parse_stream: ParseStream) -> bool {
  
 fn peek_if_or_let(parse_stream: ParseStream) -> bool {
    parse_stream.peek(Token![if]) || parse_stream.peek(Token![let])
+}
+
+
+#[derive(Clone, Parse)]
+pub struct SubQueryInitArg {
+   pub rel: Ident,
+   pub _colon: Token![:],
+   pub arg: Expr,
+}
+
+// syntax sugar subquery
+#[derive(Clone)]
+pub struct SubQueryNode {
+   pub name: Ident,
+   pub query_type : Ident,
+   pub query_init : Punctuated<SubQueryInitArg, Token![,]>,
+   pub query_extern_db: Punctuated<Expr, Token![,]>,
+}
+
+impl Parse for SubQueryNode {
+   fn parse(input: ParseStream) -> Result<Self> {
+      let _ = input.parse::<Token![do]>()?;
+      let name = input.parse()?;
+      let _ : Token![:] = input.parse()?;
+      let query_type = input.parse()?;
+      let query_init;
+      // use curly braces to parse the subquery init
+      braced!(query_init in input);
+      let query_init = query_init.parse_terminated(SubQueryInitArg::parse, Token![,])?;
+      let query_extern_db;
+      parenthesized!(query_extern_db in input);
+      let query_extern_db = query_extern_db.parse_terminated(Expr::parse, Token![,])?;
+      Ok(SubQueryNode{name, query_type, query_init, query_extern_db})
+   }
 }
 
 #[derive(Clone)]
@@ -276,9 +397,11 @@ pub struct GeneratorNode {
 #[derive(Clone)]
 pub struct BodyClauseNode {
    pub rel : Ident,
+   pub extern_db_name: Option<Ident>,
    pub args : Punctuated<BodyClauseArg, Token![,]>,
    pub cond_clauses: Vec<CondClause>,
    pub id_var : Option<Expr>,
+   pub delta_flag: bool,
 }
 
 #[derive(Parse, Clone, PartialEq, Eq, Debug)]
@@ -409,7 +532,22 @@ impl Parse for CondClause {
 
 impl Parse for BodyClauseNode{
    fn parse(input: ParseStream) -> Result<Self> {
-      let rel : Ident = input.parse()?;
+      let delta_flag = input.peek(kw::delta);
+      if delta_flag {
+         input.parse::<kw::delta>()?;
+      }
+      // let rel : Ident = input.parse()?;
+      let rel : Ident;
+      let extern_db_name;
+      if input.peek2(Token![.]) {
+         let db_name = input.parse::<Ident>()?;
+         input.parse::<Token![.]>()?;
+         rel = input.parse::<Ident>()?;
+         extern_db_name = Some(db_name);
+      } else {
+         rel = input.parse::<Ident>()?;
+         extern_db_name = None;
+      }
       let args_content;
       parenthesized!(args_content in input);
       let args = args_content.parse_terminated(BodyClauseArg::parse, Token![,])?;
@@ -422,7 +560,7 @@ impl Parse for BodyClauseNode{
       while let Ok(cl) = input.parse(){
          cond_clauses.push(cl);
       }
-      Ok(BodyClauseNode{rel, args, cond_clauses, id_var})
+      Ok(BodyClauseNode{rel, extern_db_name, args, cond_clauses, id_var, delta_flag})
    }
 }
 
@@ -461,6 +599,7 @@ impl HeadItemNode {
 #[derive(Clone)]
 pub struct HeadClauseNode {
    pub rel : Ident,
+   pub extern_db_name: Option<Ident>,
    pub args : Punctuated<Expr, Token![,]>,
    pub required_flag: bool,
    pub id_name: Option<Ident>,
@@ -507,12 +646,19 @@ impl Parse for HeadClauseNode{
       if input.peek(Token![~]) {
          delete_flag = true;
          input.parse::<Token![~]>()?;
-      }  
-      let rel : Ident = input.parse()?;
+      }
+      let mut rel : Ident = input.parse()?;
+      let mut extern_db_name = None;
+      if input.peek(Token![.]) {
+         extern_db_name = Some(rel);
+         input.parse::<Token![.]>()?;
+         rel = input.parse::<Ident>()?;
+         // return Err(input.error("unexpected '.'"));
+      }
       let args_content;
       parenthesized!(args_content in input);
       let args = args_content.parse_terminated(Expr::parse, Token![,])?;
-      Ok(HeadClauseNode{rel, args, required_flag, id_name, delete_flag, exists_var})
+      Ok(HeadClauseNode{rel, extern_db_name, args, required_flag, id_name, delete_flag, exists_var})
    }
 }
 
@@ -530,6 +676,8 @@ pub struct AggClauseNode {
    pub bound_args: Punctuated<Ident, Token![,]>,
    pub _in_kw: Token![in],
    pub rel : Ident,
+   pub _dot: Option<Token![.]>,
+   pub extern_db_name: Option<Ident>,
    #[paren]
    _rel_arg_paren: syn::token::Paren,
    #[inside(_rel_arg_paren)]
@@ -609,6 +757,7 @@ pub(crate) fn rule_node_summary(rule: &RuleNode) -> String {
          BodyItemNode::Negation(neg) => format!("! {}", neg.rel),
          BodyItemNode::MacroInvocation(m) => format!("{:?}!(..)", m.mac.path),
          BodyItemNode::FunctionCall(f) => format!("%{} -> {:?}", f.name, f.return_var),
+         BodyItemNode::SubQuery(sub_query_node) => format!("subquery {} ...", sub_query_node.name),
       }
    }
    fn hitem_to_str(hitem: &HeadItemNode) -> String {
@@ -665,7 +814,13 @@ pub(crate) struct AscentProgram {
    pub attributes: Vec<syn::Attribute>,
    pub macros: Vec<MacroDefNode>,
    pub macro_invocs: Vec<syn::ExprMacro>,
-   pub functions: Vec<FunctionNode>
+   pub functions: Vec<FunctionNode>,
+   pub extern_dbs: Vec<ExternDatabase>,
+   pub extern_args: Vec<ExternArgument>,
+   pub extra_indices: Vec<ExtraIndex>,
+   pub stratum_paths: Vec<StratumPath>,
+   pub in_streams: Vec<InStream>,
+   pub out_streams: Vec<OutStream>,
 }
 
 impl Parse for AscentProgram {
@@ -681,15 +836,46 @@ impl Parse for AscentProgram {
       };
       let mut rules = vec![];
       let mut relations = vec![];
+      let mut extern_dbs = vec![];
+      let mut extern_args = vec![];
+      let mut extra_indices = vec![];
       let mut functions = vec![];
       let mut macros = vec![];
       let mut macro_invocs = vec![];
+      let mut stratum_paths = vec![];
+      let mut in_streams = vec![];
+      let mut out_streams = vec![];
       while !input.is_empty() {
          let attrs = if !struct_attrs.is_empty() {std::mem::take(&mut struct_attrs)} else {Attribute::parse_outer(input)?};
          if input.peek(kw::relation) || input.peek(kw::lattice){
             let mut relation_node = RelationNode::parse(input)?;
             relation_node.attrs = attrs;
             relations.push(relation_node);
+         } else if input.peek(Token![extern]) {
+            if input.peek2(kw::database) {
+               let extern_db = ExternDatabase::parse(input)?;
+               extern_dbs.push(extern_db);
+            } else if input.peek2(kw::arguement) {
+               let extern_arg = ExternArgument::parse(input)?;
+               extern_args.push(extern_arg);
+            } else {
+               let mut relation_node = RelationNode::parse(input)?;
+               relation_node.attrs = attrs;
+               relation_node.is_input = true;
+               relations.push(relation_node);
+            }
+         } else if input.peek(Token![await]) {
+            let in_stream = InStream::parse(input)?;
+            in_streams.push(in_stream);
+         } else if input.peek(Token![yield]) {
+            let out_stream = OutStream::parse(input)?;
+            out_streams.push(out_stream);
+         } else if input.peek(kw::stratum) {
+            let stratum_path = StratumPath::parse(input)?;
+            stratum_paths.push(stratum_path);
+         } else if input.peek(kw::index) {
+            let extra_index = ExtraIndex::parse(input)?;
+            extra_indices.push(extra_index);
          } else if input.peek(kw::function) {
             let mut function_node = FunctionNode::parse(input)?;
             function_node.attrs = attrs;
@@ -711,7 +897,11 @@ impl Parse for AscentProgram {
             rules.push(RuleNode::parse(input)?);
          }
       }
-      Ok(AscentProgram{rules, relations, signatures, attributes, macros, macro_invocs, functions})
+      Ok(AscentProgram{
+         rules, relations, signatures, attributes, macros, macro_invocs,
+         functions, extern_dbs, extern_args, extra_indices, stratum_paths,
+         in_streams, out_streams
+      })
    }
 }
 
@@ -719,9 +909,11 @@ impl Parse for AscentProgram {
 pub(crate) struct RelationIdentity {
    pub name: Ident,
    pub field_types: Vec<Type>,
+   pub extern_db_name: Option<Ident>,
    pub is_lattice: bool,
    pub need_id: bool,
-   pub need_delete: bool,
+   pub is_hole: bool,
+   pub is_input: bool,
 }
 
 impl From<&RelationNode> for RelationIdentity{
@@ -729,9 +921,11 @@ impl From<&RelationNode> for RelationIdentity{
       RelationIdentity {
          name: relation_node.name.clone(),
          field_types: relation_node.field_types.iter().cloned().collect(),
+         extern_db_name: relation_node.source_db.clone(),
          is_lattice: relation_node.is_lattice,
          need_id: relation_node.need_id,
-         need_delete: relation_node.need_delete,
+         is_hole: relation_node.is_hole,
+         is_input: relation_node.is_input,
       }
    }
 } 
@@ -756,6 +950,38 @@ impl Parse for DsAttributeContents {
       };
 
       Ok(Self { path, args })
+   }
+}
+
+
+#[derive(Clone, Debug)]
+pub(crate) struct AscentCall {
+   // parened path list
+   pub used_paths: Punctuated<syn::ExprPath, Token![,]>,
+   pub ascent_macro: Ident,
+   pub code: TokenStream,
+}
+
+impl Parse for AscentCall {
+   fn parse(input: ParseStream) -> Result<Self> {
+      let ascent_macro = input.parse()?;
+      // parse the bang
+      let _ = input.parse::<Token![!]>()?;
+      let content;
+      braced!(content in input);
+      let used_paths;
+      if content.peek(Token![use]) {
+         content.parse::<Token![use]>()?;
+         let pt;
+         bracketed!(pt in content);
+         used_paths = pt.parse_terminated(syn::ExprPath::parse, Token![,])?;   
+         content.parse::<Token![;]>()?; 
+      } else {
+         used_paths = Punctuated::default();
+      }
+      
+      let code = content.parse()?;
+      Ok(AscentCall { used_paths, ascent_macro, code })
    }
 }
 

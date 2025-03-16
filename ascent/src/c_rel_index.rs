@@ -137,7 +137,12 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a> RelIndexRead<'a> for CRelIndex<K, V> 
       let sample_size = 4;
       let shards = self.unwrap_frozen().shards();
       let (count, sum) = shards.iter().take(sample_size).fold((0, 0), |(c, s), shard| (c + 1, s + shard.read().len()));
-      sum * shards.len() / count
+      let res = sum * shards.len() / count;
+      if res == 0 && !self.unwrap_frozen().is_empty() {
+         self.unwrap_frozen().len()
+      } else {
+         res
+      }
    }
 }
 

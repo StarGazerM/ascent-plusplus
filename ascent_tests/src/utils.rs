@@ -24,3 +24,24 @@ macro_rules! assert_rels_eq {
       }
    };
 }
+
+
+use ascent::{ascent_export, ascent_use, ascent, ascent_no_expand};
+
+ascent! {
+   pub struct TC;
+
+   relation edge(i32, i32);
+   relation path(i32, i32);
+   index path (0, 1);
+
+   path(x, y) <-- edge(x, y);
+   path(x, y) <-- path(x, z), edge(z, y);
+}
+
+
+#[ascent_export(ExtTC)]
+ascent_no_expand! {
+   relation path(i32, i32) in TC;
+}
+

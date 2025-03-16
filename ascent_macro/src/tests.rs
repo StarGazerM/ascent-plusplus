@@ -258,7 +258,7 @@ fn test_macro_agg() {
          foo(x),
          agg min_z = min(z) in bar(x, _, z);
    };
-   write_to_scratchpad(inp);
+   write_par_to_scratchpad(inp);
 }
 
 #[test]
@@ -345,6 +345,27 @@ fn test_macro_lattices(){
    };
    // write_to_scratchpad(input);
    write_par_to_scratchpad(input);
+}
+
+#[test]
+fn test_simple() {
+   let input = quote! {
+      relation bar(i32, i32);
+      relation foo(i32, i32);
+      relation baz(i32, i32);
+
+      foo(1, 2);
+      foo(10, 2);
+      bar(2, 3);
+      bar(2, 1);
+
+      baz(*x, *z) <-- foo(x, y) if *x != 10, bar(y, ?z) if *z < 4, if x != z;
+      
+      baz(*x, *z) <-- foo(x, y) if *x != 10, bar(y, z) if *z * x != 444, if x != z;
+      foo(*x, *y), bar(*x, *y) <-- baz(x, y);
+   };
+
+   write_to_scratchpad(input);
 }
 
 #[test]
@@ -471,8 +492,11 @@ fn exp_items_in_fn(){
 }
 
 fn write_to_scratchpad_base(tokens: TokenStream, prefix: TokenStream, is_ascent_run: bool, is_parallel: bool) -> TokenStream {
-   let code = ascent_impl(tokens, is_ascent_run, is_parallel);
-   let code = code.unwrap();
+   let code = ascent_impl(tokens, is_ascent_run, is_parallel).unwrap();
+   let code = quote! {
+      #prefix
+      #code
+   };
    let template = std::fs::read_to_string("src/scratchpad_template.rs").unwrap();
    let code_in_template = template.replace("todo!(\"here\");", &code.to_string());
    std::fs::write("src/scratchpad.rs", prefix.to_string()).unwrap();
@@ -485,6 +509,11 @@ fn write_to_scratchpad(tokens: TokenStream) -> TokenStream {
    write_to_scratchpad_base(tokens, quote!{}, false, false)
 }
 
+fn write_duo_to_scratchpad(tokens1: TokenStream, tokens2: TokenStream) -> TokenStream {
+   let p2 = ascent_impl(tokens2, false, false).unwrap();
+   write_to_scratchpad_base(tokens1, p2, false, false)
+}
+
 fn write_with_prefix_to_scratchpad(tokens: TokenStream, prefix: TokenStream) -> TokenStream {
    write_to_scratchpad_base(tokens, prefix, false, false)
 }
@@ -492,6 +521,12 @@ fn write_with_prefix_to_scratchpad(tokens: TokenStream, prefix: TokenStream) -> 
 fn write_par_to_scratchpad(tokens: TokenStream) -> TokenStream {
    write_to_scratchpad_base(tokens, quote!{}, false, true)
 }
+
+fn write_duo_par_to_scratchpad(tokens1: TokenStream, tokens2: TokenStream) -> TokenStream {
+   let p2 = ascent_impl(tokens2, false, true).unwrap();
+   write_to_scratchpad_base(tokens1, p2, false, true)
+}
+
 
 #[allow(unused)]
 fn write_ascent_run_to_scratchpad(tokens: TokenStream) -> TokenStream {
@@ -643,3 +678,209 @@ fn test_function() {
 
    write_with_prefix_to_scratchpad(inp, prefix);
 }
+
+#[test]
+fn test_macro_lattices_slow () {
+   let inp = quote! {
+      #![measure_rule_times]
+      lattice longest_range(usize);
+      longest_range(0);
+      // relation input_string(usize, u8);
+      // input_string(i, c) <-- for i in 1..s.len() + 1, let c = s.as_bytes()[i - 1];
+
+      // the longest range ends at i is j, inclusive
+      lattice longest_ranges_ends(usize, usize);
+
+      // case 0: "" empty is a range has size 0 
+      // init longest_range to 0
+      longest_ranges_ends(i + 1, 0) <-- for i in 0..s.len();
+
+      // case 1 : ( {range} ) is a range
+      longest_ranges_ends(i + 1, j + 2) <--
+         longest_ranges_ends(i, j),
+         if i < &s.len() && i > j, 
+         if s.as_bytes()[*i] == b')' && s.as_bytes()[i - j - 1] == b'(';
+         // input_string(i + 1, b')'),
+         // input_string(i - j, b'(');
+
+      // case 2 : {range} {range} is a range
+      // if two ranges are connected, update the later range's size
+      longest_ranges_ends(i, size1 + size2) <--
+         longest_ranges_ends(i, size1),
+         longest_ranges_ends(i - size1, size2);
+
+      longest_range(size) <-- longest_ranges_ends(_, size);
+   };
+   write_to_scratchpad(inp);
+}
+
+#[test]
+fn test_macro_delta() {
+   let inp = quote! {
+      relation foo(i32, i32);
+      relation bar(i32, i32);
+      relation baz(i32, i32);
+      relation foobar(i32, i32);
+
+      foo(a, c) <-- bar(a, b), baz(b, c), bar(a, c);
+      bar(a, c) <-- bar(a, b), baz(b, c), bar(a, c);
+      baz(a, c) <-- bar(a, b), baz(b, c), bar(a, c);
+   };
+
+   write_par_to_scratchpad(inp);
+}
+
+#[test]
+fn test_macro_incremental() {
+   let inp = quote! {
+      struct TCIncremental;
+      relation edge_incremental(i32, i32);
+      relation path_incremental(i32, i32);
+      relation edge(i32, i32);
+      relation path(i32, i32);
+      relation outside();
+
+      edge(x, y) <-- edge_incremental(x, y);
+      path(x, y) <-- path_incremental(x, y);
+      edge_incremental(x, y) <-- outside(), let x = 0, let y = 0;
+      path_incremental(x, y) <-- outside(), let x = 0, let y = 0;
+
+      path(x, y) <-- delta edge(x, y);
+      path(x, z) <-- delta path(x, y), edge(y, z);
+
+      path_incremental(x, y) <-- path(x, y);
+      edge_incremental(x, y) <-- edge(x, y);
+      outside() <-- edge(x, y);
+      outside() <-- path(x, y);
+   };
+
+   write_par_to_scratchpad(inp);
+}
+
+#[test]
+fn test_extern_database1() {
+   let inp1 = quote! {
+      struct TC;
+
+      relation edge(i32, i32);
+      relation path(i32, i32);
+      
+      index path ();
+   };
+
+   let inp2 = quote! {
+      struct ExtTest;
+      extern database TC tc();
+
+      relation edge(i32, i32);
+      relation path(i32, i32) in tc;
+      
+      edge(x, y) <-- tc.path(x, y);
+      
+   };
+
+   write_duo_to_scratchpad(inp1, inp2);
+}
+
+#[test]
+fn test_extern_database2() {
+   let inp1 = quote! {
+      struct Graph;
+
+      relation edge(i32, i32);
+      index edge (0, 1);
+   };
+
+   let inp2 = quote! {
+      struct Printer;
+
+      extern database Graph graph();
+      relation edge(i32, i32) in graph;
+
+      relation print(i32, i32);
+
+      print(x, y) <-- print(x, y), graph.edge(y, x);
+      
+   };
+
+   write_duo_par_to_scratchpad(inp1, inp2);
+}
+
+#[test]
+fn test_nest_extern_database() {
+   let inp1 = quote! {
+      struct Graph;
+
+      relation edge(i32, i32);
+      relation test(i32, i32);
+      index edge (1);
+   };
+   let inp2 = quote! {
+      struct SSSPEager;
+
+      extern database Graph graph();
+      
+      relation edge(i32, i32) in graph;
+      relation test(i32, i32) in graph;
+
+      relation do_length(i32, i32);
+
+      lattice ret(i32);
+
+      ret(1), graph.test(x, y) <-- do_length(x, y), graph.edge(x, y);
+      
+      ret(ret_val+1) <--
+         do_length(x, y),
+         do g : SSSPEager {
+            do_length : vec![(*x, *y)]
+         } (graph),
+         let ret_val = g.ret[0].0;
+   };
+   write_duo_to_scratchpad(inp1, inp2);
+}
+
+
+#[test]
+fn test_extern_arg() {
+   let inp = quote! {
+      struct Foo;
+
+      extern arguement i32 test_foo_arg;
+
+      relation foo(i32, i32);
+      relation bar(i32);
+      foo(x, test_foo_arg) <-- bar(x);
+   };
+
+   write_to_scratchpad(inp);
+}
+
+#[test]
+fn test_io() {
+   let inp = quote! {
+      relation input(i32, i32);
+      relation output(i32, i32);
+
+      await input;
+      yield output;
+
+      input(1, 2);
+      output(x, y) <-- input(x, y);
+   };
+   write_to_scratchpad(inp);
+}
+
+#[test]
+fn test_run_timeout() {
+   let input = quote! {
+      #![generate_run_timeout]
+      /// A diverging Ascent program
+      struct Diverging;
+      /// foooooooooooo
+      relation foo(u128);
+      foo(0);
+      foo(x + 1) <-- foo(x);
+   };
+   write_to_scratchpad(input);
+}
+

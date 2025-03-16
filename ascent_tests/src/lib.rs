@@ -15,7 +15,9 @@ mod example_tests;
 mod macros_tests;
 
 mod provenance;
-mod itype;
-// mod inca_codegen;
-mod dep_head;
-mod longest_palindromic;
+mod dynamic_programming;
+mod incremental;
+mod extdb;
+mod graph;
+mod io;
+mod sat;

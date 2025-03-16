@@ -8,7 +8,7 @@ use syn::{Expr, Type};
 use crate::{ascent_mir::MirRelationVersion::*, ascent_syntax::Signatures, syn_utils::pattern_get_vars};
 use crate::utils::{expr_to_ident, pat_to_ident, tuple_type, intersects};
 use crate::ascent_syntax::{CondClause, GeneratorNode, RelationIdentity};
-use crate::ascent_hir::{AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrRelation, IrRule, RelationMetadata};
+use crate::ascent_hir::{AscentConfig, AscentIO, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrExternArg, IrExternDB, IrHeadClause, IrRelation, IrRule, RelationMetadata};
 
 pub(crate) struct AscentMir {
    pub sccs: Vec<MirScc>,
@@ -19,6 +19,9 @@ pub(crate) struct AscentMir {
    pub relations_metadata: HashMap<RelationIdentity, RelationMetadata>,
    pub lattices_full_indices: HashMap<RelationIdentity, IrRelation>,
    pub signatures: Signatures,
+   pub extern_dbs: Vec<IrExternDB>,
+   pub extern_args: Vec<IrExternArg>,
+   pub io: AscentIO,
    pub config: AscentConfig,
    pub is_parallel: bool,
 }
@@ -105,6 +108,7 @@ impl MirBodyItem {
 #[derive(Clone)]
 pub(crate) struct MirBodyClause {
    pub rel: MirRelation,
+   pub extern_db_name: Option<Ident>,
    pub args: Vec<Expr>,
    pub rel_args_span: Span,
    pub args_span: Span,
@@ -126,6 +130,7 @@ impl MirBodyClause {
    pub fn from(ir_body_clause: IrBodyClause, rel: MirRelation) -> MirBodyClause{
       MirBodyClause {
          rel,
+         extern_db_name: ir_body_clause.extern_db_name,
          args: ir_body_clause.args,
          rel_args_span: ir_body_clause.rel_args_span,
          args_span: ir_body_clause.args_span,
@@ -145,9 +150,13 @@ pub(crate) struct MirRelation {
    pub val_type: IndexValType,
 }
 
-pub(crate) fn ir_relation_version_var_name(ir_name: &Ident, version : MirRelationVersion) -> Ident{
-   let name = format!("{}_{}", ir_name, version.to_string());
-   Ident::new(&name, ir_name.span())
+pub(crate) fn ir_relation_version_var_name(ir_name: &Ident, db_name: &proc_macro2::TokenStream, version : MirRelationVersion) -> proc_macro2::TokenStream{
+   let rt = Ident::new(&format!("runtime_{}", version.to_string()), ir_name.span());
+   // Ident::new(&name, ir_name.span())
+   // let _self = Ident::new("_self", ir_name.span());
+   quote_spanned! { ir_name.span() =>
+      #db_name.#rt.#ir_name
+   }
 }
 
 // pub(crate) fn ir_relation_counter(ir_name: &Ident) -> Ident{
@@ -156,8 +165,9 @@ pub(crate) fn ir_relation_version_var_name(ir_name: &Ident, version : MirRelatio
 // }
 
 impl MirRelation {
-   pub fn var_name(&self) -> Ident {
-      ir_relation_version_var_name(&self.ir_name, self.version)
+   pub fn var_name(&self) -> proc_macro2::TokenStream {
+      let db = quote! { _self };
+      ir_relation_version_var_name(&self.ir_name, &db, self.version)
    }
 
    #[allow(dead_code)]
@@ -205,6 +215,11 @@ fn get_hir_dep_graph(hir: &AscentIr) -> Vec<(usize,usize)> {
    let mut edges = vec![];
    for (i, rule) in hir.rules.iter().enumerate() {
       for bitem in rule.body_items.iter() {
+         if let IrBodyItem::Clause(bcl) = bitem {
+            if bcl.extern_db_name.is_some() {
+               continue;
+            }
+         }
          if let Some(body_rel) = bitem.rel() {
             let body_rel_identity = &body_rel.relation;
             if let Some(set) = relations_to_rules_in_head.get(body_rel_identity){
@@ -236,13 +251,15 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
       for &rule_ind in scc.iter(){
          let rule = &hir.rules[rule_ind];
          for bitem in rule.body_items.iter() {
-            if let Some(rel) = bitem.rel(){
+            if let Some(rel) = bitem.rel() {
+               if rel.relation.extern_db_name.is_some() {
+                  continue;
+               }
                body_only_relations.entry(rel.relation.clone()).or_default().insert(rel.clone());
             }
          }
 
-         for hcl in hir.rules[rule_ind].head_clauses.iter() {
-         
+         for hcl in hir.rules[rule_ind].head_clauses.iter() {        
             dynamic_relations_set.insert(hcl.rel.clone());
             dynamic_relations.entry(hcl.rel.clone()).or_default();
             // TODO why this?
@@ -303,7 +320,10 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
       lattices_full_indices: hir.lattices_full_indices.clone(),
       // relations_no_indices: hir.relations_no_indices.clone(),
       relations_metadata: hir.relations_metadata.clone(),
+      extern_dbs: hir.extern_dbs.clone(),
+      extern_args: hir.extern_args.clone(),
       signatures: hir.signatures.clone(),
+      io: hir.io.clone(),
       config: hir.config.clone(),
       is_parallel: hir.is_parallel,
    })
@@ -327,7 +347,7 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
    }
 
    // TODO is it worth it?
-   fn versions(dynamic_cls: &[usize], simple_join_start_index: Option<usize>) -> Vec<Vec<MirRelationVersion>> {
+   fn versions(dynamic_cls: &[usize], simple_join_start_index: Option<usize>, rule: &IrRule) -> Vec<Vec<MirRelationVersion>> {
       fn remove_total_delta_at_index(ind: usize, res: &mut Vec<Vec<MirRelationVersion>>) {
          let mut i = 0;
          while i < res.len() {
@@ -341,17 +361,39 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
       }
       
       let count = dynamic_cls.len();
-      let mut res = versions_base(count);
-      let no_total_delta_at_beginning = false;
-      if no_total_delta_at_beginning {
-         if let Some(ind) = simple_join_start_index {
-            remove_total_delta_at_index(ind, &mut res);
-            remove_total_delta_at_index(ind + 1, &mut res);
-         } else if dynamic_cls.get(0) == Some(&0) {
-            remove_total_delta_at_index(0, &mut res);
+      // check if any of dynamic_cls is forced to be delta
+      let mut force_cls = None;
+      for (i, n) in dynamic_cls.iter().enumerate() {
+         if let IrBodyItem::Clause(cl) = &rule.body_items[*n] {
+            if cl.froce_delta {
+               force_cls = Some(i);
+               break;
+            }
          }
       }
-      res
+      if let Some(_) = force_cls {
+         let mut select_only = Vec::new();
+         for i in 0..dynamic_cls.len() {
+            if i == 0 {
+               select_only.push(MirRelationVersion::Delta);
+            } else {
+               select_only.push(MirRelationVersion::TotalDelta);
+            }
+         }
+         vec![select_only]
+      } else {
+         let mut res = versions_base(count);
+         let no_total_delta_at_beginning = false;
+         if no_total_delta_at_beginning {
+            if let Some(ind) = simple_join_start_index {
+               remove_total_delta_at_index(ind, &mut res);
+               remove_total_delta_at_index(ind + 1, &mut res);
+            } else if dynamic_cls.get(0) == Some(&0) {
+               remove_total_delta_at_index(0, &mut res);
+            }
+         }
+         res
+      }
    }
 
    fn hir_body_item_to_mir_body_item(hir_bitem : &IrBodyItem, version: Option<MirRelationVersion>) -> MirBodyItem{
@@ -365,6 +407,7 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
             let mir_relation = MirRelation::from(hir_bcl.rel.clone(), ver);
             let mir_bcl = MirBodyClause{
                rel: mir_relation,
+               extern_db_name: hir_bcl.extern_db_name.clone(),
                args : hir_bcl.args.clone(),
                rel_args_span: hir_bcl.rel_args_span,
                args_span: hir_bcl.args_span,
@@ -378,13 +421,24 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
       }
    }
 
-   
+   let mut forced = false;
+   for bi in &rule.body_items {
+      if let IrBodyItem::Clause(cl) = bi {
+         if cl.froce_delta {
+            forced = true;
+            break;
+         }
+      }
+   }
    let dynamic_cls = rule.body_items.iter().enumerate().filter_map(|(i, cl)| match cl {
       IrBodyItem::Clause(cl) if dynamic_relations.contains(&cl.rel.relation) => Some(i),
       _ => None,
    }).collect_vec();
 
-   let version_combinations = if dynamic_cls.is_empty() {vec![vec![]]} else {versions(&dynamic_cls[..], rule.simple_join_start_index)};
+   let version_combinations = if dynamic_cls.is_empty() {vec![vec![]]} else {versions(&dynamic_cls[..], rule.simple_join_start_index, rule)};
+   if forced && version_combinations.len() > 1 {
+      panic!("forced delta clause cannot be combined with other clauses");
+   }
 
    let mut mir_body_items = Vec::with_capacity(version_combinations.len());
 
@@ -404,11 +458,20 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
          let pre_first_clause_vars = bcls.iter().take(ind).flat_map(MirBodyItem::bound_vars);
          !intersects(pre_first_clause_vars, bcls[ind + 1].bound_vars())
       });
-      MirRule {
-         body_items: bcls,
-         head_clause: rule.head_clauses.clone(),
-         simple_join_start_index: rule.simple_join_start_index,
-         reorderable
+      if forced {
+         MirRule {
+            body_items: bcls,
+            head_clause: rule.head_clauses.clone(),
+            simple_join_start_index: rule.simple_join_start_index,
+            reorderable: false
+         }
+      } else {
+         MirRule {
+            body_items: bcls,
+            head_clause: rule.head_clauses.clone(),
+            simple_join_start_index: rule.simple_join_start_index,
+            reorderable
+         }
       }
    }).collect()
 }

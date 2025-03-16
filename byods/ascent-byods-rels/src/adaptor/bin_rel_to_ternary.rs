@@ -369,8 +369,12 @@ where T0: Clone + Hash + Eq, T1: Clone + Hash + Eq, T2: Clone + Hash + Eq, TBinR
 
    fn len(&self) -> usize {
       // TODO random estimate, could be very wrong
+      let l : usize= (self.0.map.len() as f32).sqrt() as usize;
+      if l == 0 {
+         return 0;
+      }
       self.0.reverse_map1.as_ref().unwrap().len() * self.0.reverse_map2.as_ref().unwrap().len()
-         / ((self.0.map.len() as f32).sqrt() as usize)
+         / l
    }
 }
 
