@@ -161,7 +161,8 @@ pub(crate) struct IrBodyClause {
    pub rel_args_span: Span,
    pub args_span: Span,
    pub cond_clauses : Vec<CondClause>,
-   pub froce_delta: bool
+   pub froce_delta: bool,
+   pub is_bang: bool,
 }
 
 impl IrBodyClause {
@@ -226,6 +227,16 @@ impl IrRelation {
    }
    pub fn is_no_index(&self) -> bool {
       self.indices.is_empty()
+   }
+
+   pub fn is_canonical(&self) -> bool {
+      // if index is 0..arity-1, then it is canonical
+      for i in 0..self.relation.field_types.len() - 1 {
+         if self.indices[i] != i {
+            return false;
+         }
+      }
+      self.indices.len() == self.relation.field_types.len() - 1
    }
 
    pub fn value_type(&self) -> Type {
@@ -549,7 +560,8 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                rel_args_span: bcl.rel.span().join(bcl.args.span()).unwrap_or_else(|| bcl.rel.span()),
                args_span: bcl.args.span(),
                cond_clauses: bcl.cond_clauses.clone(),
-               froce_delta: bcl.delta_flag
+               froce_delta: bcl.delta_flag,
+               is_bang: bcl.is_bang
             };
             body_items.push(IrBodyItem::Clause(ir_bcl));
          },

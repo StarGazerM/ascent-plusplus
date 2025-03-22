@@ -7,6 +7,7 @@ use crate::{
       MirRelationVersion::{self, *},
       MirRule, MirScc,
    },
+   ascent_hir::IrHeadClause,
    utils::{tuple_type, TokenStreamExtensions},
 };
 use itertools::Itertools;
@@ -221,8 +222,33 @@ fn compile_mir_rule_inner(
                for cond in cl1.cond_clauses.iter().rev() {
                   cl1_conds_then_rest = compile_cond_clause(cond, cl1_conds_then_rest);
                }
+               let failed_generate_code = if cl2.is_bang {
+                  // if it's bang clause, and the query fails, treat it as a head clause,
+                  // generate it here
+                  // construct a head clause with the same relation
+                  let new_head = IrHeadClause {
+                     rel: cl2.rel.relation.clone(),
+                     args: cl2.args.clone(),
+                     args_span: cl2.args_span,
+                     id_name: None,
+                     extern_db_name: cl2.extern_db_name.clone(),
+                     required_flag: false,
+                     delete_flag: false,
+                     span: cl2.rel_args_span,
+                  };
+                  let update_code = compile_head_clause(&new_head, _scc, mir);
+                  quote_spanned! {cl1.rel_args_span=>
+                     else {
+                        #update_code
+                        return;
+                     }
+                  }
+               } else {
+                  quote! {}
+               };
                quote_spanned! {cl1.rel_args_span=>
                   #cl1_var_name.#iter_all().for_each(|(__cl1_joined_columns, __cl1_tuple_indices)| {
+                     let mut __gen_bang = false;
                      let __cl1_joined_columns = __cl1_joined_columns.tuple_of_borrowed();
                      #(#cl1_join_vars_assignments)*
                      if let Some(__matching) = #cl2_var_name.#index_get(&#joined_args_tuple_for_cl2) {
@@ -230,7 +256,7 @@ fn compile_mir_rule_inner(
                            #(#cl1_vars_assignments)*
                            #cl1_conds_then_rest
                         });
-                     }
+                     } #failed_generate_code
                   });
                }
             } else {
@@ -316,160 +342,215 @@ fn head_clauses_structs_and_update_code(
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
    let mut add_rows = vec![];
 
+   for hcl in rule.head_clause.iter() {
+      add_rows.push(compile_head_clause(hcl, scc, mir));
+   }
+   
+   (quote! {}, quote! {#(#add_rows)*})
+}
+
+fn compile_head_clause(
+   hcl: &IrHeadClause,
+   scc: &MirScc,
+   mir: &AscentMir
+) -> proc_macro2::TokenStream {
    let set_changed_true_code = if !mir.is_parallel {
       quote! { __changed = true; }
    } else {
       quote! { __changed.store(true, std::sync::atomic::Ordering::Relaxed);}
    };
+   let head_rel_name = Ident::new(&hcl.rel.name.to_string(), hcl.span);
+   let hcl_args_converted = hcl.args.iter().cloned().map(convert_head_arg).collect_vec();
+   let new_row_tuple = tuple_spanned(&hcl_args_converted, hcl.args_span);
 
-   for hcl in rule.head_clause.iter() {
-      let head_rel_name = Ident::new(&hcl.rel.name.to_string(), hcl.span);
-      let hcl_args_converted = hcl.args.iter().cloned().map(convert_head_arg).collect_vec();
-      let new_row_tuple = tuple_spanned(&hcl_args_converted, hcl.args_span);
+   let head_relation = &hcl.rel;
+   // if None use default name __new_tuple_d
+   let new_id_name = match &hcl.id_name {
+      Some(new_id) => new_id.clone(),
+      None => Ident::new(&format!("__new_{}", head_rel_name), hcl.span),
+   };
+   let def_id_code = quote_spanned! {hcl.span=> let mut #new_id_name = 0;};
 
-      let head_relation = &hcl.rel;
-      // if None use default name __new_tuple_d
-      let new_id_name = match &hcl.id_name {
-         Some(new_id) => new_id.clone(),
-         None => Ident::new(&format!("__new_{}", head_rel_name), hcl.span),
-      };
-      let def_id_code = quote_spanned! {hcl.span=> let mut #new_id_name = 0;};
+   let row_type = tuple_type(&head_relation.field_types);
 
-      let row_type = tuple_type(&head_relation.field_types);
-
-      let mut update_indices = vec![];
-      let rel_indices = scc.dynamic_relations.get(head_relation);
-      let (rel_index_write_trait, index_insert_fn) = if !mir.is_parallel {
-         (quote! { ::ascent::internal::RelIndexWrite }, quote! {index_insert})
-      } else {
-         (quote! { ::ascent::internal::CRelIndexWrite }, quote! {index_insert})
-      };
-      let (rel_index_write_trait, index_insert_fn) =
-         (rel_index_write_trait.with_span(hcl.span), index_insert_fn.with_span(hcl.span));
-      let new_ref = if !mir.is_parallel {
-         quote! {&mut}
-      } else {
-         quote! {&}
-      };
-      let mut used_fields = HashSet::new();
-      if let Some(rel_indices) = rel_indices {
-         for rel_ind in rel_indices.iter().sorted_by_cached_key(|rel| rel.ir_name()) {
-            if rel_ind.is_full_index() {
-               continue;
-            };
-            let var_name = if !mir.is_parallel {
-               expr_for_rel_write(&MirRelation::from(rel_ind.clone(), New), mir)
-            } else {
-               expr_for_c_rel_write(&MirRelation::from(rel_ind.clone(), New), mir)
-            };
-            let args_tuple: Vec<Expr> = rel_ind
-               .indices
-               .iter()
-               .map(|&i| {
-                  let i_ind = syn::Index::from(i);
-                  syn::parse2(quote_spanned! {hcl.span=> __new_row.#i_ind.clone()}).unwrap()
-               })
-               .collect();
-            used_fields.extend(rel_ind.indices.iter().cloned());
-            if let IndexValType::Direct(direct) = &rel_ind.val_type {
-               used_fields.extend(direct.iter().cloned());
-            }
-            let args_tuple = tuple(&args_tuple);
-            let entry_val = index_get_entry_val_for_insert(
-               rel_ind,
-               &parse_quote_spanned! {hcl.span=> __new_row},
-               &parse_quote_spanned! {hcl.span=> __new_row_ind},
-            );
-            update_indices.push(quote_spanned! {hcl.span=>
-               #rel_index_write_trait::#index_insert_fn(#new_ref #var_name, #args_tuple, #entry_val);
-            });
-         }
-      }
-
-      let head_rel_full_index = &mir.relations_full_indices[head_relation];
-
-      let expr_for_rel_maybe_mut = if mir.is_parallel { expr_for_c_rel_write } else { expr_for_rel_write };
-      let head_rel_full_index_expr_new =
-         expr_for_rel_maybe_mut(&MirRelation::from(head_rel_full_index.clone(), New), mir);
-      // TODO: should we allow adding facts to external relations?
-      let head_rel_full_index_expr_delta =
-         expr_for_rel(&MirRelation::from(head_rel_full_index.clone(), Delta), &None, mir);
-      let head_rel_full_index_expr_total =
-         expr_for_rel(&MirRelation::from(head_rel_full_index.clone(), Total), &None, mir);
-
-      let rel_full_index_write_trait = if !mir.is_parallel {
-         quote! { ::ascent::internal::RelFullIndexWrite }
-      } else {
-         quote! { ::ascent::internal::CRelFullIndexWrite }
-      }
-      .with_span(hcl.span);
-
-      let new_row_to_be_pushed = (0..hcl.rel.field_types.len())
-         .map(|i| {
-            let ind = syn::Index::from(i);
-            let clone = if used_fields.contains(&i) {
-               quote! {.clone()}
-            } else {
-               quote! {}
-            };
-            parse_quote_spanned! {hcl.span=> __new_row.#ind #clone }
-         })
-         .collect_vec();
-      let new_row_to_be_pushed = tuple_spanned(&new_row_to_be_pushed, hcl.span);
-
-      let db_name = if let Some(db_name) = &hcl.extern_db_name {
-         if !mir.is_parallel {
-            quote! {#db_name.borrow_mut()}
+   let mut update_indices = vec![];
+   let rel_indices = scc.dynamic_relations.get(head_relation);
+   let (rel_index_write_trait, index_insert_fn) = if !mir.is_parallel {
+      (quote! { ::ascent::internal::RelIndexWrite }, quote! {index_insert})
+   } else {
+      (quote! { ::ascent::internal::CRelIndexWrite }, quote! {index_insert})
+   };
+   let (rel_index_write_trait, index_insert_fn) =
+      (rel_index_write_trait.with_span(hcl.span), index_insert_fn.with_span(hcl.span));
+   let new_ref = if !mir.is_parallel {
+      quote! {&mut}
+   } else {
+      quote! {&}
+   };
+   let mut used_fields = HashSet::new();
+   if let Some(rel_indices) = rel_indices {
+      for rel_ind in rel_indices.iter().sorted_by_cached_key(|rel| rel.ir_name()) {
+         if rel_ind.is_full_index() {
+            continue;
+         };
+         let var_name = if !mir.is_parallel {
+            expr_for_rel_write(&MirRelation::from(rel_ind.clone(), New), mir)
          } else {
-            quote! {#db_name.write().unwrap()}
+            expr_for_c_rel_write(&MirRelation::from(rel_ind.clone(), New), mir)
+         };
+         let args_tuple: Vec<Expr> = rel_ind
+            .indices
+            .iter()
+            .map(|&i| {
+               let i_ind = syn::Index::from(i);
+               syn::parse2(quote_spanned! {hcl.span=> __new_row.#i_ind.clone()}).unwrap()
+            })
+            .collect();
+         used_fields.extend(rel_ind.indices.iter().cloned());
+         if let IndexValType::Direct(direct) = &rel_ind.val_type {
+            used_fields.extend(direct.iter().cloned());
          }
+         let args_tuple = tuple(&args_tuple);
+         let entry_val = index_get_entry_val_for_insert(
+            rel_ind,
+            &parse_quote_spanned! {hcl.span=> __new_row},
+            &parse_quote_spanned! {hcl.span=> __new_row_ind},
+         );
+         update_indices.push(quote_spanned! {hcl.span=>
+            #rel_index_write_trait::#index_insert_fn(#new_ref #var_name, #args_tuple, #entry_val);
+         });
+      }
+   }
+
+   let head_rel_full_index = &mir.relations_full_indices[head_relation];
+
+   let expr_for_rel_maybe_mut = if mir.is_parallel { expr_for_c_rel_write } else { expr_for_rel_write };
+   let head_rel_full_index_expr_new =
+      expr_for_rel_maybe_mut(&MirRelation::from(head_rel_full_index.clone(), New), mir);
+   
+   // TODO: should we allow adding facts to external relations?
+   let head_rel_full_index_expr_delta =
+      expr_for_rel(&MirRelation::from(head_rel_full_index.clone(), Delta), &None, mir);
+   let head_rel_full_index_expr_total =
+      expr_for_rel(&MirRelation::from(head_rel_full_index.clone(), Total), &None, mir);
+
+   let rel_full_index_write_trait = if !mir.is_parallel {
+      quote! { ::ascent::internal::RelFullIndexWrite }
+   } else {
+      quote! { ::ascent::internal::CRelFullIndexWrite }
+   }
+   .with_span(hcl.span);
+
+   let new_row_to_be_pushed = (0..hcl.rel.field_types.len())
+      .map(|i| {
+         let ind = syn::Index::from(i);
+         let clone = if used_fields.contains(&i) {
+            quote! {.clone()}
+         } else {
+            quote! {}
+         };
+         parse_quote_spanned! {hcl.span=> __new_row.#ind #clone }
+      })
+      .collect_vec();
+   let new_row_to_be_pushed = tuple_spanned(&new_row_to_be_pushed, hcl.span);
+
+   let db_name = if let Some(db_name) = &hcl.extern_db_name {
+      if !mir.is_parallel {
+         quote! {#db_name.borrow_mut()}
       } else {
-         quote! {_self}
-      };
-      let push_code = if !mir.is_parallel {
+         quote! {#db_name.write().unwrap()}
+      }
+   } else {
+      quote! {_self}
+   };
+   let compute_id_code = if hcl.id_name.is_some() {
+      quote! {
+         #db_name.#head_rel_name.push(__new_row_to_be_pushed);
+      }
+   } else {
+      if !mir.is_parallel {
          quote! {
             #new_id_name = #db_name.#head_rel_name.len();
-            #db_name.#head_rel_name.push(#new_row_to_be_pushed);
-            __default_id = #new_id_name;
+            #db_name.#head_rel_name.push(__new_row_to_be_pushed);
          }
       } else {
          quote! {
             #new_id_name = #db_name.#head_rel_name.push(#new_row_to_be_pushed);
-            __default_id = #new_id_name;
          }
-      };
-      let skip_unchanged_code = if !hcl.required_flag {
-         quote! {}
+      }
+   };
+   let push_code = quote! {  
+      let __new_row_to_be_pushed = #new_row_to_be_pushed;
+      #compute_id_code
+      __default_id = #new_id_name;
+   };
+
+   let skip_unchanged_code = if !hcl.required_flag {
+      quote! {}
+   } else {
+      quote! {
+         // println!("required flag not satisfied");
+         return;
+      }
+   };
+   let update_id_code = if hcl.id_name.is_some() && !hcl.required_flag {
+      // update the full and canonical indices
+      let id_arg_tuple = (0..hcl.rel.field_types.len())
+         .into_iter()
+         .flat_map(|i| {
+            let i_ind = syn::Index::from(i);
+            vec![quote_spanned! {hcl.span=> __new_row.#i_ind.clone()}]
+         })
+         .collect_vec();
+      // find full of head_rel_full_index
+      let mut head_rel_id_full_index = mir.get_relation_id(&hcl.rel.name).unwrap();
+      head_rel_id_full_index.indices.push(hcl.rel.field_types.len());
+      let head_rel_id_full_index_expr =
+         expr_for_rel_maybe_mut(&MirRelation::from(head_rel_id_full_index.clone(), New), mir);
+      quote_spanned! {hcl.span=>
+         let __new_row_id = (#(#id_arg_tuple,)* #new_id_name.clone());
+         #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_id_full_index_expr,
+            &__new_row_id, ());
+      }
+   } else {
+      quote! {}
+   };
+
+   let update_rel_code = if !hcl.delete_flag {
+      if let Some(_) = &hcl.extern_db_name {
+         quote_spanned! {hcl.span=>
+            #push_code
+            // #set_changed_true_code
+         }
       } else {
-         quote! {
-            // println!("required flag not satisfied");
-            return;
-         }
-      };
-      let update_rel_code = if !hcl.delete_flag {
-         if let Some(_) = &hcl.extern_db_name {
-            quote_spanned! {hcl.span=>
+         let hash_tuple_code = quote! {
+            #new_id_name = {
+               use std::hash::Hasher;
+               let mut hasher = ::std::hash::DefaultHasher::new();
+               __new_row.hash(&mut hasher);
+               hasher.finish() as usize
+            };
+         };
+         quote_spanned! {hcl.span=>
+            #hash_tuple_code
+            if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
+               &__new_row, ())
+            {
                #push_code
-               // #set_changed_true_code
-            }
-         } else {
-            quote_spanned! {hcl.span=>
-               if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
-                  &__new_row, ())
-               {
-                  #push_code
-                  #(#update_indices)*
-                  #set_changed_true_code
-               } else {
-                  #skip_unchanged_code
-               }
+               #(#update_indices)*
+               #set_changed_true_code
+               #update_id_code
+            } else {
+               #skip_unchanged_code
             }
          }
-      } else {
-         quote! {}
-      };
-      if !hcl.rel.is_lattice {
-         let add_row = if hcl.extern_db_name.is_none() { quote_spanned! {hcl.span=>
+      }
+   } else {
+      quote! {}
+   };
+   if !hcl.rel.is_lattice {
+      if hcl.extern_db_name.is_none() { 
+         quote_spanned! {hcl.span=>
             let __new_row: #row_type = #new_row_tuple;
             #def_id_code
 
@@ -477,101 +558,99 @@ fn head_clauses_structs_and_update_code(
                !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
                #update_rel_code
             } else {
-                #skip_unchanged_code
+               #skip_unchanged_code
             }
-         }} else {
-            quote_spanned! {hcl.span=>
-               let __new_row: #row_type = #new_row_tuple;
-               #def_id_code
-               #update_rel_code
-            }
-         };
-         add_rows.push(add_row);
+         }
       } else {
-         // rel.is_lattice:
-         let _self = quote! { _self };
-         let lattice_insertion_mutex = lattice_insertion_mutex_var_name(head_relation);
-         let head_lat_full_index = &mir.lattices_full_indices[head_relation];
-         let head_lat_full_index_var_name_new =
-            ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, New);
-         let head_lat_full_index_var_name_delta =
-            ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, Delta);
-         let head_lat_full_index_var_name_full =
-            ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, Total);
-         let tuple_lat_index = syn::Index::from(hcl.rel.field_types.len() - 1);
-         let lattice_key_args: Vec<Expr> = (0..hcl.args.len() - 1)
-            .map(|i| {
-               let i_ind = syn::Index::from(i);
-               syn::parse2(quote_spanned! {hcl.span=> __new_row.#i_ind}).unwrap()
-            })
-            .map(|e| exp_cloned(&e))
-            .collect_vec();
-         let lattice_key_tuple = tuple(&lattice_key_args);
+         quote_spanned! {hcl.span=>
+            let __new_row: #row_type = #new_row_tuple;
+            #def_id_code
+            #update_rel_code
+         }
+      }
+   } else {
+      // rel.is_lattice:
+      let _self = quote! { _self };
+      let lattice_insertion_mutex = lattice_insertion_mutex_var_name(head_relation);
+      let head_lat_full_index = &mir.lattices_full_indices[head_relation];
+      let head_lat_full_index_var_name_new =
+         ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, New);
+      let head_lat_full_index_var_name_delta =
+         ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, Delta);
+      let head_lat_full_index_var_name_full =
+         ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, Total);
+      let tuple_lat_index = syn::Index::from(hcl.rel.field_types.len() - 1);
+      let lattice_key_args: Vec<Expr> = (0..hcl.args.len() - 1)
+         .map(|i| {
+            let i_ind = syn::Index::from(i);
+            syn::parse2(quote_spanned! {hcl.span=> __new_row.#i_ind}).unwrap()
+         })
+         .map(|e| exp_cloned(&e))
+         .collect_vec();
+      let lattice_key_tuple = tuple(&lattice_key_args);
 
-         let _self = quote! { _self };
-         let add_row = if !mir.is_parallel {
-            quote_spanned! {hcl.span=>
-               let __new_row: #row_type = #new_row_tuple;
-               let __lattice_key = #lattice_key_tuple;
-               if let Some(mut __existing_ind) = #head_lat_full_index_var_name_new.index_get(&__lattice_key)
-                  .or_else(|| #head_lat_full_index_var_name_delta.index_get(&__lattice_key))
-                  .or_else(|| #head_lat_full_index_var_name_full.index_get(&__lattice_key))
-               {
-                  let __existing_ind = *__existing_ind.next().unwrap();
-                  // TODO possible excessive cloning here?
-                  let __lat_changed = ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].#tuple_lat_index, __new_row.#tuple_lat_index.clone());
-                  if __lat_changed {
-                     let __new_row_ind = __existing_ind;
-                     #(#update_indices)*
-                     #set_changed_true_code
-                  } else {
-                     #skip_unchanged_code
-                  }
-               } else {
-                  let __new_row_ind = #_self.#head_rel_name.len();
+      let _self = quote! { _self };
+      if !mir.is_parallel {
+         quote_spanned! {hcl.span=>
+            let __new_row: #row_type = #new_row_tuple;
+            let __lattice_key = #lattice_key_tuple;
+            if let Some(mut __existing_ind) = #head_lat_full_index_var_name_new.index_get(&__lattice_key)
+               .or_else(|| #head_lat_full_index_var_name_delta.index_get(&__lattice_key))
+               .or_else(|| #head_lat_full_index_var_name_full.index_get(&__lattice_key))
+            {
+               let __existing_ind = *__existing_ind.next().unwrap();
+               // TODO possible excessive cloning here?
+               let __lat_changed = ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].#tuple_lat_index, __new_row.#tuple_lat_index.clone());
+               if __lat_changed {
+                  let __new_row_ind = __existing_ind;
                   #(#update_indices)*
-                  #_self.#head_rel_name.push(#new_row_to_be_pushed);
+                  #set_changed_true_code
+               } else {
+                  
+               }
+            } else {
+               let __new_row_ind = #_self.#head_rel_name.len();
+               #(#update_indices)*
+               #_self.#head_rel_name.push(#new_row_to_be_pushed);
+               #set_changed_true_code
+            }
+         }
+      } else {
+         // TODO: fix id with lattice
+         quote_spanned! {hcl.span=> // mir.is_parallel:
+            let __new_row: #row_type = #new_row_tuple;
+            let __lattice_key = #lattice_key_tuple;
+            let __existing_ind_in_new = #head_lat_full_index_var_name_new.get_cloned(&__lattice_key);
+            let __new_has_ind = __existing_ind_in_new.is_some();
+            if let Some(__existing_ind) = __existing_ind_in_new
+               .or_else(|| #head_lat_full_index_var_name_delta.get_cloned(&__lattice_key))
+               .or_else(|| #head_lat_full_index_var_name_full.get_cloned(&__lattice_key))
+            {
+               let __lat_changed = ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].write().unwrap().#tuple_lat_index,
+                                                               __new_row.#tuple_lat_index.clone());
+               if __lat_changed && !__new_has_ind{
+                  let __new_row_ind = __existing_ind;
+                  #(#update_indices)*
+                  #set_changed_true_code
+               } else {
+                  // #skip_unchanged_code
+               }
+            } else {
+               let __hash = #head_lat_full_index_var_name_new.hash_usize(&__lattice_key);
+               let __lock = #_self.#lattice_insertion_mutex.get(__hash % #_self.#lattice_insertion_mutex.len()).expect("lattice_insertion_mutex index out of bounds").lock().unwrap();
+               if let Some(__existing_ind) = #head_lat_full_index_var_name_new.get_cloned(&__lattice_key) {
+                  ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].write().unwrap().#tuple_lat_index,
+                                              __new_row.#tuple_lat_index.clone());
+                  // #skip_unchanged_code
+               } else {
+                  let __new_row_ind = #_self.#head_rel_name.push(::std::sync::RwLock::new(#new_row_to_be_pushed));
+                  #(#update_indices)*
                   #set_changed_true_code
                }
             }
-         } else {
-            quote_spanned! {hcl.span=> // mir.is_parallel:
-               let __new_row: #row_type = #new_row_tuple;
-               let __lattice_key = #lattice_key_tuple;
-               let __existing_ind_in_new = #head_lat_full_index_var_name_new.get_cloned(&__lattice_key);
-               let __new_has_ind = __existing_ind_in_new.is_some();
-               if let Some(__existing_ind) = __existing_ind_in_new
-                  .or_else(|| #head_lat_full_index_var_name_delta.get_cloned(&__lattice_key))
-                  .or_else(|| #head_lat_full_index_var_name_full.get_cloned(&__lattice_key))
-               {
-                  let __lat_changed = ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].write().unwrap().#tuple_lat_index,
-                                                                  __new_row.#tuple_lat_index.clone());
-                  if __lat_changed && !__new_has_ind{
-                     let __new_row_ind = __existing_ind;
-                     #(#update_indices)*
-                     #set_changed_true_code
-                  } else {
-                     #skip_unchanged_code
-                  }
-               } else {
-                  let __hash = #head_lat_full_index_var_name_new.hash_usize(&__lattice_key);
-                  let __lock = #_self.#lattice_insertion_mutex.get(__hash % #_self.#lattice_insertion_mutex.len()).expect("lattice_insertion_mutex index out of bounds").lock().unwrap();
-                  if let Some(__existing_ind) = #head_lat_full_index_var_name_new.get_cloned(&__lattice_key) {
-                     ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].write().unwrap().#tuple_lat_index,
-                                                 __new_row.#tuple_lat_index.clone());
-                     #skip_unchanged_code
-                  } else {
-                     let __new_row_ind = #_self.#head_rel_name.push(::std::sync::RwLock::new(#new_row_to_be_pushed));
-                     #(#update_indices)*
-                     #set_changed_true_code
-                  }
-               }
-            }
-         };
-         add_rows.push(add_row);
+         }
       }
    }
-   (quote! {}, quote! {#(#add_rows)*})
 }
 
 fn convert_head_arg(arg: Expr) -> Expr {

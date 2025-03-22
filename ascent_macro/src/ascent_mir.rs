@@ -26,6 +26,15 @@ pub(crate) struct AscentMir {
    pub is_parallel: bool,
 }
 
+impl AscentMir {
+   pub fn get_relation_id(&self, rel_name: &Ident) -> Option<IrRelation> {
+      let rel_id_name = Ident::new(&format!("{}_id", rel_name), rel_name.span());
+      self.relations_ir_relations.iter().find_map(|(_id, rels)| {
+         rels.iter().find(|r| r.relation.name == rel_id_name && r.is_canonical())
+      }).map(|r| r.clone())
+   }
+}
+
 pub(crate) struct MirScc {
    pub rules: Vec<MirRule>,
    pub dynamic_relations: HashMap<RelationIdentity, HashSet<IrRelation>>,
@@ -112,7 +121,8 @@ pub(crate) struct MirBodyClause {
    pub args: Vec<Expr>,
    pub rel_args_span: Span,
    pub args_span: Span,
-   pub cond_clauses : Vec<CondClause>
+   pub cond_clauses : Vec<CondClause>,
+   pub is_bang: bool
 }
 impl MirBodyClause {
    pub fn selected_args(&self) -> Vec<Expr> {
@@ -135,6 +145,7 @@ impl MirBodyClause {
          rel_args_span: ir_body_clause.rel_args_span,
          args_span: ir_body_clause.args_span,
          cond_clauses: ir_body_clause.cond_clauses,
+         is_bang: ir_body_clause.is_bang
       }
    }
 }
@@ -312,7 +323,7 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
       sccs_dep_graph.insert(sccs_nodes_count - n.index() - 1, sccs.neighbors(n).map(|n| sccs_nodes_count - n.index() - 1).collect());
    }
 
-   Ok(AscentMir {
+   let mir = AscentMir {
       sccs: mir_sccs,
       deps: sccs_dep_graph,
       relations_ir_relations: hir.relations_ir_relations.clone(),
@@ -326,7 +337,31 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
       io: hir.io.clone(),
       config: hir.config.clone(),
       is_parallel: hir.is_parallel,
-   })
+   };
+   if let Some(rel) = check_mir_let_with_id(&mir) {
+      return Err(syn::Error::new(
+         rel.span(), format!("relation {} don't have id but in a let clause", rel)));
+   }
+   Ok(mir)
+}
+
+fn check_mir_let_with_id(mir: &AscentMir) -> Option<Ident> {
+   mir.sccs.iter()
+      .flat_map(|scc| scc.rules.iter())
+      .flat_map(|rule| rule.head_clause.iter())
+      .filter_map(|hitem| {
+         if let Some(_) = hitem.id_name {
+            if hitem.required_flag {
+               return None;
+            }
+            Some(hitem.rel.name.clone())
+         } else {
+            None
+         }
+      })
+      .find(|rel| {
+         mir.get_relation_id(&rel).is_none()
+      })
 }
 
 fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>) -> Vec<MirRule> {
@@ -411,7 +446,8 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
                args : hir_bcl.args.clone(),
                rel_args_span: hir_bcl.rel_args_span,
                args_span: hir_bcl.args_span,
-               cond_clauses: hir_bcl.cond_clauses.clone()
+               cond_clauses: hir_bcl.cond_clauses.clone(),
+               is_bang: hir_bcl.is_bang
             };
             MirBodyItem::Clause(mir_bcl)
          },

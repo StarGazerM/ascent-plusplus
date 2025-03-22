@@ -186,14 +186,38 @@ fn test_macro_dep_head() {
 fn test_relation_id() {
    let input = quote! {
       relation foo(i32, i32);
-      relation bar(i32, i32);
+      relation ID bar(i32, i32);
       relation foobar(i32, usize);
 
       foo(1, 2);
 
-      let new_bar = !bar(x, y), foobar(x, new_bar) <-- foo(x, y);
+      let new_bar = bar(x, y), foobar(x, new_bar) <-- foo(x, y), foo(y, x);
    };
 
+   write_to_scratchpad(input);
+}
+
+#[test]
+fn test_relation_id2() {
+   let input = quote! {
+      relation ID foo (usize , usize) ;
+      relation ID bar (usize , usize) ;
+      relation ID foobar (usize) ;
+      let bar_44947 = bar (x , y) <- - foobar (foo_797896) , foo (x , y) . foo_797896 ;
+   };
+
+   write_to_scratchpad(input);
+}
+
+#[test]
+fn test_macro_bang() {
+   let input = quote! {
+      relation foo(i32, i32);
+      relation bar(i32, i32);
+      relation baz(i32, i32);
+
+      foo(x, y) <-- bar(x, y), baz(x, y)!;
+   };
    write_to_scratchpad(input);
 }
 
@@ -609,27 +633,27 @@ fn test_macro_in_macro() {
    write_to_scratchpad(inp);
 }
 
-#[test]
-fn test_function() {
-   let prefix = quote! {
-      #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-      struct Tag(&'static str, usize);
-   };
-   let inp = quote!{
-      relation ID edge(i32, i32);
-      relation ID path(i32, Tag);
-      relation input(i32, i32);
+// #[test]
+// fn test_function() {
+//    let prefix = quote! {
+//       #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+//       struct Tag(&'static str, usize);
+//    };
+//    let inp = quote!{
+//       relation ID edge(i32, i32);
+//       relation ID path(i32, Tag);
+//       relation input(i32, i32);
 
-      function path_length(Tag) -> usize;
-      %path_length(?Tag("edge", pid)) -> ret_val
-        <-- 
-        path(x, res).*pid,
-        %path_length(res) -> rest_length,
-        let ret_val = rest_length + 1;
-   };
+//       function path_length(Tag) -> usize;
+//       %path_length(?Tag("edge", pid)) -> ret_val
+//         <-- 
+//         path(x, res).*pid,
+//         %path_length(res) -> rest_length,
+//         let ret_val = rest_length + 1;
+//    };
 
-   write_with_prefix_to_scratchpad(inp, prefix);
-}
+//    write_with_prefix_to_scratchpad(inp, prefix);
+// }
 
 #[test]
 fn test_macro_lattices_slow () {

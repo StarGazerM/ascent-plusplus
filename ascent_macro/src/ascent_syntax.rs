@@ -24,7 +24,7 @@ use crate::syn_utils::pattern_get_vars;
 // https://crates.io/crates/quote
 // example: https://gitlab.gnome.org/federico/gnome-class/-/blob/master/src/parser/mod.rs
 
-mod kw {
+pub mod kw {
    syn::custom_keyword!(relation);
    syn::custom_keyword!(lattice);
    syn::custom_keyword!(function);
@@ -401,6 +401,7 @@ pub struct BodyClauseNode {
    pub cond_clauses: Vec<CondClause>,
    pub id_var : Option<Expr>,
    pub delta_flag: bool,
+   pub is_bang: bool,
 }
 
 #[derive(Parse, Clone, PartialEq, Eq, Debug)]
@@ -555,11 +556,15 @@ impl Parse for BodyClauseNode{
          input.parse::<Token![.]>()?;
          id_var = input.parse().ok();
       }
+      let is_bang = input.peek(Token![!]);
+      if is_bang {
+         input.parse::<Token![!]>()?;
+      }
       let mut cond_clauses = vec![];
       while let Ok(cl) = input.parse(){
          cond_clauses.push(cl);
       }
-      Ok(BodyClauseNode{rel, extern_db_name, args, cond_clauses, id_var, delta_flag})
+      Ok(BodyClauseNode{rel, extern_db_name, args, cond_clauses, id_var, delta_flag, is_bang})
    }
 }
 
@@ -625,7 +630,7 @@ impl Parse for HeadClauseNode{
             return Err(input.error("expected identifier after let"));
          }
          id_name = Some(input.parse()?);
-         required_flag = true;
+         // required_flag = true;
          // consume a "=", if not exists throw parsing error
          if !input.peek(Token![=]) {
             return Err(input.error("expected '=' after let"));

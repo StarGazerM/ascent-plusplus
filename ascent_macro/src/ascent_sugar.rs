@@ -16,7 +16,7 @@ use quote::ToTokens;
 use itertools::Itertools;
 
 use ascent_base::util::update;
-use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode, StratumPath, SubQueryNode};
+use crate::ascent_syntax::{AggClauseNode, AggregatorNode, AscentProgram, BodyClauseArg, BodyClauseNode, BodyItemNode, CondClause, DisjunctionNode, ExtraIndex, FunctionNode, HeadClauseNode, HeadItemNode, MacroDefNode, MacroParamKind, RelationNode, RuleNode, StratumPath, SubQueryNode, kw};
 use crate::utils::{
    expr_to_ident, expr_to_ident_mut, flatten_punctuated, is_wild_card,
    punctuated_map, punctuated_singleton, punctuated_try_map, punctuated_try_unwrap, spans_eq,
@@ -322,7 +322,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
       cond_clauses: new_cond_clauses,
       rel: body_clause.rel,
       id_var: body_clause.id_var,
-      delta_flag: body_clause.delta_flag
+      delta_flag: body_clause.delta_flag,
+      is_bang: body_clause.is_bang
    }
  }
  fn rule_desugar_pattern_args(rule: RuleNode) -> RuleNode {
@@ -438,7 +439,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                    args: f.args.clone(),
                    id_var: f.id_var.clone(),
                    cond_clauses: vec![],
-                   delta_flag: false
+                   delta_flag: false,
+                   is_bang: false
                 })
              );
           } else {
@@ -478,7 +480,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
              args: do_clause_arg,
              id_var: Some(syn::parse2(quote!{#var_do_clause_id}).unwrap()),
              cond_clauses: vec![],
-             delta_flag: false
+             delta_flag: false,
+             is_bang: false
          };
           let use_result_clause = BodyClauseNode {
              rel: f.name.clone(),
@@ -490,6 +493,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
              id_var: f.id_var.clone(),
              cond_clauses: vec![],
              delta_flag: false,
+             is_bang: false
           };
           desugared_body_items.push(BodyItemNode::Clause(do_clause_used));
           desugared_body_items.push(BodyItemNode::Clause(use_result_clause));
@@ -516,7 +520,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                          args: other_f.args.clone(),
                          id_var: None,
                          cond_clauses: vec![],
-                         delta_flag: false    
+                         delta_flag: false,
+                         is_bang: false
                       })
                    );
                 } else {
@@ -582,7 +587,8 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                args: f.args.clone(),
                id_var: Some(syn::parse2(quote!{#do_call_id}).unwrap()),
                cond_clauses: vec![],
-               delta_flag: false
+               delta_flag: false,
+               is_bang: false
             };
             let mut gensym = GenSym::default();
             let pattern_desugared_do = clause_desugar_pattern_args(new_do_clause, &mut gensym);
@@ -747,6 +753,29 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
     Ok(RuleNode {body_items: new_body_items, head_clauses: new_head_items})
  }
  
+fn generate_canonical_indices_for_id_rel(rel: &Vec<RelationNode>) -> Vec<ExtraIndex> {
+   let mut res = vec![];
+   for r in rel.iter() {
+      if r.need_id {
+         let mut args = vec![];
+         for i in 0..r.field_types.len() {
+            args.push(syn::Index::from(i));
+         }
+         let id_rel_name = Ident::new(&format!("{}_id", r.name), r.name.span());
+         res.push(
+            ExtraIndex {
+                _index_kw: kw::index(r.name.span()),
+                rel_name: id_rel_name,
+                _arg_pos_paren: syn::token::Paren::default(),
+                arg_pos: args.into_iter().map(|index| syn::LitInt::new(&index.index.to_string(), index.span)).collect(),
+                _semi_colon: syn::Token![;](r.name.span()),
+            }
+         );
+      }
+   }
+   res
+ }
+
  fn desugar_relation_with_id(rel: RelationNode) -> Vec<RelationNode> {
     if rel.need_id {
        let mut new_field_types = rel.field_types.clone();
@@ -920,6 +949,9 @@ fn desugar_subquery_runs(rules: &Vec<RuleNode>) -> Vec<RuleNode> {
     rules_macro_expanded.extend(rule_from_hole); 
 
     prog.relations.extend(relation_from_functions);
+    // add canonical indices for id relations
+    let canonical_indices = generate_canonical_indices_for_id_rel(&prog.relations);
+    prog.extra_indices.extend(canonical_indices);
     prog.functions = vec![];
     prog.relations = prog.relations.into_iter()
        .flat_map(desugar_relation_with_id)
