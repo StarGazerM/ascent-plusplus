@@ -2,7 +2,6 @@
 
 use quote::quote;
 use proc_macro2::TokenStream;
-use syn::parse::ParseStream;
 
 use crate::compile::compile;
 

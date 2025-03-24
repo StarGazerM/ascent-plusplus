@@ -150,6 +150,43 @@ fn test_clone_warning() {
 }
 
 #[test]
+fn test_par_clone_new_id() {
+   let input = quote! {
+      struct TCWhere;
+      relation edge_raw(i32, i32);
+      relation edge(i32, i32);
+      relation edge_id(i32, i32, usize);
+      relation path(i32, i32);
+      relation path_id(i32, i32, usize);
+      relation provenance(Tag, Tag);
+
+      // let <id> = ... will allow you to extract the length of the relation when
+      // head clasue tuple is created. `!` operator will enforce all head clause
+      // to be generated after this clause to be generated after this clause
+      // **succeed** (If a tuple get deduplicated, it means failed).
+      // by combine `let` and `!` in head clauses you can get the slog style autoinc id
+      let eid = !edge(x, y),
+      edge_id(x, y, eid) <--
+         edge_raw(x, y);
+
+      let new_id = !path(x, y),
+      path_id(x, y, new_id),
+      provenance(Tag("path", new_id), Tag("edge", *eid)) <--
+         edge_id(x, y, eid);
+
+      let new_id = !path(x, z),
+      path_id(x, z, new_id),
+      // provenance(StructId("path", new_id), StructId("path", *pid)),
+      provenance(Tag("path", new_id), Tag("edge", *eid)) <--
+         edge_id(x, y, eid),
+         path_id(y, z, pid);
+   };
+
+   write_par_to_scratchpad(input);
+}
+
+
+#[test]
 fn test_macro_unary_rels() {
    let input = quote! {
       relation foo(i32);

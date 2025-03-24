@@ -475,7 +475,7 @@ fn compile_head_clause(
          }
       } else {
          quote! {
-            #new_id_name = #db_name.#head_rel_name.push(#new_row_to_be_pushed);
+            #new_id_name = #db_name.#head_rel_name.push(__new_row_to_be_pushed);
          }
       }
    };
@@ -525,7 +525,7 @@ fn compile_head_clause(
       } else {
          let hash_tuple_code = quote! {
             #new_id_name = {
-               use std::hash::Hasher;
+               use std::hash::{Hash, Hasher};
                let mut hasher = ::std::hash::DefaultHasher::new();
                __new_row.hash(&mut hasher);
                hasher.finish() as usize
@@ -606,7 +606,7 @@ fn compile_head_clause(
                   #(#update_indices)*
                   #set_changed_true_code
                } else {
-                  
+                  #skip_unchanged_code
                }
             } else {
                let __new_row_ind = #_self.#head_rel_name.len();
@@ -633,7 +633,7 @@ fn compile_head_clause(
                   #(#update_indices)*
                   #set_changed_true_code
                } else {
-                  // #skip_unchanged_code
+                  #skip_unchanged_code
                }
             } else {
                let __hash = #head_lat_full_index_var_name_new.hash_usize(&__lattice_key);
@@ -641,7 +641,7 @@ fn compile_head_clause(
                if let Some(__existing_ind) = #head_lat_full_index_var_name_new.get_cloned(&__lattice_key) {
                   ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].write().unwrap().#tuple_lat_index,
                                               __new_row.#tuple_lat_index.clone());
-                  // #skip_unchanged_code
+                  #skip_unchanged_code
                } else {
                   let __new_row_ind = #_self.#head_rel_name.push(::std::sync::RwLock::new(#new_row_to_be_pushed));
                   #(#update_indices)*

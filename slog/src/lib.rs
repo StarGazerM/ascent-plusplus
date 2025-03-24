@@ -10,6 +10,15 @@ mod scratchpad;
 // proc macro compile slog program to ascent program
 
 #[proc_macro]
+pub fn prelude(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
+   let res = quote! {
+      use ascent::*;
+   };
+   res.into()
+}
+
+
+#[proc_macro]
 pub fn slog(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
    let res = compile::compile(input.into(), false);
 
