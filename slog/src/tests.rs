@@ -52,6 +52,36 @@ fn test_slog_structure_body_compile() {
 }
 
 
+#[test]
+fn test_slog_order_compile() {
+   let tokens = quote! {
+      (struct Foobar)
+      (define foo usize usize)
+      (define bar usize usize)
+      (define foobar sexpr sexpr)
+
+      // [(foobar idf (bar x y)) <- (= idf (foo x y)) (bar x y)]
+
+      [(bar x y) <- (foobar ?(foo x y) _) (bar x y)]
+   };
+
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+#[test]
+fn test_redundant_index() {
+   let tokens = quote! {
+      (struct Foobar)
+      (define foo usize usize)
+      (define bar usize usize)
+      (define foobar sexpr sexpr)
+
+      
+   };
+
+
+}
+
 // a test helper function to write slog to scratchpad
 fn write_to_scratchpad(
    tokens: TokenStream, prefix: TokenStream, is_parallel: bool,

@@ -87,6 +87,10 @@ impl Parse for SlogSExprClause {
    }
 }
 
+fn is_slog_paren(input: &ParseStream) -> bool {
+   input.peek(syn::token::Paren) || input.peek(syn::token::Brace) || input.peek(Token![!]) || input.peek(Token![?])
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SlogClauseArg {
    LogicVar(Ident),
@@ -105,7 +109,7 @@ impl Parse for SlogClauseArg {
          parenthesized!(content in input);
          let expr = content.parse::<syn::Expr>()?;
          Ok(SlogClauseArg::RustExpr(expr))
-      } else if input.peek(syn::token::Paren) || input.peek(syn::token::Brace) {
+      } else if is_slog_paren(&input) {
          let clause = input.parse::<SlogSExprClause>()?;
          Ok(SlogClauseArg::SlogClause(Box::new(clause)))
       } else if input.peek(syn::Lit) {
