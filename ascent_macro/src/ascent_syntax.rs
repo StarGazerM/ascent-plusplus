@@ -41,6 +41,7 @@ pub mod kw {
    syn::custom_keyword!(expr);
    syn::custom_keyword!(va_list);
    syn::custom_punctuation!(ExistsBang, >?);
+   syn::custom_punctuation!(Equiv, <=>);
 }
 
 #[derive(Clone, Debug)]

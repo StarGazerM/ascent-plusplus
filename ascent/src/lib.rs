@@ -9,6 +9,8 @@ pub mod rel;
 pub mod aggregators;
 mod convert;
 mod rel_index_read;
+pub mod union_find;
+
 mod exps;
 #[cfg(feature = "par")]
 mod c_rel_index;

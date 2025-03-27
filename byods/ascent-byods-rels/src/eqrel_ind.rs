@@ -16,7 +16,7 @@ use {
 };
 
 use crate::iterator_from_dyn::IteratorFromDyn;
-use crate::union_find::EqRel;
+use ascent::union_find::EqRel;
 
 use hashbrown::hash_set::Iter as HashSetIter;
 

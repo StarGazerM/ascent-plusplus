@@ -1,20 +1,25 @@
 use hashbrown::{HashMap, HashSet};
-use std::hash::{Hash, BuildHasherDefault};
+use std::hash::{Hash, BuildHasherDefault, BuildHasher};
 use std::iter::{FlatMap, Repeat, Zip};
 
 use hashbrown::hash_set::Iter as HashSetIter;
 
 #[cfg(feature = "par")]
-use ascent::rayon::prelude::{ParallelIterator, IntoParallelRefIterator};
+use rayon::prelude::{ParallelIterator, IntoParallelRefIterator};
 use rustc_hash::FxHasher;
 
-use crate::utils::merge_sets;
+fn merge_sets<T: Hash + Eq, S: BuildHasher>(set1: &mut HashSet<T, S>, mut set2: HashSet<T, S>) {
+   if set1.len() < set2.len() {
+      std::mem::swap(set1, &mut set2);
+   }
+   set1.extend(set2);
+}
 
 #[derive(Clone, Debug)]
 pub struct EqRel<T: Clone + Hash + Eq> {
-   pub(crate) sets: Vec<HashSet<T, BuildHasherDefault<FxHasher>>>,
-   pub(crate) elem_ids: HashMap<T, usize, BuildHasherDefault<FxHasher>>,
-   pub(crate) set_subsumptions: HashMap<usize, usize, BuildHasherDefault<FxHasher>>,
+   pub sets: Vec<HashSet<T, BuildHasherDefault<FxHasher>>>,
+   pub elem_ids: HashMap<T, usize, BuildHasherDefault<FxHasher>>,
+   pub set_subsumptions: HashMap<usize, usize, BuildHasherDefault<FxHasher>>,
 }
 
 impl<T: Clone + Hash + Eq> Default for EqRel<T> {
@@ -40,7 +45,7 @@ impl<'a, T: Clone + Hash + Eq + Sync> ParallelIterator for IterAllParIterator<'a
    type Item = (&'a T, &'a T);
 
    fn drive_unindexed<C>(self, consumer: C) -> C::Result
-   where C: ascent::rayon::iter::plumbing::UnindexedConsumer<Self::Item> 
+   where C: rayon::iter::plumbing::UnindexedConsumer<Self::Item> 
    {
       self.0.sets.par_iter()
       .flat_map::<fn(_) -> _, _>(|s| s.par_iter().map_with(s, |s, x| s.par_iter().map_with(x, |x, y| (*x, y))).flatten())
@@ -56,7 +61,7 @@ impl<T: Clone + Hash + Eq> EqRel<T> {
          None => id,
       }
    }
-   pub(crate) fn elem_set(&self, elem: &T) -> Option<usize> { self.elem_ids.get(elem).map(|id| self.get_dominant_id(*id)) }
+   pub fn elem_set(&self, elem: &T) -> Option<usize> { self.elem_ids.get(elem).map(|id| self.get_dominant_id(*id)) }
 
    fn get_dominant_id_update(&mut self, id: usize) -> usize {
       match self.set_subsumptions.get(&id) {
@@ -70,7 +75,7 @@ impl<T: Clone + Hash + Eq> EqRel<T> {
          None => id,
       }
    }
-   pub(crate) fn elem_set_update(&mut self, elem: &T) -> Option<usize> { 
+   pub fn elem_set_update(&mut self, elem: &T) -> Option<usize> { 
       let id = self.elem_ids.get(elem)?;
       Some(self.get_dominant_id_update(*id))
    }
