@@ -29,7 +29,7 @@ fn test_slog_structure_head_compile() {
       (define bar usize usize)
       (define foobar usize usize)
 
-      [(foobar idf (bar x y)) <- (= idf (foo x y))]
+      [(foobar idf (bar x y)) <-- (= idf (foo x y))]
    };
 
    write_to_scratchpad(tokens, quote! {}, false);
@@ -45,7 +45,7 @@ fn test_slog_structure_body_compile() {
 
       [(foobar idf (bar x y)) <- (= idf (foo x y)) (bar x y)]
 
-      [(bar x y) <- (foobar (foo x y) _) (bar x y)]
+      [(bar x y) <-- (foobar (foo x y) _) (bar x y)]
    };
 
    write_to_scratchpad(tokens, quote! {}, false);
@@ -62,7 +62,7 @@ fn test_slog_order_compile() {
 
       // [(foobar idf (bar x y)) <- (= idf (foo x y)) (bar x y)]
 
-      [(bar x y) <- (foobar ?(foo x y) _) (bar x y)]
+      [(bar x y) <-- (foobar ?(foo x y) _) (bar x y)]
    };
 
    write_to_scratchpad(tokens, quote! {}, false);

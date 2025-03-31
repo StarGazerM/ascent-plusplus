@@ -23,6 +23,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          use ascent::internal::CRelIndexRead;
          use ascent::internal::CRelIndexReadAll;
          use ascent::internal::Freezable;
+         use ascent::union_find::EqRel;
       }
    } else {
       quote! {}
@@ -514,6 +515,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          pub runtime_new: #runtime_struct_name #ty_ty_generics,
          pub runtime_delta: #runtime_struct_name #ty_ty_generics,
 
+         pub equiv_ids_: ascent::union_find::EqRel<usize>,
          // #(#external_dbs_decl)*
       }
       #vis struct #runtime_struct_name #ty_impl_generics #ty_where_clause  {
@@ -565,7 +567,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                runtime_total: Default::default(),
                runtime_new: Default::default(),
                runtime_delta: Default::default(),
-
+               equiv_ids_: ascent::union_find::EqRel::default(),
                // #(#extern_db_default)*
             };
             #(#relation_initializations_for_default_impl)*

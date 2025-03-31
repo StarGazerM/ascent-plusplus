@@ -8,7 +8,7 @@ use syn::{Expr, Type};
 use crate::{ascent_mir::MirRelationVersion::*, ascent_syntax::Signatures, syn_utils::pattern_get_vars};
 use crate::utils::{expr_to_ident, pat_to_ident, tuple_type, intersects};
 use crate::ascent_syntax::{CondClause, GeneratorNode, RelationIdentity};
-use crate::ascent_hir::{AscentConfig, AscentIO, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrExternArg, IrExternDB, IrHeadClause, IrRelation, IrRule, RelationMetadata};
+use crate::ascent_hir::{AscentConfig, AscentIO, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrExternArg, IrExternDB, IrHeadItem, IrRelation, IrRule, RelationMetadata};
 
 pub(crate) struct AscentMir {
    pub sccs: Vec<MirScc>,
@@ -60,7 +60,7 @@ pub(crate) fn mir_summary(mir: &AscentMir) -> String {
 #[derive(Clone)]
 pub(crate) struct MirRule {
    // TODO rename to head_clauses
-   pub head_clause: Vec<IrHeadClause>,
+   pub head_clause: Vec<IrHeadItem>,
    pub body_items: Vec<MirBodyItem>,
    pub simple_join_start_index: Option<usize>,
    pub reorderable: bool
@@ -78,7 +78,14 @@ pub(crate) fn mir_rule_summary(rule: &MirRule) -> String {
       }
    }
    format!("{} <-- {}{simple_join}{reorderable}",
-            rule.head_clause.iter().map(|hcl| hcl.rel.name.to_string()).join(", "),
+            rule.head_clause.iter().map(|hi| {
+               match hi {
+                  IrHeadItem::Clause(hcl) => hcl.rel.name.to_string(),
+                  IrHeadItem::Equiv(equiv) => {
+                     format!("{} <=> {}", equiv.left_ident.to_string(), equiv.right_ident.to_string())
+                  }
+               }
+            }).join(", "),
             rule.body_items.iter().map(bitem_to_str).join(", "),
             simple_join = if rule.simple_join_start_index.is_some() {" [SIMPLE JOIN]"} else {""},
             reorderable = if rule.simple_join_start_index.is_some() && !rule.reorderable {" [NOT REORDERABLE]"} else {""})
@@ -218,8 +225,10 @@ impl MirRelationVersion {
 fn get_hir_dep_graph(hir: &AscentIr) -> Vec<(usize,usize)> {
    let mut relations_to_rules_in_head : HashMap<&RelationIdentity, HashSet<usize>> = HashMap::with_capacity(hir.rules.len());
    for (i, rule) in hir.rules.iter().enumerate(){
-      for head_rel in rule.head_clauses.iter().map(|hcl| &hcl.rel){
-         relations_to_rules_in_head.entry(head_rel).or_default().insert(i);
+      for head_rel in rule.head_clauses.iter().map(|hcl| hcl.rel()){
+         if let Some(head_rel) = head_rel {
+            relations_to_rules_in_head.entry(head_rel).or_default().insert(i);
+         }
       }
    }
    
@@ -270,13 +279,15 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
             }
          }
 
-         for hcl in hir.rules[rule_ind].head_clauses.iter() {        
-            dynamic_relations_set.insert(hcl.rel.clone());
-            dynamic_relations.entry(hcl.rel.clone()).or_default();
-            // TODO why this?
-            // ... we can add only indices used in bodies in the scc, that requires the codegen to be updated.
-            for rel_ind in &hir.relations_ir_relations[&hcl.rel]{
-               dynamic_relations.get_mut(&hcl.rel).unwrap().insert(rel_ind.clone());
+         for hcl in hir.rules[rule_ind].head_clauses.iter() {       
+            if let Some(head_rel) = hcl.rel() {
+               dynamic_relations_set.insert(head_rel.clone());
+               dynamic_relations.entry(head_rel.clone()).or_default();
+               // TODO why this?
+               // ... we can add only indices used in bodies in the scc, that requires the codegen to be updated.
+               for rel_ind in &hir.relations_ir_relations[&head_rel]{
+                  dynamic_relations.get_mut(&head_rel).unwrap().insert(rel_ind.clone());
+               }
             }
          }
 
@@ -350,13 +361,18 @@ fn check_mir_let_with_id(mir: &AscentMir) -> Option<Ident> {
       .flat_map(|scc| scc.rules.iter())
       .flat_map(|rule| rule.head_clause.iter())
       .filter_map(|hitem| {
-         if let Some(_) = hitem.id_name {
-            if hitem.required_flag {
-               return None;
+         match hitem {
+            IrHeadItem::Clause(hcl) => {
+               if let Some(_) = hcl.id_name {
+                  if hcl.required_flag {
+                     return None;
+                  }
+                  Some(hcl.rel.name.clone())
+               } else {
+                  None
+               }
             }
-            Some(hitem.rel.name.clone())
-         } else {
-            None
+            IrHeadItem::Equiv(_) => { None }
          }
       })
       .find(|rel| {
@@ -494,6 +510,7 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
          let pre_first_clause_vars = bcls.iter().take(ind).flat_map(MirBodyItem::bound_vars);
          !intersects(pre_first_clause_vars, bcls[ind + 1].bound_vars())
       });
+         
       if forced {
          MirRule {
             body_items: bcls,

@@ -419,6 +419,19 @@ fn test_generic_ty(){
 }
 
 #[test]
+fn test_add_equiv(){
+   let input = quote!{
+      relation foo(i32, i32, usize);
+      relation bar(i32, i32, usize);
+      
+      i1 <=> i2 <-- foo(a, b, i1), bar(b, c, i2);
+   };
+
+   write_to_scratchpad(input);
+}
+
+
+#[test]
 fn test_generic_ty_where_clause(){
    let input = quote!{
       struct AscentProgram<T> where T: Clone + Hash + Eq;

@@ -5,6 +5,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
+use syn::token::Token;
 use syn::{Ident, Token, braced, bracketed, parenthesized};
 
 // keywords
@@ -239,6 +240,7 @@ impl Parse for SlogRule {
             heads.push(content.parse::<SlogRuleHeadItem>()?);
          }
          let _arrow = content.parse::<Token![<-]>()?;
+         let _ = content.parse::<Token![-]>()?;
          let mut body = Vec::new();
          while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![->]) {
             body.push(content.parse::<SlogRuleBodyItem>()?);
@@ -251,6 +253,7 @@ impl Parse for SlogRule {
             body.push(content.parse::<SlogRuleBodyItem>()?);
          }
          let _arrow = content.parse::<Token![->]>()?;
+         let _ = content.parse::<Token![-]>()?;
          let mut heads = Vec::new();
          while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![->]) {
             heads.push(content.parse::<SlogRuleHeadItem>()?);

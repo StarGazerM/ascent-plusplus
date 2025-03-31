@@ -301,6 +301,10 @@ fn peek_if_or_let(parse_stream: ParseStream) -> bool {
    parse_stream.peek(Token![if]) || parse_stream.peek(Token![let])
 }
 
+fn peek_equiv(parse_stream: ParseStream) -> bool {
+   parse_stream.peek(Ident) && parse_stream.peek2(Token![<=])
+}
+
 
 #[derive(Clone, Parse)]
 pub struct SubQueryInitArg {
@@ -587,20 +591,39 @@ pub enum HeadItemNode {
    MacroInvocation(syn::ExprMacro),
    #[peek(Token![%], name = "function return")]
    HeadFuctionReturn(FunctionCallNode),
+   #[peek_with(peek_equiv, name = "equiv clause")]
+   Equiv(EquivClauseNode),
    #[peek_with(peek_clause_head, name = "head clause")]
    HeadClause(HeadClauseNode),
 }
 
-impl HeadItemNode {
-   pub fn clause(&self) -> &HeadClauseNode {
-      match self {
-         HeadItemNode::HeadClause(cl) => cl,
-         HeadItemNode::HeadFuctionReturn(_) => panic!("unexpected function return"),
-         HeadItemNode::MacroInvocation(_) => panic!("unexpected macro invocation"),
-      }
-   }
+// impl HeadItemNode {
+//    pub fn clause(&self) -> Option<&HeadClauseNode> {
+//       match self {
+//          HeadItemNode::HeadClause(cl) => Some(cl),
+//          HeadItemNode::Equiv(_) => None,
+//          HeadItemNode::HeadFuctionReturn(_) => panic!("unexpected function return"),
+//          HeadItemNode::MacroInvocation(_) => panic!("unexpected macro invocation"),
+//       }
+//    }
+// }
+
+#[derive(Clone)]
+pub struct EquivClauseNode {
+   pub left_ident: Ident,
+   // pub _kw_equiv: kw::Equiv,
+   pub right_ident: Ident,
 }
 
+impl Parse for EquivClauseNode {
+   fn parse(input: ParseStream) -> Result<Self> {
+      let left_ident = input.parse::<Ident>()?;
+      input.parse::<Token![<=]>()?;
+      input.parse::<Token![>]>()?;
+      let right_ident = input.parse::<Ident>()?;
+      Ok(Self{left_ident, right_ident})
+   }
+}
 #[derive(Clone)]
 pub struct HeadClauseNode {
    pub rel : Ident,
@@ -769,6 +792,7 @@ pub(crate) fn rule_node_summary(rule: &RuleNode) -> String {
       match hitem {
          HeadItemNode::MacroInvocation(m) => format!("{:?}!(..)", m.mac.path),
          HeadItemNode::HeadFuctionReturn(f) => format!("%{} -> {:?}", f.name, f.return_var),
+         HeadItemNode::Equiv(equiv) => format!("{} <=> {}", equiv.left_ident, equiv.right_ident),
          HeadItemNode::HeadClause(cl) => cl.rel.to_string(),
       }
    }

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use crate::ascent_hir::IrHeadItem;
 use crate::utils::{expr_to_ident, tuple_spanned};
 use crate::{
    ascent_hir::IndexValType,
@@ -14,7 +15,7 @@ use itertools::Itertools;
 use syn::{parse2, parse_quote_spanned, spanned::Spanned};
 use syn::{parse_quote, Expr, Ident};
 
-use crate::ascent_syntax::CondClause;
+use crate::ascent_syntax::{CondClause, EquivClauseNode};
 use crate::{
    ascent_mir::{ir_relation_version_var_name, MirRelation},
    utils::{exp_cloned, tuple},
@@ -343,10 +344,40 @@ fn head_clauses_structs_and_update_code(
    let mut add_rows = vec![];
 
    for hcl in rule.head_clause.iter() {
-      add_rows.push(compile_head_clause(hcl, scc, mir));
+      add_rows.push(compile_head_clause_from_item(hcl, scc, mir));
    }
    
    (quote! {}, quote! {#(#add_rows)*})
+}
+
+fn compile_head_clause_from_item(
+   hitem: &IrHeadItem,
+   scc: &MirScc,
+   mir: &AscentMir
+) -> proc_macro2::TokenStream {
+   match hitem {
+      IrHeadItem::Clause(hcl) => compile_head_clause(hcl, scc, mir),
+      IrHeadItem::Equiv(equiv) => compile_equiv_clause(equiv, scc, mir),
+   }
+}
+
+fn compile_equiv_clause(
+   equiv: &EquivClauseNode,
+   _scc: &MirScc,
+   mir: &AscentMir
+) -> proc_macro2::TokenStream {
+   
+   let src_var = equiv.left_ident.clone();
+   let dst_var = equiv.right_ident.clone();
+   let set_changed_true_code = if !mir.is_parallel {
+      quote! { __changed = true; }
+   } else {
+      quote! { __changed.store(true, std::sync::atomic::Ordering::Relaxed);}
+   };
+   quote! {
+      _self.equiv_ids_.add(*#src_var, *#dst_var);
+      #set_changed_true_code
+   }
 }
 
 fn compile_head_clause(

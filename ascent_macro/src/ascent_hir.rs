@@ -6,7 +6,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 use syn::{parse2, parse_quote, punctuated::Punctuated, spanned::Spanned, token::Comma, Attribute, Error, Expr, Pat, Path, Type};
 
-use crate::{AscentProgram, ascent_syntax::{RelationNode, DsAttributeContents, Signatures}, utils::{expr_to_ident, is_wild_card, tuple_type}, syn_utils::{expr_get_vars, pattern_get_vars}};
+use crate::{ascent_syntax::{DsAttributeContents, EquivClauseNode, HeadItemNode, RelationNode, Signatures}, syn_utils::{expr_get_vars, pattern_get_vars}, utils::{expr_to_ident, is_wild_card, tuple_type}, AscentProgram};
 use crate::ascent_syntax::{BodyClauseArg, BodyItemNode, CondClause, GeneratorNode, RelationIdentity, RuleNode};
 
 #[derive(Clone)]
@@ -101,7 +101,7 @@ pub(crate) struct RelationMetadata{
 }
 
 pub(crate) struct IrRule {
-   pub head_clauses: Vec<IrHeadClause>,
+   pub head_clauses: Vec<IrHeadItem>,
    pub body_items: Vec<IrBodyItem>,
    pub simple_join_start_index: Option<usize>
 }
@@ -119,8 +119,30 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
       }
    }
    format!("{} <-- {}",
-            rule.head_clauses.iter().map(|hcl| hcl.rel.name.to_string()).join(", "),
+            rule.head_clauses.iter().map(|hcl| {
+               match hcl {
+                  IrHeadItem::Clause(hcl) => hcl.rel.name.to_string(),
+                  IrHeadItem::Equiv(equiv) => {
+                     format!("{} <=> {}", equiv.left_ident.to_string(), equiv.right_ident.to_string())
+                  }
+               }
+            }).join(", "),
             rule.body_items.iter().map(bitem_to_str).join(", "))
+}
+
+#[derive(Clone)]
+pub(crate) enum IrHeadItem {
+   Clause(IrHeadClause),
+   Equiv(EquivClauseNode)
+}
+
+impl IrHeadItem {
+   pub(crate) fn rel(&self) -> Option<&RelationIdentity> {
+      match self {
+         IrHeadItem::Clause(hcl) => Some(&hcl.rel),
+         IrHeadItem::Equiv(_) => None
+      }
+   }
 }
 
 #[derive(Clone)]
@@ -331,6 +353,7 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
          match &bitem {
             crate::ascent_syntax::HeadItemNode::MacroInvocation(_) => {},
             crate::ascent_syntax::HeadItemNode::HeadFuctionReturn(_) => {},
+            crate::ascent_syntax::HeadItemNode::Equiv(_) => {}, // TODO: handle this
             crate::ascent_syntax::HeadItemNode::HeadClause(head_clause_node) => {
                dynamic_relation_idents.insert(head_clause_node.rel.clone());
             }
@@ -604,26 +627,33 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
       
    }
    let mut head_clauses = vec![];
-   for hcl_node in rule.head_clauses.iter(){
-      let hcl_node = hcl_node.clause();
-      let rel = prog.relations.iter().find(|r| hcl_node.rel == r.name);
-      let rel = match rel {
-         Some(rel) => rel,
-         None => return Err(Error::new(hcl_node.rel.span(), format!("relation {} not defined", hcl_node.rel))),
-      };
-      let rel_identity = RelationIdentity::from(rel);
-      
-      let head_clause = IrHeadClause {
-         rel: rel_identity,
-         extern_db_name: hcl_node.extern_db_name.clone(),
-         args : hcl_node.args.iter().cloned().collect(),
-         span: hcl_node.span(),
-         args_span: hcl_node.args.span(),
-         required_flag: hcl_node.required_flag,
-         id_name: hcl_node.id_name.clone(),
-         delete_flag: hcl_node.delete_flag,
-      };
-      head_clauses.push(head_clause);
+   for hcl_item in rule.head_clauses.iter(){
+      match hcl_item {
+         HeadItemNode::HeadClause(hcl_node) => {
+            let rel = prog.relations.iter().find(|r| hcl_node.rel == r.name);
+            let rel = match rel {
+               Some(rel) => rel,
+               None => return Err(Error::new(hcl_node.rel.span(), format!("relation {} not defined", hcl_node.rel))),
+            };
+            let rel_identity = RelationIdentity::from(rel);
+            
+            let head_clause = IrHeadClause {
+               rel: rel_identity,
+               extern_db_name: hcl_node.extern_db_name.clone(),
+               args : hcl_node.args.iter().cloned().collect(),
+               span: hcl_node.span(),
+               args_span: hcl_node.args.span(),
+               required_flag: hcl_node.required_flag,
+               id_name: hcl_node.id_name.clone(),
+               delete_flag: hcl_node.delete_flag,
+            };
+            head_clauses.push(IrHeadItem::Clause(head_clause));
+         }
+         HeadItemNode::Equiv(equiv) => {
+            head_clauses.push(IrHeadItem::Equiv(equiv.clone()));
+         }
+         _ => { continue;}
+      }
    }
    
    let is_simple_join = first_two_clauses_simple && body_items.len() >= 2;

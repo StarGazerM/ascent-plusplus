@@ -96,6 +96,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
     match hi {
        HeadItemNode::MacroInvocation(_) => vec![hi.clone()],
        HeadItemNode::HeadFuctionReturn(_) => panic!("unexpected function return, should be desugared before bang desugar"),
+       HeadItemNode::Equiv(_) => vec![hi.clone()],
        HeadItemNode::HeadClause(cl) => {
           if let Some(exists_var) = cl.clone().exists_var {
              let mut new_cl = cl.clone();
@@ -734,6 +735,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                 .pipe(punctuated_try_unwrap)?
                 .pipe(flatten_punctuated))
           },
+          HeadItemNode::Equiv(_) => Ok(punctuated_singleton(hi)),
           HeadItemNode::HeadFuctionReturn(_) => Ok(punctuated_singleton(hi)),
           HeadItemNode::HeadClause(_) => Ok(punctuated_singleton(hi)),
        }
