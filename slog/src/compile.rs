@@ -39,7 +39,7 @@ fn compile_slog_clause_unstructured(clause: &SlogSExprClause) -> Result<TokenStr
          SlogClauseArg::SlogClause(_) => None,
          SlogClauseArg::Constant(constant) => Some(quote! { #constant }),
          SlogClauseArg::Wildcard => Some(quote! { _ }),
-         SlogClauseArg::RustExpr(_) => None,
+         SlogClauseArg::RustExpr(expr) => Some(quote! { #expr }),
       })
       .collect::<Vec<_>>();
    // if any is none, return error

@@ -83,6 +83,115 @@ fn test_slog_fact_compile() {
 
    write_to_scratchpad(tokens, quote! {}, false);
 }
+
+#[test]
+fn test_generative_facts_compile() {
+   let tokens = quote! {
+      (struct Foobar)
+      (define foo usize usize)
+      (define bar usize usize)
+      (define foobar sexpr sexpr)
+
+      #(foo 1 2)
+      #(bar 3 4)
+      #(foobar ?(foo x y) ?(bar a b))
+   };
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+
+#[test]
+fn test_normal_rule_compile() {
+   let tokens = quote! {
+      (struct TC)
+      (define edge usize usize)
+      (define tc usize usize)
+
+      [(tc x y) <-- (edge x y)]
+      [(tc x y) <-- (edge x y) (tc x y)]
+   };
+
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+
+#[test]
+fn test_resverse_arrow_rule_compile() {
+   let tokens = quote! {
+      (struct TC)
+      (define edge usize usize)
+      (define tc usize usize)
+
+      [(tc x y) --> (edge x y)]
+   };
+
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+#[test]
+fn test_escape_syntax_compile1() {
+   let tokens = quote! {
+      (struct TC)
+      (define edge usize usize)
+      (define tc usize usize)
+
+      [(tc x yy) <-- (edge x y) ,(let yy = y) ,(if y > &10)]
+   };
+
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+#[test]
+fn test_escape_syntax_compile2() {
+   let tokens = quote! {
+      (struct TC)
+      (define edge usize usize)
+      (define tc usize usize)
+
+      [(tc ,(x+1) y) <-- (edge x y)]
+   };
+
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+#[test]
+fn test_id_unification_compile() {
+   let tokens = quote! {
+      (struct Foobar)
+      (define foo usize usize)
+      (define bar usize usize)
+      (define foobar sexpr sexpr)
+
+      [(foobar idf (bar x y)) <-- (= idf (foo x y)) (bar x y)]
+   };
+
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+#[test]
+fn test_structured_clause_compile() {
+   let tokens = quote! {
+      (struct Foobar)
+      (define foo usize usize)
+      (define bar usize usize)
+      (define foobar sexpr sexpr)
+
+      [(foobar (foo x y) (bar a b)) <-- (foo x y) (bar a b) (foobar (foo x y) (bar a b))]
+   };
+
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+#[test]
+fn test_question_mark_compile() {
+   let tokens = quote! {
+      (struct Foobar)
+      (define foo usize usize)
+      (define bar usize usize)
+      (define foobar sexpr sexpr)
+   };
+}
+
 // #[test]
 // fn test_redundant_index() {
 //    let tokens = quote! {

@@ -188,12 +188,13 @@ impl Parse for SlogRuleBodyItem {
          // todo!("wwww {} {:?}", input.to_string(), input.peek3(syn::token::Paren));
          let clause = input.parse::<SlogSExprClause>()?;
          Ok(SlogRuleBodyItem::SlogSExprClause(clause))
-      } else if input.peek(syn::token::Brace) {
+      } else if input.peek(Token![,]) {
+         let _ = input.parse::<Token![,]>()?;
          let content;
-         let _ = braced!(content in input);
+         let _ = parenthesized!(content in input);
          Ok(SlogRuleBodyItem::AscentClause(content.parse()?))
       } else {
-         Err(input.error(format!("expected slog s-expr clause or explicit id clause:\n{}", input.to_string())))
+         Err(input.error(format!("body:expected slog s-expr clause or explicit id clause:\n{}", input.to_string())))
       }
    }
 }
@@ -239,26 +240,26 @@ impl Parse for SlogRule {
       let _ = bracketed!(content in input);
       if has_left_arrow(&content) {
          let mut heads = Vec::new();
-         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![->]) {
+         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             heads.push(content.parse::<SlogRuleHeadItem>()?);
          }
          let _arrow = content.parse::<Token![<-]>()?;
          let _ = content.parse::<Token![-]>()?;
          let mut body = Vec::new();
-         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![->]) {
+         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             body.push(content.parse::<SlogRuleBodyItem>()?);
          }
          Ok(SlogRule { heads, body })
       } else {
          // right arrow, reverse the order of the body and heads
          let mut body = Vec::new();
-         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![->]) {
+         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             body.push(content.parse::<SlogRuleBodyItem>()?);
          }
-         let _arrow = content.parse::<Token![->]>()?;
-         let _ = content.parse::<Token![-]>()?;
+         let _arrow = content.parse::<Token![-]>()?;
+         let _ = content.parse::<Token![->]>()?;
          let mut heads = Vec::new();
-         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![->]) {
+         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             heads.push(content.parse::<SlogRuleHeadItem>()?);
          }
          Ok(SlogRule { heads, body })
