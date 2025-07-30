@@ -496,6 +496,20 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
       let macro_input = rel_ds_macro_input(rel, mir);
       rel_codegens.push(quote_spanned! { macro_path.span()=> #macro_path::rel_codegen!{#macro_input} });
    }
+   let equiv_ids_decl = if mir.config.egg_mode {
+      quote! {
+         pub equiv_ids_: ascent::union_find::EqRel<usize>,
+      }
+   } else {
+      quote! {}
+   };
+   let equiv_ids_default = if mir.config.egg_mode {
+      quote! {
+         equiv_ids_ : Default::default(),
+      }
+   } else {
+      quote! {}
+   };
 
    // generate shared pointer for all external database
 
@@ -514,8 +528,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          pub runtime_total: #runtime_struct_name #ty_ty_generics,
          pub runtime_new: #runtime_struct_name #ty_ty_generics,
          pub runtime_delta: #runtime_struct_name #ty_ty_generics,
-
-         pub equiv_ids_: ascent::union_find::EqRel<usize>,
+         #equiv_ids_decl
          // #(#external_dbs_decl)*
       }
       #vis struct #runtime_struct_name #ty_impl_generics #ty_where_clause  {
@@ -567,7 +580,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                runtime_total: Default::default(),
                runtime_new: Default::default(),
                runtime_delta: Default::default(),
-               equiv_ids_: ascent::union_find::EqRel::default(),
+               #equiv_ids_default
                // #(#extern_db_default)*
             };
             #(#relation_initializations_for_default_impl)*

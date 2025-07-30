@@ -463,6 +463,22 @@ fn test_generic_ty_with_divergent_impl_generics_where_clause(){
 }
 
 #[test]
+fn test_egglog_mode(){
+   let input = quote!{
+      #![egglog_mode]
+      struct EquivTest;
+
+      relation foo(usize);
+      relation bar(usize);
+      foo(1);
+      bar(2);
+         
+      inflated_a <=> rep_b <-- foo(a), a <=> inflated_a, bar(b), b <=>! rep_b;
+   };
+   write_to_scratchpad(input);
+}
+
+#[test]
 fn exp_borrowing(){
    // let mut v: Vec<i32> = vec![];
    // let mut u: Vec<i32> = vec![];

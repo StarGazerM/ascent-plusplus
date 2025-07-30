@@ -44,6 +44,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
              } 
             res
           },
+         BodyItemNode::Equiv(_) => vec![vec![bitem.clone()]],
          BodyItemNode::FunctionCall(_) => vec![vec![bitem.clone()]], 
          BodyItemNode::MacroInvocation(m) => panic!("unexpected macro invocation: {:?}", m.mac.path),
          BodyItemNode::SubQuery(_) => vec![vec![bitem.clone()]],
@@ -128,6 +129,9 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
                                            .collect(),
        BodyItemNode::Cond(cl) => cl.bound_vars(),
        BodyItemNode::MacroInvocation(_) => vec![],
+       BodyItemNode::Equiv(equiv) => {
+          vec![equiv.left_ident.clone(), equiv.right_ident.clone()]
+       },
        BodyItemNode::FunctionCall(f) => {
           let mut res: Vec<Ident> = f.args.iter().flat_map(|arg| arg.get_vars()).collect();
           if let Some(ident) = &f.return_var {
@@ -165,6 +169,10 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
           CondClause::If(_cl) => (),
           CondClause::Let(cl) => pattern_visit_vars_mut(&mut cl.pattern, visitor),
        },
+       BodyItemNode::Equiv(equiv) => {
+          visitor(&mut equiv.left_ident);
+          visitor(&mut equiv.right_ident);
+       },
        BodyItemNode::MacroInvocation(_) => (),
        BodyItemNode::FunctionCall(f) => {
           for arg in f.args.iter_mut() {
@@ -197,6 +205,10 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
                 visit(e);
              }
           }
+       },
+       BodyItemNode::Equiv(equiv) => {
+          visitor(&mut equiv.left_ident);
+          visitor(&mut equiv.right_ident);
        },
        BodyItemNode::Negation(cl) => {
           for arg in cl.args.iter_mut() {
@@ -384,6 +396,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
           },
           BodyItemNode::Negation(_) => (),
           BodyItemNode::SubQuery(_) => (),
+          BodyItemNode::Equiv(_) => (),
           BodyItemNode::Disjunction(_) => panic!("unrecognized BodyItemNode variant"),
           BodyItemNode::MacroInvocation(m) => panic!("unexpected macro invocation: {:?}", m.mac.path),
           BodyItemNode::FunctionCall(_) => panic!("function call should already be desugared before repeated vars desugaring"),

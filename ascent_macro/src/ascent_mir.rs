@@ -7,7 +7,7 @@ use proc_macro2::{Ident, Span};
 use syn::{Expr, Type};
 use crate::{ascent_mir::MirRelationVersion::*, ascent_syntax::Signatures, syn_utils::pattern_get_vars};
 use crate::utils::{expr_to_ident, pat_to_ident, tuple_type, intersects};
-use crate::ascent_syntax::{CondClause, GeneratorNode, RelationIdentity};
+use crate::ascent_syntax::{CondClause, EquivClauseNode, GeneratorNode, RelationIdentity};
 use crate::ascent_hir::{AscentConfig, AscentIO, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrExternArg, IrExternDB, IrHeadItem, IrRelation, IrRule, RelationMetadata};
 
 pub(crate) struct AscentMir {
@@ -75,6 +75,7 @@ pub(crate) fn mir_rule_summary(rule: &MirRule) -> String {
          MirBodyItem::Cond(CondClause::IfLet(..)) => format!("if let ⋯"),
          MirBodyItem::Cond(CondClause::Let(..)) => format!("let ⋯"),
          MirBodyItem::Agg(agg) => format!("agg {}", agg.rel.ir_name()),
+         MirBodyItem::Equiv(equiv) => format!("{} <=> {}", equiv.left_ident.to_string(), equiv.right_ident.to_string()),
       }
    }
    format!("{} <-- {}{simple_join}{reorderable}",
@@ -96,7 +97,8 @@ pub(crate) enum MirBodyItem {
    Clause(MirBodyClause),
    Generator(GeneratorNode),
    Cond(CondClause),
-   Agg(IrAggClause)
+   Agg(IrAggClause),
+   Equiv(EquivClauseNode)
 }
 
 impl MirBodyItem {
@@ -117,6 +119,7 @@ impl MirBodyItem {
          MirBodyItem::Generator(gen) => pattern_get_vars(&gen.pattern),
          MirBodyItem::Cond(cond) => cond.bound_vars(),
          MirBodyItem::Agg(agg) => pattern_get_vars(&agg.pat),
+         MirBodyItem::Equiv(equiv) => vec![equiv.left_ident.clone(), equiv.right_ident.clone()],
       }
    }
 }
@@ -469,7 +472,8 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
          },
          IrBodyItem::Cond(cl) => MirBodyItem::Cond(cl.clone()),
          IrBodyItem::Generator(gen) => MirBodyItem::Generator(gen.clone()),
-         IrBodyItem::Agg(agg) => MirBodyItem::Agg(agg.clone())
+         IrBodyItem::Agg(agg) => MirBodyItem::Agg(agg.clone()),
+         IrBodyItem::Equiv(equiv) => MirBodyItem::Equiv(equiv.clone())
       }
    }
 

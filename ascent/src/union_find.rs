@@ -63,6 +63,12 @@ impl<T: Clone + Hash + Eq> EqRel<T> {
    }
    pub fn elem_set(&self, elem: &T) -> Option<usize> { self.elem_ids.get(elem).map(|id| self.get_dominant_id(*id)) }
 
+   pub fn get_dominant_elem(&self, elem: &T) -> Option<&T> {
+      let id = self.elem_set(elem)?;
+      let dom_id = self.get_dominant_id(id);
+      self.sets.get(dom_id)?.iter().next()
+   }
+
    fn get_dominant_id_update(&mut self, id: usize) -> usize {
       match self.set_subsumptions.get(&id) {
          Some(&parent_id) => {

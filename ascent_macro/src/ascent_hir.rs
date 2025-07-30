@@ -17,6 +17,7 @@ pub(crate) struct AscentConfig {
    pub generate_run_partial: bool,
    pub inter_rule_parallelism: bool,
    // pub stream_processing: bool,
+   pub egg_mode: bool,
    pub default_ds: DsAttributeContents,
 }
 
@@ -24,6 +25,7 @@ impl AscentConfig {
    const MEASURE_RULE_TIMES_ATTR: &'static str = "measure_rule_times";
    const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
+   const EGG_MODE_ATTR: &'static str = "egglog_mode";
    // const STREAM_PROCESSING_ATTR: &'static str = "stream_processing";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
@@ -35,9 +37,11 @@ impl AscentConfig {
          .map(|attr| attr.meta.require_path_only()).transpose()?;
       // let stream_processing = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::STREAM_PROCESSING_ATTR))
       //    .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
+      let egg_mode = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::EGG_MODE_ATTR))
+         .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
 
       let recognized_attrs = 
-         [Self::MEASURE_RULE_TIMES_ATTR, Self::GENERATE_RUN_TIMEOUT_ATTR, Self::INTER_RULE_PARALLELISM_ATTR, REL_DS_ATTR];
+         [Self::MEASURE_RULE_TIMES_ATTR, Self::GENERATE_RUN_TIMEOUT_ATTR, Self::INTER_RULE_PARALLELISM_ATTR, REL_DS_ATTR, Self::EGG_MODE_ATTR];
       for attr in attrs.iter() {
          if !recognized_attrs.iter().any(|recognized_attr| attr.meta.path().is_ident(recognized_attr)) {
             return Err(Error::new_spanned(attr, 
@@ -57,7 +61,8 @@ impl AscentConfig {
          include_rule_times,
          generate_run_partial,
          // stream_processing,
-         default_ds
+         egg_mode,
+         default_ds,
       })
    }
 }
@@ -116,6 +121,7 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
          IrBodyItem::Cond(CondClause::IfLet(..)) => format!("if let ⋯"),
          IrBodyItem::Cond(CondClause::Let(..)) => format!("let ⋯"),
          IrBodyItem::Agg(agg) => format!("agg {}", agg.rel.ir_name()),
+         IrBodyItem::Equiv(equiv) => format!("{} <=> {}", equiv.left_ident.to_string(), equiv.right_ident.to_string()),
       }
    }
    format!("{} <-- {}",
@@ -161,7 +167,8 @@ pub(crate) enum IrBodyItem {
    Clause(IrBodyClause),
    Generator(GeneratorNode),
    Cond(CondClause),
-   Agg(IrAggClause)
+   Agg(IrAggClause),
+   Equiv(EquivClauseNode)
 }
 
 impl IrBodyItem {
@@ -170,7 +177,8 @@ impl IrBodyItem {
          IrBodyItem::Clause(bcl) => Some(&bcl.rel),
          IrBodyItem::Agg(agg) => Some(&agg.rel),
          IrBodyItem::Generator(_) |
-         IrBodyItem::Cond(_) => None,
+         IrBodyItem::Cond(_) |
+         IrBodyItem::Equiv(_) => None,
       }
    }
 }
@@ -361,16 +369,6 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       }
    }
 
-   // enumerate all different order version of rules
-   // let mut all_order_rules = vec![];
-   // for rule in prog.rules.iter(){
-   //    let body_items = rule.body_items.clone();
-   //    let dep = compute_body_item_dep(body_items.clone());
-   //    // create digraph from dep
-   //    let mut rule_graph =
-      
-   // }
-
    let ir_rules : Vec<(IrRule, Vec<IrRelation>)> = prog.rules.iter().map(|r| compile_rule_to_ir_rule(r, prog)).try_collect()?;
    let config = AscentConfig::new(prog.attributes.clone(), is_parallel)?;
    let num_relations = prog.relations.len();
@@ -416,7 +414,7 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       for bitem in ir_rule.body_items.iter(){
          let rel = match bitem {
             IrBodyItem::Clause(bcl) => Some(&bcl.rel),
-            IrBodyItem::Agg(agg) => Some(&agg.rel),
+            IrBodyItem::Agg(agg) => Some(&agg.rel), 
             _ => None
          };
          if let Some(rel) = rel {
@@ -621,6 +619,9 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                rel_args: agg.rel_args.iter().cloned().collect_vec(),
             };
             body_items.push(IrBodyItem::Agg(ir_agg_clause));
+         },
+         BodyItemNode::Equiv(ref equiv) => {
+            body_items.push(IrBodyItem::Equiv(equiv.clone()));
          },
          _ => panic!("unrecognized body item")
       }

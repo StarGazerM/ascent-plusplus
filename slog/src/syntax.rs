@@ -5,7 +5,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::token::Token;
 use syn::{Ident, Token, braced, bracketed, parenthesized};
 
 // keywords
@@ -94,7 +93,7 @@ fn is_slog_paren(input: &ParseStream) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SlogClauseArg {
-   LogicVar(Ident),
+   LogicVar(Ident, bool),
    Constant(syn::Lit),
    Wildcard,
    RustExpr(syn::Expr),
@@ -120,8 +119,12 @@ impl Parse for SlogClauseArg {
          let _ = input.parse::<Token![_]>()?;
          Ok(SlogClauseArg::Wildcard)
       } else {
+         let need_inflation = input.peek(Token![@]);
+         if input.peek(Token![@]) {
+            let _ = input.parse::<Token![@]>()?;
+         }
          let logic_var = input.parse::<Ident>()?;
-         Ok(SlogClauseArg::LogicVar(logic_var))
+         Ok(SlogClauseArg::LogicVar(logic_var, need_inflation))
       }
    }
 }
@@ -319,9 +322,10 @@ impl Parse for SlogProgramLine {
          let rule = input.parse::<SlogRule>()?;
          Ok(SlogProgramLine::Rule(rule))
       } else {
-         unimplemented!("fact parsing");
-         // let fact = input.parse::<SlogSExprClause>()?;
-         // Ok(SlogProgramLine::Fact(fact))
+         // fact
+         input.parse::<Token![#]>()?;
+         let fact = input.parse::<SlogSExprClause>()?;
+         Ok(SlogProgramLine::Fact(fact))
       }
    }
 }

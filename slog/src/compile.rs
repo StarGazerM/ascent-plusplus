@@ -34,7 +34,8 @@ fn compile_slog_clause_unstructured(clause: &SlogSExprClause) -> Result<TokenStr
    let args_tokens = args
       .iter()
       .map(|arg| match arg {
-         SlogClauseArg::LogicVar(id) => Some(quote! { #id }),
+         // TODO: add inflation code
+         SlogClauseArg::LogicVar(id, _) => Some(quote! { #id }),
          SlogClauseArg::SlogClause(_) => None,
          SlogClauseArg::Constant(constant) => Some(quote! { #constant }),
          SlogClauseArg::Wildcard => Some(quote! { _ }),
@@ -72,7 +73,14 @@ fn compile_slog_line(line: &SlogProgramLine) -> Result<TokenStream> {
    match line {
       SlogProgramLine::Rule(rule) => compile_slog_rule_unstructured(rule),
       SlogProgramLine::RelationDecl(decl) => compile_slog_relation_decl(decl),
-      SlogProgramLine::Fact(_) => unimplemented!(),
+      SlogProgramLine::Fact(clause) => {
+         // desugar to a rule with empty body rule
+         let rule = SlogRule {
+            heads: vec![SlogRuleHeadItem::SlogSExprClause(clause.clone())],
+            body: vec![],
+         };
+         compile_slog_rule_unstructured(&rule)
+      },
    }
 }
 
@@ -93,6 +101,7 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
    };
    Ok(quote! {
       #slog_mode {
+         // #![egglog_mode]
          #meta
          #lines
       }
@@ -124,7 +133,7 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
          }
       })
       .collect::<Result<Vec<_>>>()?;
-   let bodys = rule
+   let mut bodys = rule
       .body
       .iter()
       .map(|body| match body {
@@ -154,6 +163,10 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
          }
       })
       .collect::<Result<Vec<_>>>()?;
+   // if body is empty, add a dummy body ()
+   if bodys.is_empty() {
+      bodys.push(quote! { () });
+   }
 
    Ok(quote! {
        #(#heads),* <-- #(#bodys),*;
@@ -193,7 +206,8 @@ fn desugar_question_nested_sexpr(sexpr: &SlogSExprClause) -> (Vec<SlogRuleBodyIt
          if let ParenType::QuestionParen = &sexpr.paren {
             let (new_body, new_rel_name_id) = desugar_question_head_sexpr(sexpr).unwrap();
             new_res_body.push(new_body);
-            new_args.push(SlogClauseArg::LogicVar(new_rel_name_id));
+            // TODO: add inflation code
+            new_args.push(SlogClauseArg::LogicVar(new_rel_name_id, false));
          } else {
             // recurse on nested sexpr
             let (new_body, new_expr) = desugar_question_nested_sexpr(sexpr);
@@ -243,6 +257,14 @@ fn destruct_slog_line(line: &SlogProgramLine) -> SlogProgramLine {
       }
       let desugared_rule = SlogRule { heads: new_heads, body: new_body };
       SlogProgramLine::Rule(desugared_rule)
+   } else if let SlogProgramLine::Fact(clause) = line {
+      // convert fact to rule
+      let rule = SlogRule {
+         heads: vec![SlogRuleHeadItem::SlogSExprClause(clause.clone())],
+         body: vec![],
+      };
+      let fact_line = SlogProgramLine::Rule(rule);
+      destruct_slog_line(&fact_line)
    } else {
       line.clone()
    }
@@ -260,7 +282,8 @@ fn destruct_slog_rule_head_item(item: &SlogRuleHeadItem) -> Vec<SlogRuleHeadItem
          let new_id_var = new_ident(&nested_sexpr.rel_name.to_string());
          let new_items_inner = destruct_slog_head_nested(nested_sexpr, &new_id_var);
          new_items.extend(new_items_inner);
-         new_args.push(SlogClauseArg::LogicVar(new_id_var));
+         // TODO: add inflation code
+         new_args.push(SlogClauseArg::LogicVar(new_id_var, false));
       } else {
          new_args.push(arg.clone());
       }
@@ -316,7 +339,8 @@ fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
             let (new_body_before, new_body_after) = deconstruct_nested_sexpr_body(sexpr, new_id_var.clone());
             before.extend(new_body_before);
             after.extend(new_body_after);
-            new_args.push(SlogClauseArg::LogicVar(new_id_var));
+            // TODO: add inflation code
+            new_args.push(SlogClauseArg::LogicVar(new_id_var, false));
          } else {
             new_args.push(arg.clone());
          }
@@ -347,7 +371,8 @@ fn deconstruct_nested_sexpr_body(
          let (new_body_before_inner, new_body_after_inner) = deconstruct_nested_sexpr_body(sexpr, new_id_var.clone());
          new_body_before.extend(new_body_before_inner);
          new_body_after.extend(new_body_after_inner);
-         new_args.push(SlogClauseArg::LogicVar(new_id_var));
+         // TODO: add inflation code
+         new_args.push(SlogClauseArg::LogicVar(new_id_var, false));
       } else {
          new_args.push(arg.clone());
       }

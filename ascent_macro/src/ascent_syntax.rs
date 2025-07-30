@@ -267,6 +267,8 @@ impl Parse for RelationNode {
 
 #[derive(Parse, Clone)]
 pub enum BodyItemNode {
+   #[peek_with(peek_equiv, name = "equiv clause")]
+   Equiv(EquivClauseNode),
    #[peek(Token![for], name = "generative clause")]
    Generator(GeneratorNode),
    #[peek(kw::agg, name = "aggregate clause")]
@@ -611,6 +613,7 @@ pub enum HeadItemNode {
 #[derive(Clone)]
 pub struct EquivClauseNode {
    pub left_ident: Ident,
+   pub representative : bool,
    // pub _kw_equiv: kw::Equiv,
    pub right_ident: Ident,
 }
@@ -620,8 +623,12 @@ impl Parse for EquivClauseNode {
       let left_ident = input.parse::<Ident>()?;
       input.parse::<Token![<=]>()?;
       input.parse::<Token![>]>()?;
+      let representative = input.peek(Token![!]);
+      if representative {
+         input.parse::<Token![!]>()?;
+      }
       let right_ident = input.parse::<Ident>()?;
-      Ok(Self{left_ident, right_ident})
+      Ok(Self{left_ident, representative, right_ident})
    }
 }
 #[derive(Clone)]
@@ -777,6 +784,7 @@ impl Parse for RuleNode {
 pub(crate) fn rule_node_summary(rule: &RuleNode) -> String {
    fn bitem_to_str(bitem: &BodyItemNode) -> String {
       match bitem {
+         BodyItemNode::Equiv(equiv) => format!("{} <=> {}", equiv.left_ident, equiv.right_ident),
          BodyItemNode::Generator(gen) => format!("for_{}", pat_to_ident(&gen.pattern).map(|x| x.to_string()).unwrap_or_default()),
          BodyItemNode::Clause(bcl) => format!("{}", bcl.rel),
          BodyItemNode::Disjunction(_) => todo!(),

@@ -11,6 +11,7 @@ use crate::{
    ascent_hir::IrHeadClause,
    utils::{tuple_type, TokenStreamExtensions},
 };
+use rand::Rng;
 use itertools::Itertools;
 use syn::{parse2, parse_quote_spanned, spanned::Spanned};
 use syn::{parse_quote, Expr, Ident};
@@ -52,6 +53,32 @@ fn compile_cond_clause(cond: &CondClause, body: proc_macro2::TokenStream) -> pro
                #body
             }
          }
+      }
+   }
+}
+
+fn compile_equiv_clause_body(equiv: &EquivClauseNode, body: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+   let src_var = &equiv.left_ident;
+   let dst_var = &equiv.right_ident;
+   if equiv.representative {
+      quote_spanned! {equiv.left_ident.span()=>
+         let #dst_var = _self.equiv_ids_.get_dominant_elem(#src_var).unwrap_or(#src_var);
+         #body
+      }
+   } else {
+      // gen a random equiv iter_items
+      let iter_items = Ident::new(&format!("__iter_items_{}", rand::thread_rng().gen_range(0..100000)), equiv.left_ident.span());
+      quote_spanned! {equiv.left_ident.span()=>
+         let #iter_items: Vec<_> = 
+            if let Some(set) = _self.equiv_ids_.set_of(#src_var) {
+                set.cloned().collect()
+            } else {
+                vec![#src_var.clone()]
+            };
+
+        for #dst_var in #iter_items {
+            #body
+        }
       }
    }
 }
@@ -274,6 +301,9 @@ fn compile_mir_rule_inner(
                }
             }
          }
+         MirBodyItem::Equiv(equiv) => {
+            compile_equiv_clause_body(equiv, next_loop)
+         }
          MirBodyItem::Generator(gen) => {
             let pat = &gen.pattern;
             let expr = &gen.expr;
@@ -357,11 +387,11 @@ fn compile_head_clause_from_item(
 ) -> proc_macro2::TokenStream {
    match hitem {
       IrHeadItem::Clause(hcl) => compile_head_clause(hcl, scc, mir),
-      IrHeadItem::Equiv(equiv) => compile_equiv_clause(equiv, scc, mir),
+      IrHeadItem::Equiv(equiv) => compile_equiv_clause_head(equiv, scc, mir),
    }
 }
 
-fn compile_equiv_clause(
+fn compile_equiv_clause_head(
    equiv: &EquivClauseNode,
    _scc: &MirScc,
    mir: &AscentMir
@@ -374,9 +404,29 @@ fn compile_equiv_clause(
    } else {
       quote! { __changed.store(true, std::sync::atomic::Ordering::Relaxed);}
    };
-   quote! {
-      _self.equiv_ids_.add(*#src_var, *#dst_var);
-      #set_changed_true_code
+   let src_var_repr_name = Ident::new(&format!("__src_var_repr_{}", src_var), src_var.span());
+   let dst_var_repr_name = Ident::new(&format!("__dst_var_repr_{}", dst_var), dst_var.span());
+    if equiv.representative {
+      let src_var = &equiv.left_ident;
+      let dst_var = &equiv.right_ident;
+      quote! {
+         let #dst_var = _self.equiv_ids_.get_dominant_elem(#src_var).unwrap_or(#src_var);
+         #set_changed_true_code
+      }
+    } else { quote! {
+         let #src_var_repr_name = _self.equiv_ids_.elem_set(&#src_var);
+         let #dst_var_repr_name = _self.equiv_ids_.elem_set(&#dst_var);
+         if let Some(#src_var_repr_name) = #src_var_repr_name {
+            if let Some(#dst_var_repr_name) = #dst_var_repr_name {
+               _self.equiv_ids_.add(#src_var_repr_name, #dst_var_repr_name);
+            } else {
+               _self.equiv_ids_.add(#src_var_repr_name, #dst_var.clone());
+            }
+         } else {
+            _self.equiv_ids_.add(#src_var.clone(), #dst_var.clone());
+         }
+         #set_changed_true_code
+      }
    }
 }
 
@@ -554,11 +604,12 @@ fn compile_head_clause(
             // #set_changed_true_code
          }
       } else {
+         let hname = format!("{}", hcl.rel.name);
          let hash_tuple_code = quote! {
             #new_id_name = {
                use std::hash::{Hash, Hasher};
                let mut hasher = ::std::hash::DefaultHasher::new();
-               __new_row.hash(&mut hasher);
+               (__new_row.clone(), #hname).hash(&mut hasher);
                hasher.finish() as usize
             };
          };

@@ -15,7 +15,7 @@ fn test_slog_unstructure_compile() {
       (define bar usize usize)
       (define foobar usize usize)
 
-      [(foobar a b) <- (= a (foo x y)) (= b (bar x y))]
+      [(foobar a b) <-- (= a (foo x y)) (= b (bar x y))]
    };
 
    write_to_scratchpad(tokens, quote! {}, false);
@@ -43,7 +43,7 @@ fn test_slog_structure_body_compile() {
       (define bar usize usize)
       (define foobar sexpr sexpr)
 
-      [(foobar idf (bar x y)) <- (= idf (foo x y)) (bar x y)]
+      [(foobar idf (bar x y)) <-- (= idf (foo x y)) (bar x y)]
 
       [(bar x y) <-- (foobar (foo x y) _) (bar x y)]
    };
@@ -60,27 +60,40 @@ fn test_slog_order_compile() {
       (define bar usize usize)
       (define foobar sexpr sexpr)
 
-      // [(foobar idf (bar x y)) <- (= idf (foo x y)) (bar x y)]
-
+      // query foo before foobar
       [(bar x y) <-- (foobar ?(foo x y) _) (bar x y)]
+      [(bar x y) <-- (foobar (foo x y) _) (bar x y)]
    };
 
    write_to_scratchpad(tokens, quote! {}, false);
 }
 
 #[test]
-fn test_redundant_index() {
+fn test_slog_fact_compile() {
    let tokens = quote! {
       (struct Foobar)
       (define foo usize usize)
       (define bar usize usize)
       (define foobar sexpr sexpr)
 
-      
+      #(foo 1 2)
+      #(bar 3 4)
+      #(foobar (foo 1 2) (bar 3 4))
    };
 
-
+   write_to_scratchpad(tokens, quote! {}, false);
 }
+// #[test]
+// fn test_redundant_index() {
+//    let tokens = quote! {
+//       (struct Foobar)
+//       (define foo usize usize)
+//       (define bar usize usize)
+//       (define foobar sexpr sexpr)
+//    };
+// }
+
+
 
 // a test helper function to write slog to scratchpad
 fn write_to_scratchpad(
