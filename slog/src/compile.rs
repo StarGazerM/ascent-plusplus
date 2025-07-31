@@ -3,7 +3,7 @@
 use crate::{
    syntax::{
       ExplicitIDClause, ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule,
-      SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause,
+      SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause, kw_slog::ExistsBang,
    },
    util::new_ident,
 };
@@ -46,7 +46,7 @@ fn compile_slog_clause_unstructured(clause: &SlogSExprClause) -> Result<TokenStr
    if args_tokens.iter().any(|arg| arg.is_none()) {
       return Err(syn::Error::new_spanned(
          clause.rel_name.clone(),
-         "unstructured clause must be all logic vars or all constants",
+         format!("unstructured clause must be all logic vars or all constants {:?}", clause),
       ));
    }
    let id_tag_code = if clause.id_var.is_some() {
@@ -57,15 +57,15 @@ fn compile_slog_clause_unstructured(clause: &SlogSExprClause) -> Result<TokenStr
    } else {
       quote! {}
    };
-   let bang_tag_code = if clause.paren == ParenType::BangParen {
-      quote! {
-         !
-      }
-   } else {
-      quote! {}
-   };
+   // let bang_tag_code = if clause.paren == ParenType::BangParen {
+   //    quote! {
+   //       !
+   //    }
+   // } else {
+   //    quote! {}
+   // };
    Ok(quote! {
-       #rel_name(#(#args_tokens),*)#id_tag_code #bang_tag_code
+       #rel_name(#(#args_tokens),*)#id_tag_code
    })
 }
 
@@ -75,12 +75,9 @@ fn compile_slog_line(line: &SlogProgramLine) -> Result<TokenStream> {
       SlogProgramLine::RelationDecl(decl) => compile_slog_relation_decl(decl),
       SlogProgramLine::Fact(clause) => {
          // desugar to a rule with empty body rule
-         let rule = SlogRule {
-            heads: vec![SlogRuleHeadItem::SlogSExprClause(clause.clone())],
-            body: vec![],
-         };
+         let rule = SlogRule { heads: vec![SlogRuleHeadItem::SlogSExprClause(clause.clone())], body: vec![] };
          compile_slog_rule_unstructured(&rule)
-      },
+      }
    }
 }
 
@@ -99,10 +96,16 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
          ascent_par!
       }
    };
+   let exists_bang = ExistsBang::default();
    Ok(quote! {
       #slog_mode {
          // #![egglog_mode]
          #meta
+
+         relation ID nil(usize);
+         nil(1);
+         #exists_bang nid.nil(0) <-- nil(1);
+
          #lines
       }
    })
@@ -126,8 +129,9 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
             let id_var = clause.id_var.clone();
             let compiled_clause = compile_slog_clause_unstructured(&clause.clause);
             compiled_clause.map(|clause| {
+               let exists_bang = ExistsBang::default();
                quote! {
-                  let #id_var = #clause
+                  #exists_bang #id_var. #clause
                }
             })
          }
@@ -149,9 +153,14 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
          SlogRuleBodyItem::ExplicitIDClause(clause) => {
             let id_var = clause.id_var.clone();
             let compiled_clause = compile_slog_clause_unstructured(&clause.clause);
-            compiled_clause.map(|clause| {
+            compiled_clause.map(|clause_code| {
+               let id_code = if clause.clause.id_var.is_some() {
+                  quote! {}
+               } else {
+                  quote! { .#id_var}
+               };
                quote! {
-                  #clause.#id_var
+                  #clause_code #id_code
                }
             })
          }
@@ -163,9 +172,9 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
          }
       })
       .collect::<Result<Vec<_>>>()?;
-   // if body is empty, add a dummy body ()
+   // if body is empty, add a dummy body
    if bodys.is_empty() {
-      bodys.push(quote! { () });
+      bodys.push(quote! { nil() });
    }
 
    Ok(quote! {
@@ -206,6 +215,7 @@ fn desugar_question_nested_sexpr(sexpr: &SlogSExprClause) -> (Vec<SlogRuleBodyIt
          if let ParenType::QuestionParen = &sexpr.paren {
             let (new_body, new_rel_name_id) = desugar_question_head_sexpr(sexpr).unwrap();
             new_res_body.push(new_body);
+            // panic!("desugar_question_nested_sexpr {:?}", sexpr);
             // TODO: add inflation code
             new_args.push(SlogClauseArg::LogicVar(new_rel_name_id, false));
          } else {
@@ -220,7 +230,7 @@ fn desugar_question_nested_sexpr(sexpr: &SlogSExprClause) -> (Vec<SlogRuleBodyIt
       }
    }
    (new_res_body, SlogSExprClause {
-      paren: sexpr.paren.clone(),
+      paren: ParenType::Regular,
       rel_name: sexpr.rel_name.clone(),
       args: new_args,
       id_var: sexpr.id_var.clone(),
@@ -233,7 +243,12 @@ fn desugar_question_head_sexpr(sexpr: &SlogSExprClause) -> Option<(SlogRuleBodyI
       Some((
          SlogRuleBodyItem::ExplicitIDClause(ExplicitIDClause {
             id_var: new_rel_name_id.clone(),
-            clause: sexpr.clone(),
+            clause: SlogSExprClause {
+               paren: ParenType::Regular,
+               rel_name: sexpr.rel_name.clone(),
+               args: sexpr.args.clone(),
+               id_var: sexpr.id_var.clone(),
+            },
          }),
          new_rel_name_id,
       ))
@@ -245,6 +260,7 @@ fn desugar_question_head_sexpr(sexpr: &SlogSExprClause) -> Option<(SlogRuleBodyI
 fn destruct_slog_line(line: &SlogProgramLine) -> SlogProgramLine {
    if let SlogProgramLine::Rule(rule) = line {
       let desugared_rule = desugar_question_paren_rule(rule);
+      // panic!("desugared_rule {:?}", desugared_rule);
       let mut new_heads = vec![];
       for head in &desugared_rule.heads {
          let new_items = destruct_slog_rule_head_item(head);
@@ -253,16 +269,16 @@ fn destruct_slog_line(line: &SlogProgramLine) -> SlogProgramLine {
       let mut new_body = vec![];
       for body in &desugared_rule.body {
          let new_items = destruct_slog_body_item(body);
+         // panic!("new_items {:?}", new_items);
          new_body.extend(new_items);
       }
       let desugared_rule = SlogRule { heads: new_heads, body: new_body };
-      SlogProgramLine::Rule(desugared_rule)
+      let new_line = SlogProgramLine::Rule(desugared_rule);
+      // panic!("new_line {:?}", new_line);
+      new_line
    } else if let SlogProgramLine::Fact(clause) = line {
       // convert fact to rule
-      let rule = SlogRule {
-         heads: vec![SlogRuleHeadItem::SlogSExprClause(clause.clone())],
-         body: vec![],
-      };
+      let rule = SlogRule { heads: vec![SlogRuleHeadItem::SlogSExprClause(clause.clone())], body: vec![] };
       let fact_line = SlogProgramLine::Rule(rule);
       destruct_slog_line(&fact_line)
    } else {
@@ -311,6 +327,7 @@ fn destruct_slog_head_nested(sexpr: &SlogSExprClause, id_var: &Ident) -> Vec<Slo
          let new_id_var = new_ident(&nested_sexpr.rel_name.to_string());
          let new_items_inner = destruct_slog_head_nested(nested_sexpr, &new_id_var);
          new_items.extend(new_items_inner);
+         new_args.push(SlogClauseArg::LogicVar(new_id_var, false));
       } else {
          new_args.push(arg.clone());
       }
@@ -329,9 +346,11 @@ fn destruct_slog_head_nested(sexpr: &SlogSExprClause, id_var: &Ident) -> Vec<Slo
 }
 
 fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
+   // panic!("destruct_slog_body_item {:?}", item);
    let mut before = vec![];
    let mut after = vec![];
    if let Some(sexpr) = item.get_sexpr_clause() {
+      // panic!("sexpr {:?}", sexpr);
       let mut new_args = vec![];
       for arg in &sexpr.args {
          if let SlogClauseArg::SlogClause(sexpr) = arg {
@@ -345,14 +364,22 @@ fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
             new_args.push(arg.clone());
          }
       }
+      // panic!("new_args {:?}", new_args);
       let deconstructed_sexpr = SlogSExprClause {
          paren: sexpr.paren.clone(),
          rel_name: sexpr.rel_name.clone(),
          args: new_args,
          id_var: sexpr.id_var.clone(),
       };
-      let new_items =
-         before.into_iter().chain(vec![SlogRuleBodyItem::SlogSExprClause(deconstructed_sexpr)]).chain(after);
+      let new_item = if sexpr.id_var.is_some() {
+         SlogRuleBodyItem::ExplicitIDClause(ExplicitIDClause {
+            id_var: sexpr.id_var.clone().unwrap(),
+            clause: deconstructed_sexpr,
+         })
+      } else {
+         SlogRuleBodyItem::SlogSExprClause(deconstructed_sexpr)
+      };
+      let new_items = before.into_iter().chain(vec![new_item]).chain(after);
       new_items.collect()
    } else {
       vec![item.clone()]

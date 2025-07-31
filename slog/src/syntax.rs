@@ -8,9 +8,10 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token, braced, bracketed, parenthesized};
 
 // keywords
-mod kw_slog {
+pub mod kw_slog {
    syn::custom_punctuation!(LongLeftArrow, ==>);
    syn::custom_punctuation!(LongRightArrow, <==);
+   syn::custom_punctuation!(ExistsBang, >?);
    syn::custom_keyword!(or);
    syn::custom_keyword!(sexpr);
    syn::custom_keyword!(define);
@@ -148,12 +149,22 @@ pub struct ExplicitIDClause {
 }
 impl Parse for ExplicitIDClause {
    fn parse(content: ParseStream) -> syn::Result<Self> {
-      let clause = content.parse::<SlogSExprClause>()?;
+      let mut clause = content.parse::<SlogSExprClause>()?;
       let _eq = content.parse::<Token![.]>()?;
       let id_var = content.parse::<Ident>()?;
+      clause.id_var = Some(id_var.clone());
       Ok(ExplicitIDClause {id_var, clause })
    }
 }
+
+impl ExplicitIDClause {
+   pub fn get_sexpr_clause(&self) -> Option<SlogSExprClause> {
+      let mut new_clause = self.clause.clone();
+      new_clause.id_var = Some(self.id_var.clone());
+      Some(new_clause)
+   }
+}
+
 
 fn peek_explicit_id_clause(input: ParseStream) -> bool { input.peek(syn::token::Paren) && input.peek2(syn::token::Eq) }
 
@@ -166,11 +177,14 @@ pub enum SlogRuleBodyItem {
 }
 
 impl SlogRuleBodyItem {
-   pub fn get_sexpr_clause(&self) -> Option<&SlogSExprClause> {
+   pub fn get_sexpr_clause(&self) -> Option<SlogSExprClause> {
       match self {
-         SlogRuleBodyItem::SlogSExprClause(clause) => Some(clause),
-         SlogRuleBodyItem::NegatedSlogSExprClause(clause) => Some(clause),
-         _ => None,
+         SlogRuleBodyItem::SlogSExprClause(clause) => Some(clause.clone()),
+         SlogRuleBodyItem::NegatedSlogSExprClause(clause) => Some(clause.clone()),
+         SlogRuleBodyItem::ExplicitIDClause(expid) => {
+            expid.get_sexpr_clause()
+         },
+         SlogRuleBodyItem::AscentClause(_) => None,
       }
    }
 }

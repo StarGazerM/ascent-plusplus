@@ -230,7 +230,74 @@ ascent! {
 
 ### Slog Syntax Sugar
 
-We support the `!` and `?` syntax sugar from the original Slog implementation for fact manipulation and unification.
+#### `?` Operator
+The `?` operator can let you query in the head of a rule. A head clause is true only if its question marked argument corresponds to a predicate with the same name holds in current context.
+```rust
+slog! {
+    (define foo usize usize)
+    (define bar usize usize)
+    (define foobar sexpr sexpr)
+
+    [(foo ?(bar x z) z) <-- (foo x y)]
+}
+```
+Above query is equivalent to:
+```rust
+slog! {
+    (define foo usize usize)
+    (define bar usize usize)
+    (define foobar sexpr sexpr)
+
+    [(foo bid z) <-- (foo x y) (= bid (bar x z))]
+}
+```
+
+#### Join order control with `?` Operator in Body
+
+Slightly different from original Slog, we also allow usage of `?` Operator in the body of a rule, but for join order control.
+Join order of nested facts is completely random in original implementation of Slog, which can sometime cause program too hard to debug.
+For example in following program:
+
+```rust
+slog! {
+    // ...
+    [(bar x y) <-- (foobar (foo x y) _) (bar x y)]
+}
+```
+join order between `foo`, `bar` and `foobar` is completely random cause computation time also complete random. Even if you know foobar is small relation, you want join
+foobar and foo first can save time, you have no way to control this unless you explicity unify the id of relation, which will
+cause program hard to read.
+```
+// in slog 1.0
+[(bar x y) <-- (foobar id_f _) -- (= idf (foo x y)) -- (bar x y)]
+```
+In this version of slog, we will enforece a join order for nested facts. If no `?` operator is used in the body, join order of a nested clause will start from outer relation to nested inner relation. For example is previous example, join order will be `foobar` -> `foo` -> `bar`. If `?` operator is used, join order will start from inner relation to outer relation. For example:
+
+```rust
+slog! {
+    // ...
+    [(bar x y) <-- (foobar ?(foo x y) _) (bar x y)]
+}
+```
+Join order will be `foo` -> `foobar` -> `bar`.
+
+#### `!` Operator
+
+`!` operator in original slog is used to fire a fact in body of a rule. In this version of slog, we will not support this operator as naive implementation will cause join order in generated Ascent code messed up.
+
+### `nil`
+
+`nil` is a special relation that is used to represent the empty set. It is used to represent the empty set in the head of a rule.
+It is defaultly defined as `nil(1)` and `nil(0)` is the empty set and automatically added to all slog program.
+
+```rust
+slog! {
+    (struct PathLength)
+    (define path usize sexpr)
+    #(path 1 ?(nil 0))
+}
+```
+
 
 ### Egglog-like Equivalence (Coming Soon 🚧)
 

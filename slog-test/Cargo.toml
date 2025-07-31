@@ -1,0 +1,8 @@
+[package]
+name = "slog-test"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+slog = { path = "../slog" }
+ascent = { path = "../ascent" }

@@ -176,7 +176,7 @@ fn test_structured_clause_compile() {
       (define bar usize usize)
       (define foobar sexpr sexpr)
 
-      [(foobar (foo x y) (bar a b)) <-- (foo x y) (bar a b) (foobar (foo x y) (bar a b))]
+      [(foobar (foo x y) (bar a b)) <-- (foo x y) (bar a b)]
    };
 
    write_to_scratchpad(tokens, quote! {}, false);
@@ -189,7 +189,29 @@ fn test_question_mark_compile() {
       (define foo usize usize)
       (define bar usize usize)
       (define foobar sexpr sexpr)
+
+      [(foo ?(bar x z) z) <-- (foo x y)]
    };
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+#[test]
+fn test_bang_compile() {
+   let tokens = quote! {
+      (struct PathLength)
+      (define empty usize)
+      (define path usize sexpr)
+      (define length sexpr usize)
+      (define do_length sexpr)
+
+      #(path 1 (path 2 (path 3 ?(nil 0))))
+
+      #(length (do_length ?(nil 0)) 0)
+      [(do_length (path h tail)) --> (do_length tail)]
+      [(length ?(do_length (path h tail)) ,(l + 1)) <--
+         (length (do_length tail) l)]
+   };
+   write_to_scratchpad(tokens, quote! {}, false);
 }
 
 // #[test]
