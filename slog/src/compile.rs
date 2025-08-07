@@ -78,6 +78,9 @@ fn compile_slog_line(line: &SlogProgramLine) -> Result<TokenStream> {
          let rule = SlogRule { heads: vec![SlogRuleHeadItem::SlogSExprClause(clause.clone())], body: vec![] };
          compile_slog_rule_unstructured(&rule)
       }
+      SlogProgramLine::Ascent(content) => {
+         Ok(content.clone())
+      }
    }
 }
 

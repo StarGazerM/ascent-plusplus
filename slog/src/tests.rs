@@ -210,6 +210,19 @@ fn test_bang_compile() {
       [(do_length (path h tail)) --> (do_length tail)]
       [(length ?(do_length (path h tail)) ,(l + 1)) <--
          (length (do_length tail) l)]
+      [(do_length (path h tail)) --> (do_length (path h tail))]
+   };
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
+#[test]
+fn test_escape_syntax_compile3 () {
+   let tokens = quote! {
+      (struct Esacape)
+      (define empty1 usize)
+      (define empty2 usize)
+      
+      ,(empty1(x) <-- empty2(x);)
    };
    write_to_scratchpad(tokens, quote! {}, false);
 }

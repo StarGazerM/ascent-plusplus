@@ -318,6 +318,7 @@ impl Parse for SlogRelationDecl {
 pub enum SlogProgramLine {
    RelationDecl(SlogRelationDecl),
    Rule(SlogRule),
+   Ascent(TokenStream),
    Fact(SlogSExprClause),
 }
 
@@ -336,6 +337,11 @@ impl Parse for SlogProgramLine {
       } else if input.peek(syn::token::Bracket) {
          let rule = input.parse::<SlogRule>()?;
          Ok(SlogProgramLine::Rule(rule))
+      } else if input.peek(Token![,]) {
+         let _ = input.parse::<Token![,]>()?;
+         let content;
+         let _ = parenthesized!(content in input);
+         Ok(SlogProgramLine::Ascent(content.parse()?))
       } else {
          // fact
          input.parse::<Token![#]>()?;
