@@ -160,6 +160,7 @@ pub(crate) struct IrHeadClause{
    pub args_span: Span,
    pub required_flag: bool,
    pub id_name: Option<Ident>,
+   pub inflation_flag: bool,
    pub delete_flag: bool,
 }
 
@@ -646,6 +647,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
                args_span: hcl_node.args.span(),
                required_flag: hcl_node.required_flag,
                id_name: hcl_node.id_name.clone(),
+               inflation_flag: hcl_node.inflation_flag,
                delete_flag: hcl_node.delete_flag,
             };
             head_clauses.push(IrHeadItem::Clause(head_clause));

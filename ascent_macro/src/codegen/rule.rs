@@ -263,6 +263,7 @@ fn compile_mir_rule_inner(
                      required_flag: false,
                      delete_flag: false,
                      span: cl2.rel_args_span,
+                     inflation_flag: false, // TODO: check if this is correct
                   };
                   let update_code = compile_head_clause(&new_head, _scc, mir);
                   quote_spanned! {cl1.rel_args_span=>

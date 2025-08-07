@@ -19,11 +19,8 @@ fn test_nested_fact() {
       [(do_length (path h tail)) --> (do_length tail)]
       [(length ?(do_length (path h tail)) ,(l + 1)) <--
          (length (do_length tail) l)]
-      // [(do_length (path h tail)) --> (do_length tail)]
-      ,(>? path_571169 . path (h , tail) , >? do_length_516562 . do_length (path_571169) <--
-         do_length (path_480031) ,
-         let _ = println!("wwwwww {:?}", path_480031),
-         path (h , tail) . path_480031 ;)
+      [(do_length (path h tail)) --> (do_length tail)]
+      [(input x) --> (do_length x)]
 
       [(output y) <-- (input x) (length (do_length x) y)]
    }
@@ -34,5 +31,5 @@ fn test_nested_fact() {
    println!("{:?}", prog.input);
    println!("{:?}", prog.output);
    println!("{:?}", prog.do_length);
-   println!("{:?}", prog.path);
+   println!("{:?}", prog.path_id);
 }

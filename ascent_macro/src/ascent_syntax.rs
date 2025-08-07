@@ -639,6 +639,7 @@ pub struct HeadClauseNode {
    pub required_flag: bool,
    pub id_name: Option<Ident>,
    pub delete_flag: bool,
+   pub inflation_flag: bool,
    pub exists_var: Option<Ident>
 }
 impl ToTokens for HeadClauseNode {
@@ -652,6 +653,7 @@ impl Parse for HeadClauseNode{
    fn parse(input: ParseStream) -> Result<Self> {
       let mut required_flag  = false; 
       let mut delete_flag = false;
+      let mut inflation_flag = false;
       // check if first token is let
       let mut id_name = None;
       let mut exists_var = None;
@@ -678,6 +680,10 @@ impl Parse for HeadClauseNode{
          required_flag = true;
          input.parse::<Token![!]>()?;
       }
+      if input.peek(Token![@]) {
+         inflation_flag = true;
+         input.parse::<Token![@]>()?;
+      }
       if input.peek(Token![~]) {
          delete_flag = true;
          input.parse::<Token![~]>()?;
@@ -693,7 +699,7 @@ impl Parse for HeadClauseNode{
       let args_content;
       parenthesized!(args_content in input);
       let args = args_content.parse_terminated(Expr::parse, Token![,])?;
-      Ok(HeadClauseNode{rel, extern_db_name, args, required_flag, id_name, delete_flag, exists_var})
+      Ok(HeadClauseNode{rel, extern_db_name, args, required_flag, id_name, delete_flag, exists_var, inflation_flag})
    }
 }
 

@@ -555,6 +555,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                 required_flag: false,
                 id_name: None,
                 delete_flag: false,
+                inflation_flag: false,
                 exists_var: Some(gensym.next_ident(&format!("{}_exists", f.name), f.name.span()))
              })]),
              body_items: generate_call_body_items
@@ -618,6 +619,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                 required_flag: false,   // TODO: check if this is correct
                 id_name: None,
                 delete_flag: false,
+                inflation_flag: false,
                 exists_var: Some(head_exists_var)
             }));
           } else {
@@ -631,6 +633,7 @@ fn rule_desugar_id_unification(rule: RuleNode) -> RuleNode {
                 required_flag: false,
                 id_name: None,
                 delete_flag: false,
+                inflation_flag: false,
                 exists_var: Some(head_exists_var)
             }));
           }
