@@ -33,3 +33,58 @@ fn test_nested_fact() {
    println!("{:?}", prog.do_length);
    println!("{:?}", prog.path_id);
 }
+
+#[test]
+fn test_inflation_ascent() {
+   ascent! {
+      struct Inflation;
+      relation edge(usize, usize);
+      relation path(usize, usize);
+
+      edge(1, 2);
+      edge(2, 3);
+      edge(3, 4);
+      edge(4, 5);
+      edge(1, 3);
+      path(1, 2);
+
+      path(x, y) <-- edge(x, y);
+      inflate path(x, z) <-- path(x, y), let _ = println!("path({:?}, {:?})", x, y), edge(y, z);
+   }
+
+   let mut prog = Inflation::default();
+
+   prog.run();
+   println!("{:?}", prog.edge);
+   println!("{:?}", prog.path);
+}
+
+#[test]
+fn test_equality_ascent() {
+   ascent! {
+      #![egglog_mode]
+      struct TCEq;
+
+      relation edge(usize, usize);
+      relation path(usize, usize);
+
+      edge(1, 2);
+      edge(2, 3);
+      edge(3, 4);
+      edge(4, 5);
+
+      x <=> y, path(x, y) <-- edge(x, y);
+
+      x <=> z,
+      path(x, z) <--
+         path(x, y),
+         y <=> y_inflate,
+         edge(y_inflate, z),
+         z <=>? z_rep;
+   }
+
+   let mut prog = TCEq::default();
+   prog.run();
+   println!("{:?}", prog.edge);
+   println!("{:?}", prog.path);
+}

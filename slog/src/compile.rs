@@ -102,7 +102,7 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
    let exists_bang = ExistsBang::default();
    Ok(quote! {
       #slog_mode {
-         // #![egglog_mode]
+         #![egglog_mode]
          #meta
 
          relation ID nil(usize);

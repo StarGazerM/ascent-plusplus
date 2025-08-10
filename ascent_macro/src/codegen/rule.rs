@@ -567,7 +567,7 @@ fn compile_head_clause(
       __default_id = #new_id_name;
    };
 
-   let skip_unchanged_code = if !hcl.required_flag {
+   let failed_unchanged_code = if !hcl.required_flag {
       quote! {}
    } else {
       quote! {
@@ -614,17 +614,34 @@ fn compile_head_clause(
                hasher.finish() as usize
             };
          };
-         quote_spanned! {hcl.span=>
-            #hash_tuple_code
-            if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
-               &__new_row, ())
-            {
-               #push_code
+         if hcl.inflation_flag {
+            quote_spanned! {hcl.span=>
+               #hash_tuple_code
+               if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
+                  &__new_row, ())
+               {
+                  // keep fixpoint check correct
+                  #set_changed_true_code
+               } else {
+                  #failed_unchanged_code
+               }
+               ::ascent::internal::comment("inflation!");
                #(#update_indices)*
-               #set_changed_true_code
                #update_id_code
-            } else {
-               #skip_unchanged_code
+            }
+         } else {
+            quote_spanned! {hcl.span=>
+               #hash_tuple_code
+               if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
+                  &__new_row, ())
+               {
+                  #push_code
+                  #(#update_indices)*
+                  #set_changed_true_code
+                  #update_id_code
+               } else {
+                  #failed_unchanged_code
+               }
             }
          }
       }
@@ -632,16 +649,31 @@ fn compile_head_clause(
       quote! {}
    };
    if !hcl.rel.is_lattice {
-      if hcl.extern_db_name.is_none() { 
-         quote_spanned! {hcl.span=>
-            let __new_row: #row_type = #new_row_tuple;
-            #def_id_code
+      if hcl.extern_db_name.is_none() {
+         if !hcl.inflation_flag {
+            quote_spanned! {hcl.span=>
+               let __new_row: #row_type = #new_row_tuple;
+               #def_id_code
 
-            if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
-               !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
+               if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
+                  !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
+                  #update_rel_code
+               } else {
+                  #failed_unchanged_code
+               }
+            }
+         } else {
+            // if there is inflation, we skip the check for if a a duplicate exists
+            quote_spanned! {hcl.span=>
+               let __new_row: #row_type = #new_row_tuple;
+               #def_id_code
+               if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
+                  !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
+                  #push_code
+               } else {
+                  #failed_unchanged_code
+               }
                #update_rel_code
-            } else {
-               #skip_unchanged_code
             }
          }
       } else {
@@ -689,7 +721,7 @@ fn compile_head_clause(
                   #(#update_indices)*
                   #set_changed_true_code
                } else {
-                  #skip_unchanged_code
+                  #failed_unchanged_code
                }
             } else {
                let __new_row_ind = #_self.#head_rel_name.len();
@@ -716,7 +748,7 @@ fn compile_head_clause(
                   #(#update_indices)*
                   #set_changed_true_code
                } else {
-                  #skip_unchanged_code
+                  #failed_unchanged_code
                }
             } else {
                let __hash = #head_lat_full_index_var_name_new.hash_usize(&__lattice_key);
@@ -724,7 +756,7 @@ fn compile_head_clause(
                if let Some(__existing_ind) = #head_lat_full_index_var_name_new.get_cloned(&__lattice_key) {
                   ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].write().unwrap().#tuple_lat_index,
                                               __new_row.#tuple_lat_index.clone());
-                  #skip_unchanged_code
+                  #failed_unchanged_code
                } else {
                   let __new_row_ind = #_self.#head_rel_name.push(::std::sync::RwLock::new(#new_row_to_be_pushed));
                   #(#update_indices)*

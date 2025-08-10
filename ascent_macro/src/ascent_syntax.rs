@@ -34,6 +34,7 @@ pub mod kw {
    syn::custom_keyword!(arguement);
    syn::custom_keyword!(delta);
    syn::custom_keyword!(stratum);
+   syn::custom_keyword!(inflate);
    syn::custom_keyword!(ID);
    syn::custom_punctuation!(LongLeftArrow, <--);
    syn::custom_keyword!(agg);
@@ -296,7 +297,7 @@ fn peek_macro_invocation(parse_stream: ParseStream) -> bool {
 fn peek_clause_head(parse_stream: ParseStream) -> bool {
    parse_stream.peek(Ident) || parse_stream.peek(Token![!]) ||
    parse_stream.peek(Token![let]) || parse_stream.peek(Token![~]) ||
-   parse_stream.peek(kw::ExistsBang)
+   parse_stream.peek(kw::inflate) || parse_stream.peek(kw::ExistsBang)
 }
  
 fn peek_if_or_let(parse_stream: ParseStream) -> bool {
@@ -680,9 +681,9 @@ impl Parse for HeadClauseNode{
          required_flag = true;
          input.parse::<Token![!]>()?;
       }
-      if input.peek(Token![@]) {
+      if input.peek(kw::inflate) {
          inflation_flag = true;
-         input.parse::<Token![@]>()?;
+         input.parse::<kw::inflate>()?;
       }
       if input.peek(Token![~]) {
          delete_flag = true;
