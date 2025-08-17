@@ -67,24 +67,73 @@ fn test_equality_ascent() {
 
       relation edge(usize, usize);
       relation path(usize, usize);
+      relation path_rep(usize, usize);
 
       edge(1, 2);
       edge(2, 3);
       edge(3, 4);
       edge(4, 5);
+      edge(6, 7);
+      edge(7, 8);
 
       x <=> y, path(x, y) <-- edge(x, y);
 
-      x <=> z,
-      path(x, z) <--
+      x_rep <=> z_rep,
+      path(x_rep.clone(), z_rep.clone()) <--
          path(x, y),
          y <=> y_inflate,
          edge(y_inflate, z),
-         z <=>? z_rep;
+         z <=>! z_rep,
+         x <=>! x_rep;
+
+      path_rep(x, rep_x) <-- path(x, _), x <=>! rep_x;
+      path_rep(y, rep_y) <-- path(_, y), y <=>! rep_y;
    }
 
    let mut prog = TCEq::default();
    prog.run();
    println!("{:?}", prog.edge);
-   println!("{:?}", prog.path);
+   println!("{:?}", prog.path_rep);
+}
+
+#[test]
+fn test_eclass() {
+   slog! {
+      (struct EClassTest)
+
+      (define foo usize)
+      (define bar usize)
+      (define foobar eclass eclass)
+      (define res eclass)
+
+      #(foo 1)
+      #(bar 1)
+
+      #(foobar ?(foo 1) ?(bar 1))
+      [(rewrite! foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+
+      [(res x) <-- (foobar x x)]
+   }
+
+   let mut prog = EClassTest::default();
+   prog.run();
+   println!("{:?}", prog.foobar);
+   println!("{:?}", prog.res);
+}
+
+#[test]
+fn test_eqrel() {
+   use ascent::union_find::EqRel;
+
+   let mut eq_rel = EqRel::default();
+
+   eq_rel.add(1, 2);
+   eq_rel.add(2, 3);
+
+   let res = eq_rel.set_of(&1);
+   println!("{:?}", res);
+   let res_rep_3 = eq_rel.get_dominant_elem(&3);
+   println!("{:?}", res_rep_3);
+   let res_rep_2 = eq_rel.get_dominant_elem(&2);
+   println!("{:?}", res_rep_2);
 }

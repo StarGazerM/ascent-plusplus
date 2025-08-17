@@ -266,6 +266,15 @@ impl Parse for RelationNode {
    }
 }
 
+impl RelationNode {
+   pub fn contains_eclass_id(&self) -> bool {
+      self.field_types.iter().any(|field_type| {
+         let field_type_str = format!("{:?}", field_type);
+         field_type_str.contains("eclass_id")
+      })
+   }
+}
+
 #[derive(Parse, Clone)]
 pub enum BodyItemNode {
    #[peek_with(peek_equiv, name = "equiv clause")]
@@ -958,6 +967,7 @@ pub(crate) struct RelationIdentity {
    pub need_id: bool,
    pub is_hole: bool,
    pub is_input: bool,
+   pub contains_eclass_id: bool,
 }
 
 impl From<&RelationNode> for RelationIdentity{
@@ -970,9 +980,20 @@ impl From<&RelationNode> for RelationIdentity{
          need_id: relation_node.need_id,
          is_hole: relation_node.is_hole,
          is_input: relation_node.is_input,
+         contains_eclass_id: relation_node.contains_eclass_id(),
       }
    }
 } 
+
+impl RelationIdentity {
+
+   pub fn is_field_eclass_id(&self, field_id: usize) -> bool {
+      // check if field is type eclass_id
+      let field_type = &self.field_types[field_id];
+      let field_type_str = format!("{:?}", field_type);
+      field_type_str.contains("eclass_id")
+   }
+}
 
 #[derive(Clone)]
 pub(crate) struct DsAttributeContents {

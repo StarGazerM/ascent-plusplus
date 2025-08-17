@@ -13,6 +13,7 @@ mod scratchpad;
 pub fn prelude(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
    let res = quote! {
       use ascent::*;
+      use ascent::eclass_id;
    };
    res.into()
 }

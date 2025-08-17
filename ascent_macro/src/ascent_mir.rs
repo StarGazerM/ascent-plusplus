@@ -66,6 +66,28 @@ pub(crate) struct MirRule {
    pub reorderable: bool
 }
 
+impl MirRule {
+   pub fn heuristic_join_reorder(&mut self) {
+      // Find the index of the first clause that is a "delta" clause.
+      let delta_clause_pos = self.body_items.iter().position(|item| {
+         matches!(item, MirBodyItem::Clause(clause) if clause.rel.version == MirRelationVersion::Delta)
+      });
+      // pop and store the delta clause
+      if let Some(delta_clause_pos) = delta_clause_pos {
+         let delta_clause = self.body_items.remove(delta_clause_pos);
+         // Find the index of the first clause of any kind. This is our target swap position.
+         let first_clause_pos = self.body_items.iter().position(|item| {
+            matches!(item, MirBodyItem::Clause(_))
+         });
+         if let Some(first_clause_pos) = first_clause_pos {
+            self.body_items.insert(first_clause_pos, delta_clause);
+         } else {
+            self.body_items.push(delta_clause);
+         }
+      }
+   }
+}
+
 pub(crate) fn mir_rule_summary(rule: &MirRule) -> String {
    fn bitem_to_str(bitem: &MirBodyItem) -> String {
       match bitem {
@@ -215,13 +237,14 @@ pub(crate) enum MirRelationVersion {
    TotalDelta,
    Total,
    Delta,
+   CanonicalDelta,
    New,
 }
 
 impl MirRelationVersion {
    pub fn to_string(self) -> &'static str{
       use MirRelationVersion::*;
-      match self { TotalDelta => "total+delta", Delta => "delta", Total => "total", New => "new" }
+      match self { TotalDelta => "total+delta", Delta => "delta", Total => "total", New => "new", CanonicalDelta => "canonical_delta" }
    }
 }
 
@@ -307,7 +330,7 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
       }
       
       let rules = scc.iter()
-                  .flat_map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set))
+                  .flat_map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set, &hir))
                   .collect_vec(); 
 
       for rule in rules.iter() {
@@ -383,7 +406,7 @@ fn check_mir_let_with_id(mir: &AscentMir) -> Option<Ident> {
       })
 }
 
-fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>) -> Vec<MirRule> {
+fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>, hir: &AscentIr) -> Vec<MirRule> {
    
    fn versions_base(count: usize) -> Vec<Vec<MirRelationVersion>> {
       if count == 0 {
@@ -523,12 +546,16 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
             reorderable: false
          }
       } else {
-         MirRule {
+         let mut mir_rule = MirRule {
             body_items: bcls,
             head_clause: rule.head_clauses.clone(),
             simple_join_start_index: rule.simple_join_start_index,
             reorderable
+         };
+         if hir.config.heuristic_join_reorder {
+            mir_rule.heuristic_join_reorder();
          }
+         mir_rule
       }
    }).collect()
 }

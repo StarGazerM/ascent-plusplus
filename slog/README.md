@@ -1,3 +1,5 @@
+# Slog on $\texttt{Ascent}^{\exists!}$
+
 This project is a reimplementation of the [slog](https://github.com/harp-lab/slog-lang1) programming language. It compiles a subset of Slog to another Datalog dialect, [Ascent](https://github.com/s-arash/ascent), using Rust procedural macros. Because it's a pure macro implementation, you get a seamless experience switching between Slog, Ascent, and even native Rust code.
 
 This documentation assumes you are familiar with the basic syntax of both Slog and Ascent.
@@ -299,6 +301,26 @@ slog! {
 ```
 
 
-### Egglog-like Equivalence (Coming Soon 🚧)
+### Equivalence (Coming Soon 🚧)
 
-We are actively working on supporting `egglog`-style e-graphs and theory inflation operations directly within Slog. Stay tuned!
+The first siginificant change required to support equivalence is allow unification operation as query to add union-find based relation. In ascent, this can be done via BYODS extension, however directly compile slog to slog-byods will cause readability issue in generated ascent code, which cause macro code too hard to debug. To make the generated ascent code simpler, we add some special syntax sugar to ascent to support unification as clause.
+
+By adding annotate the ascent program with `#![egglog_mode]`, we can enable a ascent program natively equipment with an global hidden union-find relation.
+
+```rust
+ascent! {
+    #![egglog_mode]
+    struct EquivTest;
+
+    relation ID foo(usize);
+    relation ID bar(usize);
+
+    foo(1);
+    bar(2);
+
+    inflated_a <=> b <-- foo(a), a <=> inflated_a, bar(b), b <=>! rep_b;
+}
+```
+After egglog mode is enabled, we can use equivalence clause `<=>` and `<=>?` to add tuple and access the hidden union-find relation. Clause `<=>` is used 
+
+

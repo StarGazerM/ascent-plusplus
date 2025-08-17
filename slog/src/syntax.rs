@@ -2,6 +2,7 @@
 // define the syntax of slog
 // slog mostly use sexprs
 
+use itertools::Either;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -14,7 +15,9 @@ pub mod kw_slog {
    syn::custom_punctuation!(ExistsBang, >?);
    syn::custom_keyword!(or);
    syn::custom_keyword!(sexpr);
+   syn::custom_keyword!(eclass);
    syn::custom_keyword!(define);
+   syn::custom_keyword!(rewrite);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -93,6 +96,37 @@ fn is_slog_paren(input: &ParseStream) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SlogRewriteClause {
+   pub _paren: syn::token::Paren,
+   pub _bang: Token![!],
+   pub _rewrite: kw_slog::rewrite,
+   pub clause_lhs: Either<Ident, SlogSExprClause>,
+   pub clause_rhs: Either<Ident, SlogSExprClause>,
+}
+
+impl Parse for SlogRewriteClause {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      // remove the paren
+      let content;
+      let _paren = parenthesized!(content in input);
+      let _rewrite = content.parse::<kw_slog::rewrite>()?;
+      let _bang = content.parse::<Token![!]>()?;
+      let clause_lhs = if content.peek(syn::Ident) {
+         Either::Left(content.parse::<Ident>()?)
+      } else {
+         Either::Right(content.parse::<SlogSExprClause>()?)
+      };
+      // let _arrow = content.parse::<Token![=>]>()?;
+      let clause_rhs = if content.peek(syn::Ident) {
+         Either::Left(content.parse::<Ident>()?)
+      } else {
+         Either::Right(content.parse::<SlogSExprClause>()?)
+      };
+      Ok(SlogRewriteClause { _paren, _bang, _rewrite, clause_lhs, clause_rhs })
+   }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SlogClauseArg {
    LogicVar(Ident, bool),
    Constant(syn::Lit),
@@ -153,7 +187,7 @@ impl Parse for ExplicitIDClause {
       let _eq = content.parse::<Token![.]>()?;
       let id_var = content.parse::<Ident>()?;
       clause.id_var = Some(id_var.clone());
-      Ok(ExplicitIDClause {id_var, clause })
+      Ok(ExplicitIDClause { id_var, clause })
    }
 }
 
@@ -164,7 +198,6 @@ impl ExplicitIDClause {
       Some(new_clause)
    }
 }
-
 
 fn peek_explicit_id_clause(input: ParseStream) -> bool { input.peek(syn::token::Paren) && input.peek2(syn::token::Eq) }
 
@@ -181,9 +214,7 @@ impl SlogRuleBodyItem {
       match self {
          SlogRuleBodyItem::SlogSExprClause(clause) => Some(clause.clone()),
          SlogRuleBodyItem::NegatedSlogSExprClause(clause) => Some(clause.clone()),
-         SlogRuleBodyItem::ExplicitIDClause(expid) => {
-            expid.get_sexpr_clause()
-         },
+         SlogRuleBodyItem::ExplicitIDClause(expid) => expid.get_sexpr_clause(),
          SlogRuleBodyItem::AscentClause(_) => None,
       }
    }
@@ -191,7 +222,7 @@ impl SlogRuleBodyItem {
 
 impl Parse for SlogRuleBodyItem {
    fn parse(input: ParseStream) -> syn::Result<Self> {
-      if input.peek(syn::token::Paren) && input.peek2(Token![.]) {  
+      if input.peek(syn::token::Paren) && input.peek2(Token![.]) {
          let id_clause = input.parse::<ExplicitIDClause>()?;
          Ok(SlogRuleBodyItem::ExplicitIDClause(id_clause))
       } else if input.peek(Token![~]) && input.peek(syn::token::Paren) {
@@ -217,6 +248,7 @@ impl Parse for SlogRuleBodyItem {
 pub enum SlogRuleHeadItem {
    ExplicitIDClause(ExplicitIDClause),
    SlogSExprClause(SlogSExprClause),
+   RewriteClause(SlogRewriteClause),
 }
 
 impl Parse for SlogRuleHeadItem {
@@ -225,8 +257,17 @@ impl Parse for SlogRuleHeadItem {
          let id_clause = input.parse::<ExplicitIDClause>()?;
          Ok(SlogRuleHeadItem::ExplicitIDClause(id_clause))
       } else if input.peek(syn::token::Paren) {
-         let clause = input.parse::<SlogSExprClause>()?;
-         Ok(SlogRuleHeadItem::SlogSExprClause(clause))
+         // continue to parse by fork and peek inside paren
+         let input_fork = input.fork();
+         let content;
+         let _ = parenthesized!(content in input_fork);
+         if content.peek(kw_slog::rewrite) {
+            let rewrite_clause = input.parse::<SlogRewriteClause>()?;
+            Ok(SlogRuleHeadItem::RewriteClause(rewrite_clause))
+         } else {
+            let clause = input.parse::<SlogSExprClause>()?;
+            Ok(SlogRuleHeadItem::SlogSExprClause(clause))
+         }
       } else {
          Err(input.error(format!("head : expected slog s-expr clause or explicit id clause:\n{}", input.to_string())))
       }
@@ -306,6 +347,9 @@ impl Parse for SlogRelationDecl {
          if content.peek(kw_slog::sexpr) {
             content.parse::<kw_slog::sexpr>()?;
             arg_types.push(syn::parse2(quote! { usize })?);
+         } else if content.peek(kw_slog::eclass) {
+            content.parse::<kw_slog::eclass>()?;
+            arg_types.push(syn::parse2(quote! { eclass_id })?);
          } else {
             arg_types.push(content.parse::<syn::Type>()?);
          }
@@ -387,4 +431,3 @@ impl Parse for SlogProgram {
       Ok(SlogProgram { meta, lines })
    }
 }
-

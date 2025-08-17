@@ -370,6 +370,11 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
             _self.runtime_new.#ir_name.clear();
             _self.runtime_delta.#ir_name.clear();
          });
+         if mir.config.egg_mode {
+            clear_in_stmts.push(quote! {
+               _self.runtime_canonical_delta.#ir_name.clear();
+            });
+         }
       }
    }
    for o in mir.io.outs.iter() {
@@ -388,6 +393,11 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
             _self.runtime_new.#ir_name.clear();
             _self.runtime_delta.#ir_name.clear();
          });
+         if mir.config.egg_mode {
+            clear_out_stmts.push(quote! {
+               _self.runtime_canonical_delta.#ir_name.clear();
+            });
+         }
       }
    }
 
@@ -498,7 +508,10 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
    }
    let equiv_ids_decl = if mir.config.egg_mode {
       quote! {
+         // canonicalized delta relation
          pub equiv_ids_: ascent::union_find::EqRel<usize>,
+         pub equiv_ids_delta_: ascent::union_find::EqRel<usize>,
+         pub runtime_canonical_delta: #runtime_struct_name #ty_ty_generics,
       }
    } else {
       quote! {}
@@ -506,6 +519,8 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
    let equiv_ids_default = if mir.config.egg_mode {
       quote! {
          equiv_ids_ : Default::default(),
+         equiv_ids_delta_ : Default::default(),
+         runtime_canonical_delta: Default::default(),
       }
    } else {
       quote! {}
@@ -522,6 +537,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          #(#relation_fields)*
          scc_times: [std::time::Duration; #sccs_count],
          scc_iters: [usize; #sccs_count],
+         pub scc_max_iters: [usize; #sccs_count],
          #(#rule_time_fields)*
          pub update_time_nanos: std::sync::atomic::AtomicU64,
          pub update_indices_duration: std::time::Duration,
@@ -574,6 +590,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
                #(#field_defaults)*
                scc_times: [std::time::Duration::ZERO; #sccs_count],
                scc_iters: [0; #sccs_count],
+               scc_max_iters: [usize::MAX; #sccs_count],
                #(#rule_time_fields_defaults)*
                update_time_nanos: Default::default(),
                update_indices_duration: std::time::Duration::default(),

@@ -2,11 +2,12 @@
 
 use crate::{
    syntax::{
-      ExplicitIDClause, ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule,
-      SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause, kw_slog::ExistsBang,
+      kw_slog::ExistsBang, ExplicitIDClause, ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine,
+      SlogRelationDecl, SlogRewriteClause, SlogRule, SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause
    },
    util::new_ident,
 };
+use itertools::Either;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Ident, Result};
@@ -78,9 +79,7 @@ fn compile_slog_line(line: &SlogProgramLine) -> Result<TokenStream> {
          let rule = SlogRule { heads: vec![SlogRuleHeadItem::SlogSExprClause(clause.clone())], body: vec![] };
          compile_slog_rule_unstructured(&rule)
       }
-      SlogProgramLine::Ascent(content) => {
-         Ok(content.clone())
-      }
+      SlogProgramLine::Ascent(content) => Ok(content.clone()),
    }
 }
 
@@ -116,7 +115,10 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
 
 pub(crate) fn compile(tokens: TokenStream, is_parallel: bool) -> Result<TokenStream> {
    let program: SlogProgram = syn::parse2(tokens)?;
-   let destructed_program = destruct_slog_program(&program);
+   // pass 1: remove nested rewrite clauses
+   let id_rewrite_program = remove_nested_rewrite_clause(&program);
+   // pass 2: destruct the program to remove nested sexprs
+   let destructed_program = destruct_slog_program(&id_rewrite_program);
 
    let compiled_program = compile_slog_program(&destructed_program, is_parallel)?;
    Ok(compiled_program)
@@ -137,6 +139,20 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
                   #exists_bang #id_var. #clause
                }
             })
+         }
+         SlogRuleHeadItem::RewriteClause(clause) => {
+            // when compiling unstructured rewrite clause, we should only have id here
+            // otherwise throw compile error
+            if let (Either::Left(id_l), Either::Left(id_r)) = (&clause.clause_lhs, &clause.clause_rhs) {
+               Ok(quote! {
+                  #id_l <=> #id_r
+               })
+            } else {
+               return Err(syn::Error::new_spanned(
+                  clause._rewrite.clone(),
+                  format!("rewrite clause must have id on both sides {:?}", clause),
+               ));
+            }
          }
       })
       .collect::<Result<Vec<_>>>()?;
@@ -177,7 +193,7 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
       .collect::<Result<Vec<_>>>()?;
    // if body is empty, add a dummy body
    if bodys.is_empty() {
-      bodys.push(quote! { nil() });
+      bodys.push(quote! { nil(1) });
    }
 
    Ok(quote! {
@@ -201,6 +217,10 @@ fn desugar_question_paren_rule(rule: &SlogRule) -> SlogRule {
             new_body.extend(new_bodys);
             let new_clause = ExplicitIDClause { id_var: clause.id_var.clone(), clause: new_head };
             new_heads.push(SlogRuleHeadItem::ExplicitIDClause(new_clause));
+         }
+         SlogRuleHeadItem::RewriteClause(_clause) => {
+            // rewrite clause is already removed in pass 1
+            new_heads.push(head.clone());
          }
       }
    }
@@ -293,6 +313,10 @@ fn destruct_slog_rule_head_item(item: &SlogRuleHeadItem) -> Vec<SlogRuleHeadItem
    let slog_expr = match item {
       SlogRuleHeadItem::SlogSExprClause(sexpr) => sexpr,
       SlogRuleHeadItem::ExplicitIDClause(clause) => &clause.clause,
+      SlogRuleHeadItem::RewriteClause(_clause) => {
+         // This control flow is weird, but it works
+         return vec![item.clone()];
+      }
    };
    let mut new_items = vec![];
    let mut new_args = vec![];
@@ -316,6 +340,7 @@ fn destruct_slog_rule_head_item(item: &SlogRuleHeadItem) -> Vec<SlogRuleHeadItem
    let id_var = match item {
       SlogRuleHeadItem::SlogSExprClause(_) => new_ident(&slog_expr.rel_name.to_string()),
       SlogRuleHeadItem::ExplicitIDClause(clause) => clause.id_var.clone(),
+      SlogRuleHeadItem::RewriteClause(_) => todo!("rewrite clause"),
    };
    let new_item = SlogRuleHeadItem::ExplicitIDClause(ExplicitIDClause { id_var, clause: new_sexpr });
    new_items.push(new_item);
@@ -428,6 +453,61 @@ pub fn destruct_slog_program(program: &SlogProgram) -> SlogProgram {
    let mut new_lines = vec![];
    for line in &program.lines {
       new_lines.push(destruct_slog_line(line));
+   }
+   SlogProgram { meta: program.meta.clone(), lines: new_lines }
+}
+
+fn remove_nested_rewrite_clause(program: &SlogProgram) -> SlogProgram {
+   let mut new_lines = vec![];
+   for line in &program.lines {
+      if let SlogProgramLine::Rule(rule) = line {
+         let mut new_heads = vec![];
+         let mut new_body = rule.body.clone();
+         for head in &rule.heads {
+            match head {
+               SlogRuleHeadItem::RewriteClause(clause) => {
+                  let mut transform_rewrite_arg = |arg: &Either<Ident, SlogSExprClause>| -> Either<Ident, SlogSExprClause> {
+                     match arg {
+                        Either::Left(id) => Either::Left(id.clone()),
+                        Either::Right(sexpr) => {
+                           // nest the sexpr under a new random id
+                           let new_id = new_ident(&format!("__rw_l_{}", rand::random::<u64>() % 1000000));
+                           let new_sexpr = SlogSExprClause {
+                              paren: ParenType::Regular,
+                              rel_name: sexpr.rel_name.clone(),
+                              args: sexpr.args.clone(),
+                              id_var: Some(new_id.clone()),
+                           };
+                           let new_id_clause = ExplicitIDClause { id_var: new_id.clone(), clause: new_sexpr };
+                           if let ParenType::QuestionParen = &sexpr.paren {
+                              // add end of body
+                              new_body.push(SlogRuleBodyItem::ExplicitIDClause(new_id_clause.clone()));
+                           } else {
+                              // add to start of head
+                              new_heads.push(SlogRuleHeadItem::ExplicitIDClause(new_id_clause));
+                           }
+                           Either::Left(new_id)
+                        }
+                     }
+                  };
+                  let new_lhs = transform_rewrite_arg(&clause.clause_lhs);
+                  let new_rhs = transform_rewrite_arg(&clause.clause_rhs);
+                  new_heads.push(SlogRuleHeadItem::RewriteClause(SlogRewriteClause {
+                     _paren: clause._paren.clone(),
+                     _bang: clause._bang.clone(),
+                     _rewrite: clause._rewrite.clone(),
+                     clause_lhs: new_lhs,
+                     clause_rhs: new_rhs,
+                  }));
+               }
+               _ => new_heads.push(head.clone()),
+            } 
+         }
+         let new_rule = SlogRule { heads: new_heads, body: new_body };
+         new_lines.push(SlogProgramLine::Rule(new_rule));
+      } else {
+         new_lines.push(line.clone());
+      }
    }
    SlogProgram { meta: program.meta.clone(), lines: new_lines }
 }

@@ -227,6 +227,28 @@ fn test_escape_syntax_compile3 () {
    write_to_scratchpad(tokens, quote! {}, false);
 }
 
+#[test]
+fn test_rewrite_clause_compile() {
+   let tokens = quote! {
+      (struct EClassTest)
+
+      (define foo usize)
+      (define bar usize)
+      (define foobar eclass eclass)
+      (define res eclass)
+
+      #(foo 1)
+      #(bar 1)
+
+      #(foobar ?(foo 1) ?(bar 1))
+      [(rewrite! foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+
+      [(res x) <-- (foobar x y)
+         ,(if x == y)]
+   };
+   write_to_scratchpad(tokens, quote! {}, false);
+}
+
 // #[test]
 // fn test_redundant_index() {
 //    let tokens = quote! {

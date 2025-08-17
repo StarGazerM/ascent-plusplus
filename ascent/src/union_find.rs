@@ -135,10 +135,17 @@ impl<T: Clone + Hash + Eq> EqRel<T> {
 
    // TODO not used
    #[allow(dead_code)]
-   fn set_of_inc_x<'a> (&'a self, x: &'a T) -> impl Iterator<Item = &'a T> {
+   pub fn set_of_inc_x<'a> (&'a self, x: &'a T) -> impl Iterator<Item = &'a T> {
       let set = self.set_of(x);
       let x_itself = if set.is_none() { Some(x) } else { None };
       set.into_iter().flatten().chain(x_itself)
+   }
+   
+   #[cfg(feature = "par")]
+   pub fn c_set_of_inc_x<'a>(&'a self, x: &'a T) -> Box<dyn Iterator<Item = &'a T> + 'a> where T: Sync {
+      let set = self.c_set_of(x);
+      let x_itself = if set.is_none() { Some(x) } else { None };
+      Box::new(set.into_iter().flatten().chain(x_itself))
    }
 
    pub fn iter_all(&self) -> IterAllIterator<'_, T> {

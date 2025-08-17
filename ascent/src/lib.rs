@@ -35,6 +35,7 @@ pub use macro_magic;
 pub use ascent_macro::{ascent_par, ascent_run_par};
 
 pub use ascent_base::*;
+pub use usize as eclass_id;
 
 pub use hashbrown;
 #[cfg(feature = "par")]

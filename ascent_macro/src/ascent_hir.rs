@@ -19,6 +19,7 @@ pub(crate) struct AscentConfig {
    // pub stream_processing: bool,
    pub egg_mode: bool,
    pub default_ds: DsAttributeContents,
+   pub heuristic_join_reorder: bool,
 }
 
 impl AscentConfig {
@@ -26,6 +27,7 @@ impl AscentConfig {
    const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
    const EGG_MODE_ATTR: &'static str = "egglog_mode";
+   const HEURISTIC_JOIN_REORDER_ATTR: &'static str = "heuristic_join_reorder";
    // const STREAM_PROCESSING_ATTR: &'static str = "stream_processing";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
@@ -38,6 +40,8 @@ impl AscentConfig {
       // let stream_processing = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::STREAM_PROCESSING_ATTR))
       //    .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
       let egg_mode = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::EGG_MODE_ATTR))
+         .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
+      let heuristic_join_reorder = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::HEURISTIC_JOIN_REORDER_ATTR))
          .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
 
       let recognized_attrs = 
@@ -63,6 +67,7 @@ impl AscentConfig {
          // stream_processing,
          egg_mode,
          default_ds,
+         heuristic_join_reorder,
       })
    }
 }

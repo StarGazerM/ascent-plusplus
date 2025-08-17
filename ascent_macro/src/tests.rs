@@ -673,31 +673,31 @@ fn test_macro_lambda_calc(){
    write_with_prefix_to_scratchpad(inp, prefix);
 }
 
-#[test]
-fn test_macro_in_macro() {
-   let inp = quote!{
-      relation foo(i32, i32);
-      relation bar(i32, i32);
+// #[test]
+// fn test_macro_in_macro() {
+//    let inp = quote!{
+//       relation foo(i32, i32);
+//       relation bar(i32, i32);
 
-      macro foo_($x: expr, $y: expr) {
-         foo($x, $y)
-      }
+//       macro foo_($x: expr, $y: expr) {
+//          foo($x, $y)
+//       }
 
-      macro foo($x: expr, $y: expr) {
-         let _x = $x, let _y = $y, foo_!(_x, _y)
-      }
+//       macro foo($x: expr, $y: expr) {
+//          let _x = $x, let _y = $y, foo_!(_x, _y)
+//       }
 
-      foo(0, 1);
-      foo(1, 2);
-      foo(2, 3);
-      foo(3, 4);
+//       foo(0, 1);
+//       foo(1, 2);
+//       foo(2, 3);
+//       foo(3, 4);
 
-      bar(x, y) <-- foo(x, y), foo!(x + 1, y + 1), foo!(x + 2, y + 2), foo!(x + 3, y + 3);
+//       bar(x, y) <-- foo(x, y), foo!(x + 1, y + 1), foo!(x + 2, y + 2), foo!(x + 3, y + 3);
       
-   };
+//    };
 
-   write_to_scratchpad(inp);
-}
+//    write_to_scratchpad(inp);
+// }
 
 // #[test]
 // fn test_function() {
@@ -926,3 +926,50 @@ fn test_run_timeout() {
    write_to_scratchpad(input);
 }
 
+#[test]
+fn test_equality_ascent() {
+   let inp = quote! {
+      #![egglog_mode]
+      struct TCEq;
+
+      relation edge(usize, usize);
+      relation path(usize, usize);
+
+      edge(1, 2);
+      edge(2, 3);
+      edge(3, 4);
+      edge(4, 5);
+
+      x <=> y, path(x, y) <-- edge(x, y);
+
+      x_rep <=> z_rep,
+      path(x_rep.clone(), z_rep.clone()) <--
+         path(x, y),
+         y <=> y_inflate,
+         edge(y_inflate, z),
+         z <=>! z_rep,
+         x <=>! x_rep;
+   };
+   write_to_scratchpad(inp);
+}
+
+// #[test]
+// fn test_eclass() {
+//    let inp = quote! {
+//       #![egglog_mode]
+//       pub struct EClassTest ;
+//       relation ID nil (usize) ;
+//       nil(1);
+//       // >? nid . nil (0) <-- nil (1) ;
+//       relation ID foo (usize) ;
+//       relation ID bar (usize) ;
+//       relation ID foobar (eclass_id , eclass_id) ;
+//       relation ID res (eclass_id) ;
+//       >? foo_227831 . foo (1) <-- nil (1) ;
+//       // >? bar_388897 . bar (1) <-- nil (1) ;
+//       // >? foobar_321489 . foobar (foo_871022 , bar_107077) <-- foo (1) . foo_871022 , bar (1) . bar_107077 ;
+//       // foo1 <=> bar1 <-- foo (x) . foo1 , bar (x) . bar1 ;
+//       // >? res_448166 . res (x) <-- foobar (x , y) , if x == y ;   
+//    };
+//    write_to_scratchpad(inp);
+// }

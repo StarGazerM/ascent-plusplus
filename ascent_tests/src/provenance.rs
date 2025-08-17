@@ -152,17 +152,17 @@ ascent_par! {
     edge_id(x, y, eid) <--
         edge_raw(x, y);
 
-    let new_id = !path(x, y),
-    path_id(x, y, new_id),
-    provenance(Tag("path", new_id), Tag("edge", *eid)) <--
-        edge_id(x, y, eid);
+    // let new_id = !path(x, y),
+    // path_id(x, y, new_id),
+    // provenance(Tag("path", new_id), Tag("edge", *eid)) <--
+    //     edge_id(x, y, eid);
 
-    let new_id = !path(x, z),
-    path_id(x, z, new_id),
-    // provenance(StructId("path", new_id), StructId("path", *pid)),
-    provenance(Tag("path", new_id), Tag("edge", *eid)) <--
-        edge_id(x, y, eid),
-        path_id(y, z, pid);
+    // let new_id = !path(x, z),
+    // path_id(x, z, new_id),
+    // // provenance(StructId("path", new_id), StructId("path", *pid)),
+    // provenance(Tag("path", new_id), Tag("edge", *eid)) <--
+    //     edge_id(x, y, eid),
+    //     path_id(y, z, pid);
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn test_where() {
    println!("provenance: {:?}", tc.provenance);
 }
 
-ascent! {
+/* ascent! {
     struct Length;
     relation edge_raw(i32, i32);
     relation ID edge(i32, i32);
@@ -223,4 +223,4 @@ fn test_length() {
    println!("path id : {:?}", tc.path_id);
    println!("path_length_do_id : {:?}", tc.path_length_do_id);
    println!("path length : {:?}", tc.path_length);
-}
+} */

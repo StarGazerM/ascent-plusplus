@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::vec;
 use crate::ascent_hir::IrHeadItem;
 use crate::utils::{expr_to_ident, tuple_spanned};
 use crate::{
@@ -67,16 +68,16 @@ fn compile_equiv_clause_body(equiv: &EquivClauseNode, body: proc_macro2::TokenSt
       }
    } else {
       // gen a random equiv iter_items
-      let iter_items = Ident::new(&format!("__iter_items_{}", rand::thread_rng().gen_range(0..100000)), equiv.left_ident.span());
+      // let iter_items = Ident::new(&format!("__iter_items_{}", rand::thread_rng().gen_range(0..100000)), equiv.left_ident.span());
       quote_spanned! {equiv.left_ident.span()=>
-         let #iter_items: Vec<_> = 
-            if let Some(set) = _self.equiv_ids_.set_of(#src_var) {
-                set.cloned().collect()
-            } else {
-                vec![#src_var.clone()]
-            };
+         // let #iter_items: Vec<_> = 
+         //    if let Some(set) = _self.equiv_ids_.set_of(#src_var) {
+         //        set.cloned().collect()
+         //    } else {
+         //        vec![#src_var.clone()]
+         //    };
 
-        for #dst_var in #iter_items {
+        for #dst_var in _self.equiv_ids_.set_of_inc_x(#src_var) {
             #body
         }
       }
@@ -161,6 +162,11 @@ fn compile_mir_rule_inner(
                (clause_ind, bclause)
             };
 
+            let mut conds_then_next_loop = next_loop;
+            for cond in bclause.cond_clauses.iter().rev() {
+               conds_then_next_loop = compile_cond_clause(cond, conds_then_next_loop);
+            }
+
             let bclause_rel_name = &bclause.rel.relation.name;
             let selected_args = &bclause.selected_args();
             let pre_clause_vars =
@@ -173,23 +179,30 @@ fn compile_mir_rule_inner(
             let cloning_needed = true;
 
             let matched_val_ident = Ident::new("__val", bclause.rel_args_span);
-            let new_vars_assignments = clause_var_assignments(
+            let new_vars_binds_and_next = clause_bind_and_continue(
                &bclause.rel,
                clause_vars.iter().filter(|(_i, var)| !common_vars_no_indices.contains(var)).cloned(),
                &matched_val_ident,
                &parse_quote! {_self.#bclause_rel_name},
                cloning_needed,
                mir,
+               conds_then_next_loop.clone(),
             );
 
             let selected_args_cloned = selected_args.iter().map(exp_cloned).collect_vec();
-            let selected_args_tuple = tuple_spanned(&selected_args_cloned, bclause.args_span);
+            let selected_args_cloned_canonicalized = if mir.config.egg_mode && bclause.rel.relation.contains_eclass_id {
+               selected_args_cloned.iter().enumerate().map(|(i, arg)| {
+                  if bclause.rel.relation.is_field_eclass_id(i) {
+                     parse_quote! {_self.equiv_ids_.get_dominant_elem(#arg).unwrap_or(#arg)}
+                  } else {
+                     arg.clone()
+                  }
+               }).collect_vec()
+            } else {
+               selected_args_cloned
+            };
+            let selected_args_tuple = tuple_spanned(&selected_args_cloned_canonicalized, bclause.args_span);
             let rel_version_exp = expr_for_rel(&bclause.rel, &bclause.extern_db_name, mir);
-
-            let mut conds_then_next_loop = next_loop;
-            for cond in bclause.cond_clauses.iter().rev() {
-               conds_then_next_loop = compile_cond_clause(cond, conds_then_next_loop);
-            }
 
             let span = bclause.rel_args_span;
 
@@ -223,15 +236,16 @@ fn compile_mir_rule_inner(
                }
 
                let cl1_matched_val_ident = syn::Ident::new("cl1_val", cl1.rel_args_span);
-               let cl1_vars_assignments = clause_var_assignments(
+               let cl1_vars_assignments = clause_bind_and_continue(
                   &cl1.rel,
                   cl1_vars.iter().filter(|(i, _var)| !cl1.rel.indices.contains(i)).cloned(),
                   &cl1_matched_val_ident,
                   &parse_quote! {_self.#cl1_rel_name},
                   cloning_needed,
                   mir,
+                  // conds_then_next_loop.clone(),
+                  quote! {},
                );
-               let cl1_vars_assignments = vec![cl1_vars_assignments];
 
                let joined_args_for_cl2_cloned = cl2.selected_args().iter().map(exp_cloned).collect_vec();
                let joined_args_tuple_for_cl2 = tuple_spanned(&joined_args_for_cl2_cloned, cl2.args_span);
@@ -243,8 +257,8 @@ fn compile_mir_rule_inner(
                      // TODO we may be doing excessive cloning
                      let mut __dep_changed = false;
                      #def_default_id_code
-                     #new_vars_assignments
-                     #conds_then_next_loop
+                     #new_vars_binds_and_next
+                     // #conds_then_next_loop
                   });
                };
                for cond in cl1.cond_clauses.iter().rev() {
@@ -282,7 +296,7 @@ fn compile_mir_rule_inner(
                      #(#cl1_join_vars_assignments)*
                      if let Some(__matching) = #cl2_var_name.#index_get(&#joined_args_tuple_for_cl2) {
                         #cl1_tuple_indices_iter.for_each(|cl1_val| {
-                           #(#cl1_vars_assignments)*
+                           #cl1_vars_assignments
                            #cl1_conds_then_rest
                         });
                      } #failed_generate_code
@@ -295,8 +309,8 @@ fn compile_mir_rule_inner(
                         // TODO we may be doing excessive cloning
                         let mut __dep_changed = false;
                         #def_default_id_code
-                        #new_vars_assignments
-                        #conds_then_next_loop
+                        #new_vars_binds_and_next
+                        // #conds_then_next_loop
                      });
                   }
                }
@@ -323,7 +337,20 @@ fn compile_mir_rule_inner(
             let rel_expr = expr_for_rel(&mir_relation, &agg.extern_db_name, mir);
             let selected_args = mir_relation.indices.iter().map(|&i| &agg.rel_args[i]);
             let selected_args_cloned = selected_args.map(exp_cloned).collect_vec();
-            let selected_args_tuple = tuple_spanned(&selected_args_cloned, agg.span);
+            // In egglog mode, for each selected arg, if it is an eclass_id, we need to use the canonical value
+            // TODO: it's not clear how to aggregate over eclass_id, now aggregate over the eclass_id is UB
+            let selected_args_canonicalized = if mir.config.egg_mode && mir_relation.relation.contains_eclass_id {
+               selected_args_cloned.iter().enumerate().map(|(i, arg)| {
+                  if mir_relation.relation.is_field_eclass_id(i) {
+                     parse_quote! {_self.equiv_ids_.get_dominant_elem(#arg).unwrap_or(#arg)}
+                  } else {
+                     arg.clone()
+                  }
+               }).collect_vec()
+            } else {
+               selected_args_cloned
+            };
+            let selected_args_tuple = tuple_spanned(&selected_args_canonicalized, agg.span);
             let agg_args_tuple_indices = agg.bound_args.iter().map(|arg| {
                (
                   agg.rel_args.iter().find_position(|rel_arg| expr_to_ident(rel_arg) == Some(arg.clone())).unwrap().0,
@@ -334,13 +361,14 @@ fn compile_mir_rule_inner(
             let agg_args_tuple =
                tuple_spanned(&agg.bound_args.iter().map(|v| parse_quote! {#v}).collect_vec(), agg.span);
 
-            let vars_assignments = clause_var_assignments(
+            let vars_assignments = clause_bind_and_continue(
                &MirRelation::from(agg.rel.clone(), MirRelationVersion::Total),
                agg_args_tuple_indices,
                &parse_quote_spanned! {agg.span=> __val},
                &parse_quote! {_self.#rel_name},
                false,
                mir,
+               quote! {},
             );
 
             let agg_func = &agg.aggregator;
@@ -415,17 +443,9 @@ fn compile_equiv_clause_head(
          #set_changed_true_code
       }
     } else { quote! {
-         let #src_var_repr_name = _self.equiv_ids_.elem_set(&#src_var);
-         let #dst_var_repr_name = _self.equiv_ids_.elem_set(&#dst_var);
-         if let Some(#src_var_repr_name) = #src_var_repr_name {
-            if let Some(#dst_var_repr_name) = #dst_var_repr_name {
-               _self.equiv_ids_.add(#src_var_repr_name, #dst_var_repr_name);
-            } else {
-               _self.equiv_ids_.add(#src_var_repr_name, #dst_var.clone());
-            }
-         } else {
-            _self.equiv_ids_.add(#src_var.clone(), #dst_var.clone());
-         }
+         let #src_var_repr_name = _self.equiv_ids_.get_dominant_elem(&#src_var).unwrap_or(&#src_var);
+         let #dst_var_repr_name = _self.equiv_ids_.get_dominant_elem(&#dst_var).unwrap_or(&#dst_var);
+         _self.equiv_ids_delta_.add(#src_var_repr_name.clone(), #dst_var_repr_name.clone());
          #set_changed_true_code
       }
    }
@@ -444,6 +464,27 @@ fn compile_head_clause(
    let head_rel_name = Ident::new(&hcl.rel.name.to_string(), hcl.span);
    let hcl_args_converted = hcl.args.iter().cloned().map(convert_head_arg).collect_vec();
    let new_row_tuple = tuple_spanned(&hcl_args_converted, hcl.args_span);
+   let new_canonical_row_tuple = if mir.config.egg_mode && hcl.rel.contains_eclass_id {
+      let mut new_canonical_row_tuple = vec![];
+      for i in 0..hcl.args.len() {
+         let i_ind = syn::Index::from(i);
+         if hcl.rel.is_field_eclass_id(i) {
+            // if current arg is eclass_id, we need to use the canonical value
+            // by query the hidden union-find relation
+            let ith_arg = quote_spanned! {hcl.span=> __new_row.#i_ind};
+            let ith_arg_canonical = quote_spanned! {hcl.span=> 
+               _self.equiv_ids_.get_dominant_elem(&#ith_arg).unwrap_or(&#ith_arg).clone()
+            };
+            new_canonical_row_tuple.push(ith_arg_canonical);
+         } else {
+            // create a syntax node for "i"
+            new_canonical_row_tuple.push(quote_spanned! {hcl.span=> __new_row.#i_ind.clone()});
+         }
+      }
+      quote_spanned! {hcl.span=> (#(#new_canonical_row_tuple,)*)}
+   } else {
+      quote! {}
+   };
 
    let head_relation = &hcl.rel;
    // if None use default name __new_tuple_d
@@ -509,6 +550,8 @@ fn compile_head_clause(
    let expr_for_rel_maybe_mut = if mir.is_parallel { expr_for_c_rel_write } else { expr_for_rel_write };
    let head_rel_full_index_expr_new =
       expr_for_rel_maybe_mut(&MirRelation::from(head_rel_full_index.clone(), New), mir);
+   let head_rel_full_index_expr_canonical_delta =
+      expr_for_rel_maybe_mut(&MirRelation::from(head_rel_full_index.clone(), CanonicalDelta), mir);
    
    // TODO: should we allow adding facts to external relations?
    let head_rel_full_index_expr_delta =
@@ -531,7 +574,11 @@ fn compile_head_clause(
          } else {
             quote! {}
          };
-         parse_quote_spanned! {hcl.span=> __new_row.#ind #clone }
+         if mir.config.egg_mode && hcl.rel.is_field_eclass_id(i) {
+            parse_quote_spanned! {hcl.span=> __new_row_canonical.#ind #clone }
+         } else {
+            parse_quote_spanned! {hcl.span=> __new_row.#ind #clone }
+         }
       })
       .collect_vec();
    let new_row_to_be_pushed = tuple_spanned(&new_row_to_be_pushed, hcl.span);
@@ -567,7 +614,7 @@ fn compile_head_clause(
       __default_id = #new_id_name;
    };
 
-   let failed_unchanged_code = if !hcl.required_flag {
+   let failed_unchanged_code = if !hcl.required_flag || hcl.id_name.is_some() {
       quote! {}
    } else {
       quote! {
@@ -575,6 +622,7 @@ fn compile_head_clause(
          return;
       }
    };
+   // TODO: buggy here, make sure always use explict id relation update!
    let update_id_code = if hcl.id_name.is_some() && !hcl.required_flag {
       // update the full and canonical indices
       let id_arg_tuple = (0..hcl.rel.field_types.len())
@@ -606,20 +654,39 @@ fn compile_head_clause(
          }
       } else {
          let hname = format!("{}", hcl.rel.name);
+         // In egglog mode, Id need to be eclass_id, which is hash value of the canonical value
+         let new_row = if mir.config.egg_mode && hcl.rel.contains_eclass_id {
+            quote_spanned! {hcl.span=> __new_row_canonical}
+         } else {
+            quote_spanned! {hcl.span=> __new_row}
+         };
          let hash_tuple_code = quote! {
             #new_id_name = {
                use std::hash::{Hash, Hasher};
                let mut hasher = ::std::hash::DefaultHasher::new();
-               (__new_row.clone(), #hname).hash(&mut hasher);
+               (#new_row.clone(), #hname).hash(&mut hasher);
                hasher.finish() as usize
             };
          };
-         if hcl.inflation_flag {
+         if hcl.inflation_flag || (mir.config.egg_mode && hcl.rel.contains_eclass_id) {
+            let canonical_delta_insert_code = if mir.config.egg_mode && hcl.rel.contains_eclass_id {
+               quote! {
+                  if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_canonical_delta,
+                     &__new_row_canonical, ()) {
+                     #push_code
+                  } else {
+                     #failed_unchanged_code
+                  }
+               }
+            } else {
+               quote! {}
+            };
             quote_spanned! {hcl.span=>
                #hash_tuple_code
                if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
                   &__new_row, ())
                {
+                  #canonical_delta_insert_code ;
                   // keep fixpoint check correct
                   #set_changed_true_code
                } else {
@@ -627,7 +694,7 @@ fn compile_head_clause(
                }
                ::ascent::internal::comment("inflation!");
                #(#update_indices)*
-               #update_id_code
+               // #update_id_code
             }
          } else {
             quote_spanned! {hcl.span=>
@@ -650,7 +717,7 @@ fn compile_head_clause(
    };
    if !hcl.rel.is_lattice {
       if hcl.extern_db_name.is_none() {
-         if !hcl.inflation_flag {
+         if !hcl.inflation_flag && !(mir.config.egg_mode && hcl.rel.contains_eclass_id) {
             quote_spanned! {hcl.span=>
                let __new_row: #row_type = #new_row_tuple;
                #def_id_code
@@ -664,16 +731,33 @@ fn compile_head_clause(
             }
          } else {
             // if there is inflation, we skip the check for if a a duplicate exists
-            quote_spanned! {hcl.span=>
-               let __new_row: #row_type = #new_row_tuple;
-               #def_id_code
-               if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
-                  !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
-                  #push_code
-               } else {
-                  #failed_unchanged_code
+            if mir.config.egg_mode && hcl.rel.contains_eclass_id {
+               // if egglog mode and contains eclass_id, we need to use the canonical value
+               // existance check is done on canonical value
+               quote_spanned! {hcl.span=>
+                  let __new_row: #row_type = #new_row_tuple;
+                  let __new_row_canonical = #new_canonical_row_tuple;
+                  #def_id_code
+                  // if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row_canonical) &&
+                  //    !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row_canonical) {
+                  //    #push_code
+                  // } else {
+                  //    #failed_unchanged_code
+                  // }
+                  #update_rel_code
                }
-               #update_rel_code
+            } else {
+               quote_spanned! {hcl.span=>
+                  let __new_row: #row_type = #new_row_tuple;
+                  #def_id_code
+                  if !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_total, &__new_row) &&
+                     !::ascent::internal::RelFullIndexRead::contains_key(&#head_rel_full_index_expr_delta, &__new_row) {
+                     #push_code
+                  } else {
+                     #failed_unchanged_code
+                  }
+                  #update_rel_code
+               }
             }
          }
       } else {
@@ -776,11 +860,13 @@ fn convert_head_arg(arg: Expr) -> Expr {
    }
 }
 
-fn clause_var_assignments(
+fn clause_bind_and_continue(
    rel: &MirRelation, vars: impl Iterator<Item = (usize, Ident)>, val_ident: &Ident, relation_expr: &Expr,
-   cloning_needed: bool, mir: &AscentMir,
+   cloning_needed: bool, mir: &AscentMir, next_loop: proc_macro2::TokenStream
 ) -> proc_macro2::TokenStream {
    let mut assignments = vec![];
+   let mut is_eclass_args = vec![];
+   let is_delta_rel = rel.version == MirRelationVersion::Delta;
 
    let mut any_vars = false;
    for (ind_in_tuple, var) in vars {
@@ -788,26 +874,66 @@ fn clause_var_assignments(
          let ty = &rel.relation.field_types[ind_in_tuple];
          quote! { : & #ty}
       };
+
+      // In egglog mode, If relation is not delta, we need to iterate over the equivalence
+      // class of the value, inflation of delta happens allowing deduplicated tuples to be added
+      // into delta relations.
+      let need_inflation = !is_delta_rel && mir.config.egg_mode && rel.relation.is_field_eclass_id(ind_in_tuple);
+      is_eclass_args.push(need_inflation);
       any_vars = true;
+      // In egglog mode, we need to iterate over the equivalence class of the value
+      // In non-egglog mode, we can just bind the value
       match &rel.val_type {
          IndexValType::Reference => {
             let ind = syn::Index::from(ind_in_tuple);
-            assignments.push(quote! {
-               let #var #var_type_ascription = &__row.#ind;
-            })
+            if need_inflation {
+               assignments.push(quote! {
+                  for #var in _self.equiv_ids_.set_of_inc_x(&__row.#ind)
+               })
+            } else {
+               assignments.push(quote! {
+                  let #var #var_type_ascription = &__row.#ind;
+               })
+            }
          }
          IndexValType::Direct(inds) => {
             let ind = inds.iter().enumerate().find(|(_i, ind)| **ind == ind_in_tuple).unwrap().0;
             let ind = syn::Index::from(ind);
-
-            assignments.push(quote! {
-               let #var #var_type_ascription = #val_ident.#ind;
-            })
+            if need_inflation {
+               assignments.push(quote! {
+                  for #var in _self.equiv_ids_.set_of_inc_x(&#val_ident.#ind)
+               })
+            } else {
+               assignments.push(quote! {
+                  let #var #var_type_ascription = #val_ident.#ind;
+               })
+            }
          }
       }
    }
 
-   if any_vars {
+   // fold all (assignments, is_eclass_arg) into a single TokenStream
+   let assignment_and_next_code = 
+      assignments.into_iter().zip(is_eclass_args.into_iter()).rev().fold(
+         next_loop,
+         |acc, (bind, is_eclass_huh)| {
+            // inflate if in egglog mode and operate on a eclass_id
+            if is_eclass_huh {
+               quote! {
+                  #bind {
+                     #acc
+                  }
+               }
+            } else {
+               quote! {
+                  #bind
+                  #acc
+               }
+            }
+         }
+      );
+
+   let before_bind = if any_vars {
       match &rel.val_type {
          IndexValType::Reference => {
             let maybe_lock = if rel.relation.is_lattice && mir.is_parallel {
@@ -819,26 +945,23 @@ fn clause_var_assignments(
                quote! {.clone()}
             } else {
                quote! {}
-            };
-            assignments.insert(
-               0,
-               quote! {
-                  let __row = &#relation_expr[*#val_ident]#maybe_lock #maybe_clone;
-               },
-            );
+            }; 
+            quote! {
+               let __row = &#relation_expr[*#val_ident]#maybe_lock #maybe_clone;
+            }
          }
          IndexValType::Direct(_) => {
-            assignments.insert(
-               0,
-               quote! {
-                  let #val_ident = #val_ident.tuple_of_borrowed();
-               },
-            );
+            quote! {
+               let #val_ident = #val_ident.tuple_of_borrowed();
+            }
          }
       }
-   }
+   } else {
+      quote! {}
+   };
 
    quote! {
-      #(#assignments)*
+      #before_bind
+      #assignment_and_next_code
    }
 }

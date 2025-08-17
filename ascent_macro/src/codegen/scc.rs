@@ -17,6 +17,7 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
    let mut freeze_code = vec![];
    // let mut def_relation_cnt = vec![];
    let mut unfreeze_code = vec![];
+   // let mut canonicalize_delta_code = vec![];
 
    let _self = quote! { _self };
 
@@ -33,6 +34,7 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
       };
       let delta_var_name = ir_relation_version_var_name(&ir_name, &_self, MirRelationVersion::Delta);
       let total_var_name = ir_relation_version_var_name(&ir_name, &_self, MirRelationVersion::Total);
+      let canonical_delta_var_name = ir_relation_version_var_name(&ir_name, &_self, MirRelationVersion::CanonicalDelta);
       let new_var_name = ir_relation_version_var_name(&ir_name, &_self, MirRelationVersion::New);
       // let counter_name = ir_relation_counter(&ir_name);
       let total_field = &ir_name;
@@ -52,9 +54,20 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
             if rel_ind_common.extern_db_name.is_some() {
                continue;
             }
-            shift_delta_to_total_new_to_delta.push(quote_spanned!{ir_name.span()=>
-               ::ascent::internal::RelIndexMerge::merge_delta_to_total_new_to_delta(&mut #new_var_name, &mut #delta_var_name, &mut #total_var_name);
-            });
+            shift_delta_to_total_new_to_delta.push(
+               if mir.config.egg_mode && rel_ind_common.contains_eclass_id {
+                  let canonical_delta_var_name = ir_relation_version_var_name(&ir_name, &_self, MirRelationVersion::CanonicalDelta);
+                  quote_spanned!{ir_name.span()=>
+                     ::ascent::internal::RelIndexMerge::merge_delta_to_total_new_to_delta(&mut #new_var_name, &mut #canonical_delta_var_name, &mut #total_var_name);
+                     // move canonical delta to delta, and reset canonical delta to default
+                     #delta_var_name = ::std::mem::take(&mut #canonical_delta_var_name);
+                  }
+               } else {
+                  quote_spanned!{ir_name.span()=>
+                  ::ascent::internal::RelIndexMerge::merge_delta_to_total_new_to_delta(&mut #new_var_name, &mut #delta_var_name, &mut #total_var_name);
+                  }
+               }
+            );
             move_total_to_delta.push(quote_spanned! {ir_name.span()=>
                ::ascent::internal::RelIndexMerge::init(&mut #new_var_name, &mut #delta_var_name, &mut #total_var_name);
             });
@@ -85,11 +98,21 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
             #total_var_name.freeze();
             #delta_var_name.freeze();
          });
+         if mir.config.egg_mode {
+            freeze_code.push(quote_spanned!{ir_name.span()=>
+               #canonical_delta_var_name.freeze();
+            });
+         }
 
          unfreeze_code.push(quote_spanned!{ir_name.span()=>
             #total_var_name.unfreeze();
             #delta_var_name.unfreeze();
          });
+         if mir.config.egg_mode {
+            unfreeze_code.push(quote_spanned!{ir_name.span()=>
+               #canonical_delta_var_name.unfreeze();
+            });
+         }
       }
 
       // if mir.is_parallel {
@@ -212,9 +235,13 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
          #(#unfreeze_code)*
          #(#shift_delta_to_total_new_to_delta)*
          #(#eval_ext_dbs)*
-         _self.scc_iters[#scc_ind] += 1;
+         _self.scc_iters[#scc_ind] += 1; 
          // if !#check_changed_code {break;}
-         let need_break = !#check_changed_code;
+         let need_break = if _self.scc_iters[#scc_ind] > _self.scc_max_iters[#scc_ind] {
+            true
+         } else {
+            !#check_changed_code
+         };
          // __check_return_conditions!();
       }
    } else {
@@ -229,12 +256,24 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
          #(#unfreeze_code)*
 
          #(#shift_delta_to_total_new_to_delta)*
+         // TODO: why we need this shift twice?
          #(#shift_delta_to_total_new_to_delta)*
          #(#eval_ext_dbs)*
          _self.scc_iters[#scc_ind] += 1;
          let need_break = true;
          // __check_return_conditions!();
       }
+   };
+   // merge delta and new versions of equiv_ids_delta_
+   let merge_equiv_ids_delta_code = if mir.config.egg_mode {
+      quote! {
+         // TODO: need fix this, we want to move instead of clone
+         _self.equiv_ids_.combine(_self.equiv_ids_delta_.clone());
+         // clear delta version of equiv_ids_delta_
+         _self.equiv_ids_delta_ = Default::default();
+      }
+   } else {
+      quote! {}
    };
    // quote! {
    //    // define variables for delta and new versions of dynamic relations in the scc
@@ -246,7 +285,10 @@ pub fn compile_mir_scc(mir: &AscentMir, scc_ind: usize) ->
    //    #(#move_total_to_field)*
    // }
    (quote! {#(#move_total_to_delta)*},
-    quote! {#eval_once})
+    quote! {
+      #eval_once
+      #merge_equiv_ids_delta_code
+    })
 }
 
 fn generated_ext_dbs(scc: &MirScc, mir: &AscentMir) -> Vec<proc_macro2::TokenStream> {
