@@ -1,19 +1,19 @@
-use std::collections::HashSet;
-use std::vec;
 use crate::ascent_hir::IrHeadItem;
 use crate::utils::{expr_to_ident, tuple_spanned};
 use crate::{
    ascent_hir::IndexValType,
+   ascent_hir::IrHeadClause,
    ascent_mir::{
       AscentMir, MirBodyItem,
       MirRelationVersion::{self, *},
       MirRule, MirScc,
    },
-   ascent_hir::IrHeadClause,
    utils::{tuple_type, TokenStreamExtensions},
 };
-use rand::Rng;
 use itertools::Itertools;
+use rand::Rng;
+use std::collections::HashSet;
+use std::vec;
 use syn::{parse2, parse_quote_spanned, spanned::Spanned};
 use syn::{parse_quote, Expr, Ident};
 
@@ -70,7 +70,7 @@ fn compile_equiv_clause_body(equiv: &EquivClauseNode, body: proc_macro2::TokenSt
       // gen a random equiv iter_items
       // let iter_items = Ident::new(&format!("__iter_items_{}", rand::thread_rng().gen_range(0..100000)), equiv.left_ident.span());
       quote_spanned! {equiv.left_ident.span()=>
-         // let #iter_items: Vec<_> = 
+         // let #iter_items: Vec<_> =
          //    if let Some(set) = _self.equiv_ids_.set_of(#src_var) {
          //        set.cloned().collect()
          //    } else {
@@ -191,13 +191,17 @@ fn compile_mir_rule_inner(
 
             let selected_args_cloned = selected_args.iter().map(exp_cloned).collect_vec();
             let selected_args_cloned_canonicalized = if mir.config.egg_mode && bclause.rel.relation.contains_eclass_id {
-               selected_args_cloned.iter().enumerate().map(|(i, arg)| {
-                  if bclause.rel.relation.is_field_eclass_id(i) {
-                     parse_quote! {_self.equiv_ids_.get_dominant_elem(#arg).unwrap_or(#arg)}
-                  } else {
-                     arg.clone()
-                  }
-               }).collect_vec()
+               selected_args_cloned
+                  .iter()
+                  .enumerate()
+                  .map(|(i, arg)| {
+                     if bclause.rel.relation.is_field_eclass_id(i) {
+                        parse_quote! {_self.equiv_ids_.get_dominant_elem(#arg).unwrap_or(#arg)}
+                     } else {
+                        arg.clone()
+                     }
+                  })
+                  .collect_vec()
             } else {
                selected_args_cloned
             };
@@ -316,9 +320,7 @@ fn compile_mir_rule_inner(
                }
             }
          }
-         MirBodyItem::Equiv(equiv) => {
-            compile_equiv_clause_body(equiv, next_loop)
-         }
+         MirBodyItem::Equiv(equiv) => compile_equiv_clause_body(equiv, next_loop),
          MirBodyItem::Generator(gen) => {
             let pat = &gen.pattern;
             let expr = &gen.expr;
@@ -340,13 +342,17 @@ fn compile_mir_rule_inner(
             // In egglog mode, for each selected arg, if it is an eclass_id, we need to use the canonical value
             // TODO: it's not clear how to aggregate over eclass_id, now aggregate over the eclass_id is UB
             let selected_args_canonicalized = if mir.config.egg_mode && mir_relation.relation.contains_eclass_id {
-               selected_args_cloned.iter().enumerate().map(|(i, arg)| {
-                  if mir_relation.relation.is_field_eclass_id(i) {
-                     parse_quote! {_self.equiv_ids_.get_dominant_elem(#arg).unwrap_or(#arg)}
-                  } else {
-                     arg.clone()
-                  }
-               }).collect_vec()
+               selected_args_cloned
+                  .iter()
+                  .enumerate()
+                  .map(|(i, arg)| {
+                     if mir_relation.relation.is_field_eclass_id(i) {
+                        parse_quote! {_self.equiv_ids_.get_dominant_elem(#arg).unwrap_or(#arg)}
+                     } else {
+                        arg.clone()
+                     }
+                  })
+                  .collect_vec()
             } else {
                selected_args_cloned
             };
@@ -405,27 +411,18 @@ fn head_clauses_structs_and_update_code(
    for hcl in rule.head_clause.iter() {
       add_rows.push(compile_head_clause_from_item(hcl, scc, mir));
    }
-   
+
    (quote! {}, quote! {#(#add_rows)*})
 }
 
-fn compile_head_clause_from_item(
-   hitem: &IrHeadItem,
-   scc: &MirScc,
-   mir: &AscentMir
-) -> proc_macro2::TokenStream {
+fn compile_head_clause_from_item(hitem: &IrHeadItem, scc: &MirScc, mir: &AscentMir) -> proc_macro2::TokenStream {
    match hitem {
       IrHeadItem::Clause(hcl) => compile_head_clause(hcl, scc, mir),
       IrHeadItem::Equiv(equiv) => compile_equiv_clause_head(equiv, scc, mir),
    }
 }
 
-fn compile_equiv_clause_head(
-   equiv: &EquivClauseNode,
-   _scc: &MirScc,
-   mir: &AscentMir
-) -> proc_macro2::TokenStream {
-   
+fn compile_equiv_clause_head(equiv: &EquivClauseNode, _scc: &MirScc, mir: &AscentMir) -> proc_macro2::TokenStream {
    let src_var = equiv.left_ident.clone();
    let dst_var = equiv.right_ident.clone();
    let set_changed_true_code = if !mir.is_parallel {
@@ -435,14 +432,15 @@ fn compile_equiv_clause_head(
    };
    let src_var_repr_name = Ident::new(&format!("__src_var_repr_{}", src_var), src_var.span());
    let dst_var_repr_name = Ident::new(&format!("__dst_var_repr_{}", dst_var), dst_var.span());
-    if equiv.representative {
+   if equiv.representative {
       let src_var = &equiv.left_ident;
       let dst_var = &equiv.right_ident;
       quote! {
          let #dst_var = _self.equiv_ids_.get_dominant_elem(#src_var).unwrap_or(#src_var);
          #set_changed_true_code
       }
-    } else { quote! {
+   } else {
+      quote! {
          let #src_var_repr_name = _self.equiv_ids_.get_dominant_elem(&#src_var).unwrap_or(&#src_var);
          let #dst_var_repr_name = _self.equiv_ids_.get_dominant_elem(&#dst_var).unwrap_or(&#dst_var);
          _self.equiv_ids_delta_.add(#src_var_repr_name.clone(), #dst_var_repr_name.clone());
@@ -451,11 +449,7 @@ fn compile_equiv_clause_head(
    }
 }
 
-fn compile_head_clause(
-   hcl: &IrHeadClause,
-   scc: &MirScc,
-   mir: &AscentMir
-) -> proc_macro2::TokenStream {
+fn compile_head_clause(hcl: &IrHeadClause, scc: &MirScc, mir: &AscentMir) -> proc_macro2::TokenStream {
    let set_changed_true_code = if !mir.is_parallel {
       quote! { __changed = true; }
    } else {
@@ -472,7 +466,7 @@ fn compile_head_clause(
             // if current arg is eclass_id, we need to use the canonical value
             // by query the hidden union-find relation
             let ith_arg = quote_spanned! {hcl.span=> __new_row.#i_ind};
-            let ith_arg_canonical = quote_spanned! {hcl.span=> 
+            let ith_arg_canonical = quote_spanned! {hcl.span=>
                _self.equiv_ids_.get_dominant_elem(&#ith_arg).unwrap_or(&#ith_arg).clone()
             };
             new_canonical_row_tuple.push(ith_arg_canonical);
@@ -492,7 +486,26 @@ fn compile_head_clause(
       Some(new_id) => new_id.clone(),
       None => Ident::new(&format!("__new_{}", head_rel_name), hcl.span),
    };
-   let def_id_code = quote_spanned! {hcl.span=> let mut #new_id_name = 0;};
+   // let def_id_code = quote_spanned! {hcl.span=> let mut #new_id_name = 0;};
+   let h_rel_name = format!("{}", hcl.rel.name);
+   let def_id_code = if mir.config.egg_mode {
+      let new_row = if hcl.rel.contains_eclass_id {
+         quote_spanned! {hcl.span=> __new_row_canonical}
+      } else {
+         quote_spanned! {hcl.span=> __new_row}
+      };
+      quote_spanned! {hcl.span=>
+         // define is use hash value of the tuple
+         let mut #new_id_name = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = ::std::hash::DefaultHasher::new();
+            (#new_row.clone(), #h_rel_name).hash(&mut hasher);
+            hasher.finish() as usize
+         };
+      }
+   } else {
+      quote_spanned! {hcl.span=> let mut #new_id_name = 0;}
+   };
 
    let row_type = tuple_type(&head_relation.field_types);
 
@@ -548,11 +561,10 @@ fn compile_head_clause(
    let head_rel_full_index = &mir.relations_full_indices[head_relation];
 
    let expr_for_rel_maybe_mut = if mir.is_parallel { expr_for_c_rel_write } else { expr_for_rel_write };
-   let head_rel_full_index_expr_new =
-      expr_for_rel_maybe_mut(&MirRelation::from(head_rel_full_index.clone(), New), mir);
+   let head_rel_full_index_expr_new = expr_for_rel_maybe_mut(&MirRelation::from(head_rel_full_index.clone(), New), mir);
    let head_rel_full_index_expr_canonical_delta =
       expr_for_rel_maybe_mut(&MirRelation::from(head_rel_full_index.clone(), CanonicalDelta), mir);
-   
+
    // TODO: should we allow adding facts to external relations?
    let head_rel_full_index_expr_delta =
       expr_for_rel(&MirRelation::from(head_rel_full_index.clone(), Delta), &None, mir);
@@ -608,7 +620,7 @@ fn compile_head_clause(
          }
       }
    };
-   let push_code = quote! {  
+   let push_code = quote! {
       let __new_row_to_be_pushed = #new_row_to_be_pushed;
       #compute_id_code
       __default_id = #new_id_name;
@@ -623,7 +635,7 @@ fn compile_head_clause(
       }
    };
    // TODO: buggy here, make sure always use explict id relation update!
-   let update_id_code = if hcl.id_name.is_some() && !hcl.required_flag {
+   let update_id_code = if hcl.id_name.is_some() && !hcl.required_flag && !mir.config.egg_mode {
       // update the full and canonical indices
       let id_arg_tuple = (0..hcl.rel.field_types.len())
          .into_iter()
@@ -653,21 +665,16 @@ fn compile_head_clause(
             // #set_changed_true_code
          }
       } else {
-         let hname = format!("{}", hcl.rel.name);
          // In egglog mode, Id need to be eclass_id, which is hash value of the canonical value
-         let new_row = if mir.config.egg_mode && hcl.rel.contains_eclass_id {
-            quote_spanned! {hcl.span=> __new_row_canonical}
-         } else {
-            quote_spanned! {hcl.span=> __new_row}
-         };
-         let hash_tuple_code = quote! {
-            #new_id_name = {
-               use std::hash::{Hash, Hasher};
-               let mut hasher = ::std::hash::DefaultHasher::new();
-               (#new_row.clone(), #hname).hash(&mut hasher);
-               hasher.finish() as usize
-            };
-         };
+         
+         // let hash_tuple_code = quote! {
+         //    #new_id_name = {
+         //       use std::hash::{Hash, Hasher};
+         //       let mut hasher = ::std::hash::DefaultHasher::new();
+         //       (#new_row.clone(), #hname).hash(&mut hasher);
+         //       hasher.finish() as usize
+         //    };
+         // };
          if hcl.inflation_flag || (mir.config.egg_mode && hcl.rel.contains_eclass_id) {
             let canonical_delta_insert_code = if mir.config.egg_mode && hcl.rel.contains_eclass_id {
                quote! {
@@ -682,7 +689,7 @@ fn compile_head_clause(
                quote! {}
             };
             quote_spanned! {hcl.span=>
-               #hash_tuple_code
+               // #hash_tuple_code
                if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
                   &__new_row, ())
                {
@@ -698,7 +705,7 @@ fn compile_head_clause(
             }
          } else {
             quote_spanned! {hcl.span=>
-               #hash_tuple_code
+               // #hash_tuple_code
                if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_new,
                   &__new_row, ())
                {
@@ -772,8 +779,7 @@ fn compile_head_clause(
       let _self = quote! { _self };
       let lattice_insertion_mutex = lattice_insertion_mutex_var_name(head_relation);
       let head_lat_full_index = &mir.lattices_full_indices[head_relation];
-      let head_lat_full_index_var_name_new =
-         ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, New);
+      let head_lat_full_index_var_name_new = ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, New);
       let head_lat_full_index_var_name_delta =
          ir_relation_version_var_name(&head_lat_full_index.ir_name(), &_self, Delta);
       let head_lat_full_index_var_name_full =
@@ -862,7 +868,7 @@ fn convert_head_arg(arg: Expr) -> Expr {
 
 fn clause_bind_and_continue(
    rel: &MirRelation, vars: impl Iterator<Item = (usize, Ident)>, val_ident: &Ident, relation_expr: &Expr,
-   cloning_needed: bool, mir: &AscentMir, next_loop: proc_macro2::TokenStream
+   cloning_needed: bool, mir: &AscentMir, next_loop: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
    let mut assignments = vec![];
    let mut is_eclass_args = vec![];
@@ -913,10 +919,12 @@ fn clause_bind_and_continue(
    }
 
    // fold all (assignments, is_eclass_arg) into a single TokenStream
-   let assignment_and_next_code = 
-      assignments.into_iter().zip(is_eclass_args.into_iter()).rev().fold(
-         next_loop,
-         |acc, (bind, is_eclass_huh)| {
+   let assignment_and_next_code =
+      assignments
+         .into_iter()
+         .zip(is_eclass_args.into_iter())
+         .rev()
+         .fold(next_loop, |acc, (bind, is_eclass_huh)| {
             // inflate if in egglog mode and operate on a eclass_id
             if is_eclass_huh {
                quote! {
@@ -930,8 +938,7 @@ fn clause_bind_and_continue(
                   #acc
                }
             }
-         }
-      );
+         });
 
    let before_bind = if any_vars {
       match &rel.val_type {
@@ -945,7 +952,7 @@ fn clause_bind_and_continue(
                quote! {.clone()}
             } else {
                quote! {}
-            }; 
+            };
             quote! {
                let __row = &#relation_expr[*#val_ident]#maybe_lock #maybe_clone;
             }

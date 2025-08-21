@@ -106,10 +106,8 @@ fn test_eclass() {
       (define foobar eclass eclass)
       (define res eclass)
 
-      #(foo 1)
-      #(bar 1)
-
-      #(foobar ?(foo 1) ?(bar 1))
+      #(foobar (foo 1) (bar 1))
+      #(foobar (foo 2) (bar 2))
       [(rewrite! foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
 
       [(res x) <-- (foobar x x)]
@@ -136,4 +134,27 @@ fn test_eqrel() {
    println!("{:?}", res_rep_3);
    let res_rep_2 = eq_rel.get_dominant_elem(&2);
    println!("{:?}", res_rep_2);
+}
+
+#[test]
+fn test_ast() {
+   slog! {
+      (struct AST)
+      
+      (define number i32)
+      (define var &'static str)
+      (define add eclass eclass)
+      (define mul eclass eclass)
+
+      // 2 * (x * 3)
+      #(mul (number 2) (mul (var "x") (number 3)))
+      // 6 * xs
+      #(mul (number 6) (var "x"))
+   }
+   let mut prog = AST::default();
+   prog.run();
+   println!("{:?}", prog.mul);
+   println!("{:?}", prog.add);
+   println!("{:?}", prog.number_id);
+   println!("{:?}", prog.var_id);
 }
