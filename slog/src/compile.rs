@@ -3,7 +3,7 @@
 use crate::{
    syntax::{
       kw_slog::ExistsBang, ExplicitIDClause, ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine,
-      SlogRelationDecl, SlogRewriteClause, SlogRule, SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause
+      SlogRelationDecl, SlogUnionClause, SlogRule, SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause
    },
    util::new_ident,
 };
@@ -115,10 +115,10 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
 
 pub(crate) fn compile(tokens: TokenStream, is_parallel: bool) -> Result<TokenStream> {
    let program: SlogProgram = syn::parse2(tokens)?;
-   // pass 1: remove nested rewrite clauses
-   let id_rewrite_program = remove_nested_rewrite_clause(&program);
+   // pass 1: remove nested union clauses
+   let id_union_program = remove_nested_union_clause(&program);
    // pass 2: destruct the program to remove nested sexprs
-   let destructed_program = destruct_slog_program(&id_rewrite_program);
+   let destructed_program = destruct_slog_program(&id_union_program);
 
    let compiled_program = compile_slog_program(&destructed_program, is_parallel)?;
    Ok(compiled_program)
@@ -140,8 +140,8 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
                }
             })
          }
-         SlogRuleHeadItem::RewriteClause(clause) => {
-            // when compiling unstructured rewrite clause, we should only have id here
+         SlogRuleHeadItem::UnionClause(clause) => {
+            // when compiling unstructured union clause, we should only have id here
             // otherwise throw compile error
             if let (Either::Left(id_l), Either::Left(id_r)) = (&clause.clause_lhs, &clause.clause_rhs) {
                Ok(quote! {
@@ -149,8 +149,8 @@ fn compile_slog_rule_unstructured(rule: &SlogRule) -> Result<TokenStream> {
                })
             } else {
                return Err(syn::Error::new_spanned(
-                  clause._rewrite.clone(),
-                  format!("rewrite clause must have id on both sides {:?}", clause),
+                  clause._union.clone(),
+                  format!("union clause must have id on both sides {:?}", clause),
                ));
             }
          }
@@ -218,8 +218,8 @@ fn desugar_question_paren_rule(rule: &SlogRule) -> SlogRule {
             let new_clause = ExplicitIDClause { id_var: clause.id_var.clone(), clause: new_head };
             new_heads.push(SlogRuleHeadItem::ExplicitIDClause(new_clause));
          }
-         SlogRuleHeadItem::RewriteClause(_clause) => {
-            // rewrite clause is already removed in pass 1
+         SlogRuleHeadItem::UnionClause(_clause) => {
+            // union clause is already removed in pass 1
             new_heads.push(head.clone());
          }
       }
@@ -313,7 +313,7 @@ fn destruct_slog_rule_head_item(item: &SlogRuleHeadItem) -> Vec<SlogRuleHeadItem
    let slog_expr = match item {
       SlogRuleHeadItem::SlogSExprClause(sexpr) => sexpr,
       SlogRuleHeadItem::ExplicitIDClause(clause) => &clause.clause,
-      SlogRuleHeadItem::RewriteClause(_clause) => {
+      SlogRuleHeadItem::UnionClause(_clause) => {
          // This control flow is weird, but it works
          return vec![item.clone()];
       }
@@ -340,7 +340,7 @@ fn destruct_slog_rule_head_item(item: &SlogRuleHeadItem) -> Vec<SlogRuleHeadItem
    let id_var = match item {
       SlogRuleHeadItem::SlogSExprClause(_) => new_ident(&slog_expr.rel_name.to_string()),
       SlogRuleHeadItem::ExplicitIDClause(clause) => clause.id_var.clone(),
-      SlogRuleHeadItem::RewriteClause(_) => todo!("rewrite clause"),
+      SlogRuleHeadItem::UnionClause(_) => todo!("union clause"),
    };
    let new_item = SlogRuleHeadItem::ExplicitIDClause(ExplicitIDClause { id_var, clause: new_sexpr });
    new_items.push(new_item);
@@ -457,7 +457,7 @@ pub fn destruct_slog_program(program: &SlogProgram) -> SlogProgram {
    SlogProgram { meta: program.meta.clone(), lines: new_lines }
 }
 
-fn remove_nested_rewrite_clause(program: &SlogProgram) -> SlogProgram {
+fn remove_nested_union_clause(program: &SlogProgram) -> SlogProgram {
    let mut new_lines = vec![];
    for line in &program.lines {
       if let SlogProgramLine::Rule(rule) = line {
@@ -465,8 +465,8 @@ fn remove_nested_rewrite_clause(program: &SlogProgram) -> SlogProgram {
          let mut new_body = rule.body.clone();
          for head in &rule.heads {
             match head {
-               SlogRuleHeadItem::RewriteClause(clause) => {
-                  let mut transform_rewrite_arg = |arg: &Either<Ident, SlogSExprClause>| -> Either<Ident, SlogSExprClause> {
+               SlogRuleHeadItem::UnionClause(clause) => {
+                  let mut transform_union_arg = |arg: &Either<Ident, SlogSExprClause>| -> Either<Ident, SlogSExprClause> {
                      match arg {
                         Either::Left(id) => Either::Left(id.clone()),
                         Either::Right(sexpr) => {
@@ -490,12 +490,11 @@ fn remove_nested_rewrite_clause(program: &SlogProgram) -> SlogProgram {
                         }
                      }
                   };
-                  let new_lhs = transform_rewrite_arg(&clause.clause_lhs);
-                  let new_rhs = transform_rewrite_arg(&clause.clause_rhs);
-                  new_heads.push(SlogRuleHeadItem::RewriteClause(SlogRewriteClause {
+                  let new_lhs = transform_union_arg(&clause.clause_lhs);
+                  let new_rhs = transform_union_arg(&clause.clause_rhs);
+                  new_heads.push(SlogRuleHeadItem::UnionClause(SlogUnionClause {
                      _paren: clause._paren.clone(),
-                     _bang: clause._bang.clone(),
-                     _rewrite: clause._rewrite.clone(),
+                     _union: clause._union.clone(),
                      clause_lhs: new_lhs,
                      clause_rhs: new_rhs,
                   }));

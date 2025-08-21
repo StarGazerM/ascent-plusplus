@@ -18,6 +18,7 @@ pub mod kw_slog {
    syn::custom_keyword!(eclass);
    syn::custom_keyword!(define);
    syn::custom_keyword!(rewrite);
+   syn::custom_keyword!(union);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -96,21 +97,19 @@ fn is_slog_paren(input: &ParseStream) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SlogRewriteClause {
+pub struct SlogUnionClause {
    pub _paren: syn::token::Paren,
-   pub _bang: Token![!],
-   pub _rewrite: kw_slog::rewrite,
+   pub _union: kw_slog::union,
    pub clause_lhs: Either<Ident, SlogSExprClause>,
    pub clause_rhs: Either<Ident, SlogSExprClause>,
 }
 
-impl Parse for SlogRewriteClause {
+impl Parse for SlogUnionClause {
    fn parse(input: ParseStream) -> syn::Result<Self> {
       // remove the paren
       let content;
       let _paren = parenthesized!(content in input);
-      let _rewrite = content.parse::<kw_slog::rewrite>()?;
-      let _bang = content.parse::<Token![!]>()?;
+      let _union = content.parse::<kw_slog::union>()?;
       let clause_lhs = if content.peek(syn::Ident) {
          Either::Left(content.parse::<Ident>()?)
       } else {
@@ -122,7 +121,7 @@ impl Parse for SlogRewriteClause {
       } else {
          Either::Right(content.parse::<SlogSExprClause>()?)
       };
-      Ok(SlogRewriteClause { _paren, _bang, _rewrite, clause_lhs, clause_rhs })
+      Ok(SlogUnionClause { _paren, _union, clause_lhs, clause_rhs })
    }
 }
 
@@ -248,7 +247,7 @@ impl Parse for SlogRuleBodyItem {
 pub enum SlogRuleHeadItem {
    ExplicitIDClause(ExplicitIDClause),
    SlogSExprClause(SlogSExprClause),
-   RewriteClause(SlogRewriteClause),
+   UnionClause(SlogUnionClause),
 }
 
 impl Parse for SlogRuleHeadItem {
@@ -261,9 +260,9 @@ impl Parse for SlogRuleHeadItem {
          let input_fork = input.fork();
          let content;
          let _ = parenthesized!(content in input_fork);
-         if content.peek(kw_slog::rewrite) {
-            let rewrite_clause = input.parse::<SlogRewriteClause>()?;
-            Ok(SlogRuleHeadItem::RewriteClause(rewrite_clause))
+         if content.peek(kw_slog::union) {
+            let union_clause = input.parse::<SlogUnionClause>()?;
+            Ok(SlogRuleHeadItem::UnionClause(union_clause))
          } else {
             let clause = input.parse::<SlogSExprClause>()?;
             Ok(SlogRuleHeadItem::SlogSExprClause(clause))
@@ -370,14 +369,17 @@ impl Parse for SlogProgramLine {
    fn parse(input: ParseStream) -> syn::Result<Self> {
       if input.peek(syn::token::Paren) {
          // get the second token
-         // let content;
-         // let _ = parenthesized!(content in input);
-         // let _relation = content.parse::<kw_slog::relation>()?;
-         // todo!("relation not found");
-         // check if the first token is a relation
-         // let relation_decl = content.parse::<SlogRelationDecl>()?;
-         let relation_decl = input.parse::<SlogRelationDecl>()?;
-         Ok(SlogProgramLine::RelationDecl(relation_decl))
+         let input_fork = input.fork();
+         let content;
+         let _ = parenthesized!(content in input_fork);
+         if content.peek(kw_slog::define) {
+            let relation_decl = input.parse::<SlogRelationDecl>()?;
+            Ok(SlogProgramLine::RelationDecl(relation_decl))
+         } else {
+            // parse the fact
+            let fact = input.parse::<SlogSExprClause>()?;
+            Ok(SlogProgramLine::Fact(fact))
+         }
       } else if input.peek(syn::token::Bracket) {
          let rule = input.parse::<SlogRule>()?;
          Ok(SlogProgramLine::Rule(rule))

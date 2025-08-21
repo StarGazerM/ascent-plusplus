@@ -76,9 +76,9 @@ fn test_slog_fact_compile() {
       (define bar usize usize)
       (define foobar sexpr sexpr)
 
-      #(foo 1 2)
-      #(bar 3 4)
-      #(foobar (foo 1 2) (bar 3 4))
+      (foo 1 2)
+      (bar 3 4)
+      (foobar (foo 1 2) (bar 3 4))
    };
 
    write_to_scratchpad(tokens, quote! {}, false);
@@ -92,9 +92,9 @@ fn test_generative_facts_compile() {
       (define bar usize usize)
       (define foobar sexpr sexpr)
 
-      #(foo 1 2)
-      #(bar 3 4)
-      #(foobar ?(foo x y) ?(bar a b))
+      (foo 1 2)
+      (bar 3 4)
+      (foobar ?(foo x y) ?(bar a b))
    };
    write_to_scratchpad(tokens, quote! {}, false);
 }
@@ -204,9 +204,9 @@ fn test_bang_compile() {
       (define length sexpr usize)
       (define do_length sexpr)
 
-      #(path 1 (path 2 (path 3 ?(nil 0))))
+      (path 1 (path 2 (path 3 ?(nil 0))))
 
-      #(length (do_length ?(nil 0)) 0)
+      (length (do_length ?(nil 0)) 0)
       [(do_length (path h tail)) --> (do_length tail)]
       [(length ?(do_length (path h tail)) ,(l + 1)) <--
          (length (do_length tail) l)]
@@ -237,10 +237,10 @@ fn test_rewrite_clause_compile() {
       (define foobar eclass eclass)
       (define res eclass)
 
-      #(foo 1)
-      #(bar 1)
+      (foo 1)
+      (bar 1)
 
-      #(foobar ?(foo 1) ?(bar 1))
+      (foobar ?(foo 1) ?(bar 1))
       [(rewrite! foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
 
       [(res x) <-- (foobar x y)

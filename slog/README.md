@@ -290,13 +290,13 @@ Join order will be `foo` -> `foobar` -> `bar`.
 ### `nil`
 
 `nil` is a special relation that is used to represent the empty set. It is used to represent the empty set in the head of a rule.
-It is defaultly defined as `nil(1)` and `nil(0)` is the empty set and automatically added to all slog program.
+It is defalutly defined as `nil(1)` and `nil(0)` is the empty set and automatically added to all slog program.
 
 ```rust
 slog! {
     (struct PathLength)
     (define path usize sexpr)
-    #(path 1 ?(nil 0))
+    (path 1 ?(nil 0))
 }
 ```
 
@@ -321,6 +321,29 @@ ascent! {
     inflated_a <=> b <-- foo(a), a <=> inflated_a, bar(b), b <=>! rep_b;
 }
 ```
-After egglog mode is enabled, we can use equivalence clause `<=>` and `<=>?` to add tuple and access the hidden union-find relation. Clause `<=>` is used 
+After egglog mode is enabled, we can use equivalence clause `<=>` and `<=>?` to add tuple and access the hidden union-find relation. Clause `<=>` is used to add two value into equivalence relation, and `<=>?` is used to fetch the representative of a given value in union-find relation.
+
+Manually inflate each value to its equivalence relation during computation and shrink during unification can be tedious to write in plain ascent. In slog we allow automatic inflation and shrinking of values by declaring column of a relation as eclass.
+
+```rust
+slog! {
+    (struct EClassTest)
+
+    (define foo usize)
+    (define bar usize)
+    (define foobar eclass eclass)
+    (define res eclass)
+
+    (foobar (foo 1) (bar 1))
+    [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+
+    [(res x) <-- (foobar x x)]
+}
+```
+Same as egglog, `union` can be used to declare equivalence of two tuple's identifier. In egglog, you have an extra syntax sugar `rewrite`, its not currently supported in slog, but you can use `?` and `union` to achieve almost the same effect. We reserve `rewrite` as a keyword for future use.
+
+> Known Issue: You can union any two `usize` value, but `union` on none eclass id value is undefined behavior.
+
+
 
 
