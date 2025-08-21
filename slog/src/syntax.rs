@@ -8,6 +8,8 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token, braced, bracketed, parenthesized};
 
+use crate::syntax::kw_slog::rewrite;
+
 // keywords
 pub mod kw_slog {
    syn::custom_punctuation!(LongLeftArrow, ==>);
@@ -375,6 +377,26 @@ impl Parse for SlogProgramLine {
          if content.peek(kw_slog::define) {
             let relation_decl = input.parse::<SlogRelationDecl>()?;
             Ok(SlogProgramLine::RelationDecl(relation_decl))
+         } else if content.peek(kw_slog::rewrite) {
+            // rewrite is syntax sugar for union with 2 joined body clauses
+            let content_inner;
+            let _ = parenthesized!(content_inner in input);
+            let _rewrite = content_inner.parse::<kw_slog::rewrite>()?;
+            let _ = content_inner.parse::<Token![!]>()?;
+            let mut body = vec![];
+            let mut lhs_sexpr = content_inner.parse::<SlogSExprClause>()?;
+            let mut rhs_sexpr = content_inner.parse::<SlogSExprClause>()?;
+            lhs_sexpr.id_var = Some(Ident::new("lhs_id", _rewrite.span));
+            rhs_sexpr.id_var = Some(Ident::new("rhs_id", _rewrite.span));
+            let head = SlogRuleHeadItem::UnionClause(SlogUnionClause {
+               _paren: syn::token::Paren::default(),
+               _union: kw_slog::union(_rewrite.span),
+               clause_lhs: Either::Left(lhs_sexpr.id_var.clone().unwrap()),
+               clause_rhs: Either::Left(rhs_sexpr.id_var.clone().unwrap()),
+            });
+            body.push(SlogRuleBodyItem::SlogSExprClause(lhs_sexpr));
+            body.push(SlogRuleBodyItem::SlogSExprClause(rhs_sexpr));
+            Ok(SlogProgramLine::Rule(SlogRule { heads: vec![head], body }))
          } else {
             // parse the fact
             let fact = input.parse::<SlogSExprClause>()?;

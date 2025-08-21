@@ -107,7 +107,8 @@ fn test_eclass() {
       (define res eclass)
 
       (foobar (foo 1) (bar 1))
-      [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+      // [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+      (rewrite! (foo x) (bar x))
 
       [(res x) <-- (foobar x x)]
    }

@@ -241,7 +241,7 @@ fn test_rewrite_clause_compile() {
       (bar 1)
 
       (foobar ?(foo 1) ?(bar 1))
-      [(rewrite! foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+      [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
 
       [(res x) <-- (foobar x y)
          ,(if x == y)]

@@ -336,11 +336,12 @@ slog! {
 
     (foobar (foo 1) (bar 1))
     [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+    // (rewrite! (foo x) (bar x))
 
     [(res x) <-- (foobar x x)]
 }
 ```
-Same as egglog, `union` can be used to declare equivalence of two tuple's identifier. In egglog, you have an extra syntax sugar `rewrite`, its not currently supported in slog, but you can use `?` and `union` to achieve almost the same effect. We reserve `rewrite` as a keyword for future use.
+Same as egglog, `union` can be used to declare equivalence of two tuple's identifier. In egglog, you have an extra syntax sugar `rewrite`, which is also supported in slog (I use `rewrite!` to futher distinguish from a normal fact rule).
 
 > Known Issue: You can union any two `usize` value, but `union` on none eclass id value is undefined behavior.
 
