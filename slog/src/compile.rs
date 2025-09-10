@@ -74,85 +74,72 @@ fn compile_slog_clause_unstructured_head(
    };
    let mut arg_canonicalization = vec![];
    let mut expr_alias = vec![];
-   let args_tokens = args.iter().enumerate().map(|(i, arg)| {
-      let is_eclass = arg_types[i].to_token_stream().to_string().contains("eclass");
-      match arg {
-         SlogClauseArg::LogicVar(id, _) => {
-            if is_eclass {
-               let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), id.span());
-               arg_canonicalization.push(quote_spanned! { id.span() =>
-                  let #cl_arg = _self.runtime_total
-                     .__equiv_ind_common.combined
-                     .get_dominant_elem(#id)
-                     .unwrap_or(_self.runtime_delta
-                        .__equiv_ind_common.combined
-                        .get_dominant_elem(#id).unwrap_or(#id))
-               });
-               Some(quote_spanned! { id.span() => #cl_arg })
-            } else {
-               Some(quote_spanned! { id.span() => #id })
-            }
-         },
-         SlogClauseArg::SlogClause(_) => None,
-         SlogClauseArg::Constant(constant) => {
-            if is_eclass {
-               let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), constant.span());
-               arg_canonicalization.push(quote_spanned! { constant.span() =>
-                  let #cl_arg = _self.runtime_total.__equiv_ind_common.combined
-                     .get_dominant_elem(&#constant)
-                     .unwrap_or(_self.runtime_delta.
-                        __equiv_ind_common.combined
-                        .get_dominant_elem(&#constant).unwrap_or(#constant))
-               });
-               Some(quote_spanned! { constant.span() => #cl_arg })
-            } else {
-               Some(quote_spanned! { constant.span() => #constant })
-            }
-         },
-         SlogClauseArg::Wildcard => None,
-         SlogClauseArg::RustExpr(expr) => {
-            let cl_arg_e = Ident::new(&format!("hcl_{}_{}_expr", clause_num, i), expr.span());
-            let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), expr.span());
-            if clause_num != 0 {
-               expr_alias.push(quote_spanned! { expr.span() =>
-                  let #cl_arg_e = #expr
-               });
+   let args_tokens = args
+      .iter()
+      .enumerate()
+      .map(|(i, arg)| {
+         let is_eclass = arg_types[i].to_token_stream().to_string().contains("eclass");
+         match arg {
+            SlogClauseArg::LogicVar(id, _) => {
                if is_eclass {
-                  arg_canonicalization.push(quote_spanned! { expr.span() =>
-                     let #cl_arg = _self.runtime_total.__equiv_ind_common.combined
-                        .get_dominant_elem(#cl_arg_e)
-                        .unwrap_or(_self.runtime_delta.
-                           __equiv_ind_common.combined
-                           .get_dominant_elem(#cl_arg_e).unwrap_or(#cl_arg_e))
+                  let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), id.span());
+                  arg_canonicalization.push(quote_spanned! { id.span() =>
+                     let #cl_arg = canonicalize!(#id)
                   });
-               }
-            } else {
-               if is_eclass {
-                  arg_canonicalization.push(quote_spanned! { expr.span() =>
-                     let #cl_arg = _self.runtime_total.__equiv_ind_common.combined
-                        .get_dominant_elem(#expr)
-                        .unwrap_or(_self.runtime_delta.
-                           __equiv_ind_common.combined
-                           .get_dominant_elem(#expr).unwrap_or(#expr))
-                  });
+                  Some(quote_spanned! { id.span() => #cl_arg })
+               } else {
+                  Some(quote_spanned! { id.span() => #id })
                }
             }
-            if is_eclass {
-               if clause_num != 0 {
-                  Some(quote_spanned! { expr.span() => #cl_arg_e })
+            SlogClauseArg::SlogClause(_) => None,
+            SlogClauseArg::Constant(constant) => {
+               if is_eclass {
+                  let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), constant.span());
+                  arg_canonicalization.push(quote_spanned! { constant.span() =>
+                     let #cl_arg = canonicalize!(#constant)
+                  });
+                  Some(quote_spanned! { constant.span() => #cl_arg })
                } else {
-                  Some(quote_spanned! { expr.span() => #cl_arg })
+                  Some(quote_spanned! { constant.span() => #constant })
                }
-            } else {
+            }
+            SlogClauseArg::Wildcard => None,
+            SlogClauseArg::RustExpr(expr) => {
+               let cl_arg_e = Ident::new(&format!("hcl_{}_{}_expr", clause_num, i), expr.span());
+               let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), expr.span());
                if clause_num != 0 {
-                  Some(quote_spanned! { expr.span() => #cl_arg_e })
+                  expr_alias.push(quote_spanned! { expr.span() =>
+                     let #cl_arg_e = #expr
+                  });
+                  if is_eclass {
+                     arg_canonicalization.push(quote_spanned! { expr.span() =>
+                        let #cl_arg = canonicalize!(#cl_arg_e)
+                     });
+                  }
                } else {
-                  Some(quote_spanned! { expr.span() => #expr })
+                  if is_eclass {
+                     arg_canonicalization.push(quote_spanned! { expr.span() =>
+                        let #cl_arg = canonicalize!(#expr)
+                     });
+                  }
+               }
+               if is_eclass {
+                  if clause_num != 0 {
+                     Some(quote_spanned! { expr.span() => #cl_arg_e })
+                  } else {
+                     Some(quote_spanned! { expr.span() => #cl_arg })
+                  }
+               } else {
+                  if clause_num != 0 {
+                     Some(quote_spanned! { expr.span() => #cl_arg_e })
+                  } else {
+                     Some(quote_spanned! { expr.span() => #expr })
+                  }
                }
             }
          }
-      }
-   }).collect::<Vec<_>>();
+      })
+      .collect::<Vec<_>>();
    if args_tokens.iter().any(|arg| arg.is_none()) {
       return Err(syn::Error::new_spanned(
          clause.rel_name.clone(),
@@ -240,7 +227,7 @@ fn compile_slog_clause_unstructured_body(
                      // let inflated_id = new_ident(&format!("inflated_{}", id));
                      let inflated_id = Ident::new(&format!("inflated_{}", id), id.span());
                      clause_after_code_vec.push(quote_spanned! {id.span()=>
-                        equiv(#inflated_id, #id)
+                        unify(#inflated_id, #id)
                      });
                      Some(quote_spanned! {id.span()=> #inflated_id})
                   } else {
@@ -248,15 +235,13 @@ fn compile_slog_clause_unstructured_body(
                   }
                }
                SlogClauseArg::SlogClause(_) => None,
-               SlogClauseArg::Constant(constant) => Some(quote! {
-                  // canonicalize!(#constant)
-                  _self.runtime_total.__equiv_ind_common.combined.get_dominant_elem(#constant).unwrap_or(#constant)
-               }),
+               SlogClauseArg::Constant(constant) => Some(quote_spanned! {constant.span()=> {
+                  #constant
+               }}),
                SlogClauseArg::Wildcard => Some(quote! { _ }),
-               SlogClauseArg::RustExpr(expr) => Some(quote! {
-                  // canonicalize!(#expr)
-                  _self.runtime_total.__equiv_ind_common.combined.get_dominant_elem(#expr).unwrap_or(#expr)
-               }),
+               SlogClauseArg::RustExpr(expr) => Some(quote_spanned! {expr.span()=> {
+                  #expr
+               }}),
             }
          }
       })
@@ -325,16 +310,14 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
          ascent_par!
       }
    };
-   let exists_bang = ExistsBang::default();
    let congruence_code = quote! {
-      // parent_a <=> parent_b,
-      equiv(parent_a, parent_b) <--
-         equiv(child_a, child_b),
+      unify(parent_a, parent_b) <--
+         unify(child_a, child_b),
          deriv(parent_a, child_a),
          deriv(parent_b, child_b),
          agg sibs_a = collect(sib) in deriv(parent_a, sib),
          agg sibs_b = collect(sib) in deriv(parent_b, sib),
-         if _self.runtime_total.__equiv_ind_common.combined.equiv_vec_huh(&sibs_a, &sibs_b)
+         if _self.runtime_total.__unify_ind_common.combined.equiv_vec_huh(&sibs_a, &sibs_b)
          ;
    };
    // let prog_name = program.meta.struct_name.clone();
@@ -350,10 +333,11 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
             relation nil(usize, usize);
             nil(1, calc_id(&("nil", 1)));
             nil(0, calc_id(&("nil", 0))) <-- nil(1, _);
+            // provenance relation
             relation deriv(usize, usize);
 
             #[ds(ascent_byods_rels::eqrel)]
-            relation equiv(usize, usize);
+            relation unify(usize, usize);
 
             #congruence_code
             #lines
@@ -390,7 +374,7 @@ fn compile_slog_rule_unstructured(
             if let (Either::Left(id_l), Either::Left(id_r)) = (&clause.clause_lhs, &clause.clause_rhs) {
                Ok(quote! {
                   // #id_l <=> #id_r,
-                  equiv(#id_l, #id_r)
+                  unify(#id_l, #id_r)
                })
             } else {
                return Err(syn::Error::new_spanned(

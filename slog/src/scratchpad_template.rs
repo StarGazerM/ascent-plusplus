@@ -10,12 +10,7 @@ use ascent::aggregators::*;
 use ascent::lattice::set::Set;
 use ascent::Dual;
 use ascent::util::calc_id;
-use crate::equiv_vec_huh;
 
-macro_rules! canonicalize {
-   ($expr:expr) => {
-      _self.runtime_total.__equiv_ind_common.combined.get_dominant_elem(#expr).unwrap_or(#expr)
-   };
-}
+use slog_eq_theory::canonicalize;
 
 todo!(());
