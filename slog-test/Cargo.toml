@@ -6,3 +6,5 @@ version.workspace = true
 [dependencies]
 slog = { path = "../slog" }
 ascent = { path = "../ascent" }
+ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
+lazy_static = "1.4.0"

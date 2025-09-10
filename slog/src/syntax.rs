@@ -8,7 +8,6 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token, braced, bracketed, parenthesized};
 
-use crate::syntax::kw_slog::rewrite;
 
 // keywords
 pub mod kw_slog {
@@ -23,17 +22,17 @@ pub mod kw_slog {
    syn::custom_keyword!(union);
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/* #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BangParen {
    pub bang: Token![!],
    pub paren: syn::token::Paren,
-}
+} */
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/* #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct QuestionParen {
    pub question: Token![?],
    pub paren: syn::token::Paren,
-}
+} */
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ParenType {
@@ -177,36 +176,38 @@ impl Parse for SlogClauseArg {
 //     }
 // }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplicitIDClause {
-   pub id_var: Ident,
-   pub clause: SlogSExprClause,
-}
-impl Parse for ExplicitIDClause {
-   fn parse(content: ParseStream) -> syn::Result<Self> {
-      let mut clause = content.parse::<SlogSExprClause>()?;
-      let _eq = content.parse::<Token![.]>()?;
-      let id_var = content.parse::<Ident>()?;
-      clause.id_var = Some(id_var.clone());
-      Ok(ExplicitIDClause { id_var, clause })
-   }
-}
+// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// pub struct ExplicitIDClause {
+//    pub id_var: Ident,
+//    pub clause: SlogSExprClause,
+// }
+// impl Parse for ExplicitIDClause {
+//    fn parse(input: ParseStream) -> syn::Result<Self> {
+//       let content;
+//       let _paren = parenthesized!(content in input);
+//       let _eq = content.parse::<Token![=]>()?;
+//       let id_var = content.parse::<Ident>()?;
+//       let mut clause = content.parse::<SlogSExprClause>()?;
+//       clause.id_var = Some(id_var.clone());
+//       Ok(ExplicitIDClause { id_var, clause })
+//    }
+// }
 
-impl ExplicitIDClause {
-   pub fn get_sexpr_clause(&self) -> Option<SlogSExprClause> {
-      let mut new_clause = self.clause.clone();
-      new_clause.id_var = Some(self.id_var.clone());
-      Some(new_clause)
-   }
-}
+// impl ExplicitIDClause {
+//    pub fn get_sexpr_clause(&self) -> Option<SlogSExprClause> {
+//       let mut new_clause = self.clause.clone();
+//       new_clause.id_var = Some(self.id_var.clone());
+//       Some(new_clause)
+//    }
+// }
 
-fn peek_explicit_id_clause(input: ParseStream) -> bool { input.peek(syn::token::Paren) && input.peek2(syn::token::Eq) }
+// fn peek_explicit_id_clause(input: ParseStream) -> bool { input.peek(syn::token::Paren) && input.peek2(syn::token::Eq) }
 
 #[derive(Debug, Clone)]
 pub enum SlogRuleBodyItem {
    SlogSExprClause(SlogSExprClause),
    NegatedSlogSExprClause(SlogSExprClause),
-   ExplicitIDClause(ExplicitIDClause),
+   // ExplicitIDClause(ExplicitIDClause),
    AscentClause(TokenStream),
 }
 
@@ -215,7 +216,7 @@ impl SlogRuleBodyItem {
       match self {
          SlogRuleBodyItem::SlogSExprClause(clause) => Some(clause.clone()),
          SlogRuleBodyItem::NegatedSlogSExprClause(clause) => Some(clause.clone()),
-         SlogRuleBodyItem::ExplicitIDClause(expid) => expid.get_sexpr_clause(),
+         // SlogRuleBodyItem::ExplicitIDClause(expid) => expid.get_sexpr_clause(),
          SlogRuleBodyItem::AscentClause(_) => None,
       }
    }
@@ -223,10 +224,11 @@ impl SlogRuleBodyItem {
 
 impl Parse for SlogRuleBodyItem {
    fn parse(input: ParseStream) -> syn::Result<Self> {
-      if input.peek(syn::token::Paren) && input.peek2(Token![.]) {
-         let id_clause = input.parse::<ExplicitIDClause>()?;
-         Ok(SlogRuleBodyItem::ExplicitIDClause(id_clause))
-      } else if input.peek(Token![~]) && input.peek(syn::token::Paren) {
+      // if input.peek(syn::token::Paren) && input.peek2(Token![.]) {
+      //    let id_clause = input.parse::<ExplicitIDClause>()?;
+      //    Ok(SlogRuleBodyItem::ExplicitIDClause(id_clause))
+      // } else
+      if input.peek(Token![~]) && input.peek(syn::token::Paren) {
          let _ = input.parse::<Token![~]>()?;
          let clause = input.parse::<SlogSExprClause>()?;
          Ok(SlogRuleBodyItem::NegatedSlogSExprClause(clause))
@@ -247,17 +249,14 @@ impl Parse for SlogRuleBodyItem {
 
 #[derive(Debug, Clone)]
 pub enum SlogRuleHeadItem {
-   ExplicitIDClause(ExplicitIDClause),
+   // ExplicitIDClause(ExplicitIDClause),
    SlogSExprClause(SlogSExprClause),
    UnionClause(SlogUnionClause),
 }
 
 impl Parse for SlogRuleHeadItem {
    fn parse(input: ParseStream) -> syn::Result<Self> {
-      if input.peek(syn::token::Paren) && input.peek2(syn::token::Eq) {
-         let id_clause = input.parse::<ExplicitIDClause>()?;
-         Ok(SlogRuleHeadItem::ExplicitIDClause(id_clause))
-      } else if input.peek(syn::token::Paren) {
+      if input.peek(syn::token::Paren) {
          // continue to parse by fork and peek inside paren
          let input_fork = input.fork();
          let content;
@@ -265,7 +264,12 @@ impl Parse for SlogRuleHeadItem {
          if content.peek(kw_slog::union) {
             let union_clause = input.parse::<SlogUnionClause>()?;
             Ok(SlogRuleHeadItem::UnionClause(union_clause))
-         } else {
+         }
+         // else if content.peek(syn::token::Eq) {
+         //    let id_clause = input.parse::<ExplicitIDClause>()?;
+         //    Ok(SlogRuleHeadItem::ExplicitIDClause(id_clause))
+         // }
+         else {
             let clause = input.parse::<SlogSExprClause>()?;
             Ok(SlogRuleHeadItem::SlogSExprClause(clause))
          }
@@ -275,14 +279,14 @@ impl Parse for SlogRuleHeadItem {
    }
 }
 
-impl SlogRuleHeadItem {
-   fn get_sexpr_clause(&self) -> Option<&SlogSExprClause> {
-      match self {
-         SlogRuleHeadItem::SlogSExprClause(clause) => Some(clause),
-         _ => None,
-      }
-   }
-}
+// impl SlogRuleHeadItem {
+//    fn get_sexpr_clause(&self) -> Option<&SlogSExprClause> {
+//       match self {
+//          SlogRuleHeadItem::SlogSExprClause(clause) => Some(clause),
+//          _ => None,
+//       }
+//    }
+// }
 
 #[derive(Debug, Clone)]
 pub struct SlogRule {
@@ -334,6 +338,7 @@ pub struct SlogRelationDecl {
    pub _relation: kw_slog::define,
    pub rel_name: Ident,
    pub arg_types: Vec<syn::Type>,
+   pub is_eclass: bool,
 }
 
 impl Parse for SlogRelationDecl {
@@ -343,6 +348,7 @@ impl Parse for SlogRelationDecl {
       // let id = content.parse::<Ident>()?;
       let _relation = content.parse::<kw_slog::define>()?;
       let rel_name = content.parse::<Ident>()?;
+      let mut is_eclass = false;
       let mut arg_types = Vec::new();
       while !content.is_empty() {
          if content.peek(kw_slog::sexpr) {
@@ -351,11 +357,12 @@ impl Parse for SlogRelationDecl {
          } else if content.peek(kw_slog::eclass) {
             content.parse::<kw_slog::eclass>()?;
             arg_types.push(syn::parse2(quote! { eclass_id })?);
+            is_eclass = true;
          } else {
             arg_types.push(content.parse::<syn::Type>()?);
          }
       }
-      Ok(SlogRelationDecl { _relation, rel_name, arg_types })
+      Ok(SlogRelationDecl { _relation, rel_name, arg_types, is_eclass })
    }
 }
 

@@ -514,7 +514,10 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          pub runtime_canonical_delta: #runtime_struct_name #ty_ty_generics,
       }
    } else {
-      quote! {}
+      quote! {
+         pub equiv_ids_: ascent::union_find::EqRel<usize>,
+         pub equiv_ids_delta_: ascent::union_find::EqRel<usize>,
+      }
    };
    let equiv_ids_default = if mir.config.egg_mode {
       quote! {
@@ -523,7 +526,10 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          runtime_canonical_delta: Default::default(),
       }
    } else {
-      quote! {}
+      quote! {
+         equiv_ids_ : Default::default(),
+         equiv_ids_delta_ : Default::default(),
+      }
    };
 
    // generate shared pointer for all external database

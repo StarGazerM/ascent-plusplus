@@ -20,6 +20,7 @@ pub(crate) struct AscentConfig {
    pub egg_mode: bool,
    pub default_ds: DsAttributeContents,
    pub heuristic_join_reorder: bool,
+   pub allow_non_stratified_agg: bool,
 }
 
 impl AscentConfig {
@@ -28,6 +29,7 @@ impl AscentConfig {
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
    const EGG_MODE_ATTR: &'static str = "egglog_mode";
    const HEURISTIC_JOIN_REORDER_ATTR: &'static str = "heuristic_join_reorder";
+   const ALLOW_NON_STRATIFIED_AGG_ATTR: &'static str = "allow_non_stratified_agg";
    // const STREAM_PROCESSING_ATTR: &'static str = "stream_processing";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
@@ -43,13 +45,17 @@ impl AscentConfig {
          .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
       let heuristic_join_reorder = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::HEURISTIC_JOIN_REORDER_ATTR))
          .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
+      let allow_non_stratified_agg = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::ALLOW_NON_STRATIFIED_AGG_ATTR))
+         .map(|attr| attr.meta.require_path_only()).transpose()?.is_some();
 
       let recognized_attrs = 
-         [Self::MEASURE_RULE_TIMES_ATTR, Self::GENERATE_RUN_TIMEOUT_ATTR, Self::INTER_RULE_PARALLELISM_ATTR, REL_DS_ATTR, Self::EGG_MODE_ATTR];
+         [Self::MEASURE_RULE_TIMES_ATTR, Self::GENERATE_RUN_TIMEOUT_ATTR, Self::INTER_RULE_PARALLELISM_ATTR, REL_DS_ATTR,
+          Self::EGG_MODE_ATTR, Self::ALLOW_NON_STRATIFIED_AGG_ATTR];
       for attr in attrs.iter() {
          if !recognized_attrs.iter().any(|recognized_attr| attr.meta.path().is_ident(recognized_attr)) {
             return Err(Error::new_spanned(attr, 
-                       format!("unrecognized attribute. recognized attributes are: {}",
+                       format!("unrecognized attribute {}. recognized attributes are: {}",
+                               attr.meta.path().get_ident().unwrap(),
                                recognized_attrs.join(", "))));
          }
       }
@@ -68,6 +74,7 @@ impl AscentConfig {
          egg_mode,
          default_ds,
          heuristic_join_reorder,
+         allow_non_stratified_agg,
       })
    }
 }

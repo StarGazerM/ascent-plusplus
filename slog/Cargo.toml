@@ -17,6 +17,7 @@ duplicate = { version = "1.0.0", default-features = false }
 macro_magic = { version = "*", features = ["proc_support"] }
 rand = "0.9.0"
 ascent = { path = "../ascent"}
+ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
 
 [lib]
 proc-macro = true

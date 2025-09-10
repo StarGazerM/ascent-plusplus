@@ -190,7 +190,10 @@ fn compile_mir_rule_inner(
             );
 
             let selected_args_cloned = selected_args.iter().map(exp_cloned).collect_vec();
-            let selected_args_cloned_canonicalized = if mir.config.egg_mode && bclause.rel.relation.contains_eclass_id {
+            // TODO: do we need special handling for canonicalization in egglog mode?
+            // let use_canonical_check = mir.config.egg_mode && bclause.rel.relation.contains_eclass_id;
+            let use_canonical_check = false;
+            let selected_args_cloned_canonicalized = if use_canonical_check {
                selected_args_cloned
                   .iter()
                   .enumerate()
@@ -341,22 +344,22 @@ fn compile_mir_rule_inner(
             let selected_args_cloned = selected_args.map(exp_cloned).collect_vec();
             // In egglog mode, for each selected arg, if it is an eclass_id, we need to use the canonical value
             // TODO: it's not clear how to aggregate over eclass_id, now aggregate over the eclass_id is UB
-            let selected_args_canonicalized = if mir.config.egg_mode && mir_relation.relation.contains_eclass_id {
-               selected_args_cloned
-                  .iter()
-                  .enumerate()
-                  .map(|(i, arg)| {
-                     if mir_relation.relation.is_field_eclass_id(i) {
-                        parse_quote! {_self.equiv_ids_.get_dominant_elem(#arg).unwrap_or(#arg)}
-                     } else {
-                        arg.clone()
-                     }
-                  })
-                  .collect_vec()
-            } else {
-               selected_args_cloned
-            };
-            let selected_args_tuple = tuple_spanned(&selected_args_canonicalized, agg.span);
+            // let selected_args_canonicalized = if mir.config.egg_mode && mir_relation.relation.contains_eclass_id {
+            //    selected_args_cloned
+            //       .iter()
+            //       .enumerate()
+            //       .map(|(i, arg)| {
+            //          if mir_relation.relation.is_field_eclass_id(i) {
+            //             parse_quote! {_self.equiv_ids_.get_dominant_elem(#arg).unwrap_or(#arg)}
+            //          } else {
+            //             arg.clone()
+            //          }
+            //       })
+            //       .collect_vec()
+            // } else {
+            //    selected_args_cloned
+            // };
+            let selected_args_tuple = tuple_spanned(&selected_args_cloned, agg.span);
             let agg_args_tuple_indices = agg.bound_args.iter().map(|arg| {
                (
                   agg.rel_args.iter().find_position(|rel_arg| expr_to_ident(rel_arg) == Some(arg.clone())).unwrap().0,
@@ -425,11 +428,11 @@ fn compile_head_clause_from_item(hitem: &IrHeadItem, scc: &MirScc, mir: &AscentM
 fn compile_equiv_clause_head(equiv: &EquivClauseNode, _scc: &MirScc, mir: &AscentMir) -> proc_macro2::TokenStream {
    let src_var = equiv.left_ident.clone();
    let dst_var = equiv.right_ident.clone();
-   let set_changed_true_code = if !mir.is_parallel {
-      quote! { __changed = true; }
-   } else {
-      quote! { __changed.store(true, std::sync::atomic::Ordering::Relaxed);}
-   };
+   // let set_changed_true_code = if !mir.is_parallel {
+   //    quote! { __changed = true; }
+   // } else {
+   //    quote! { __changed.store(true, std::sync::atomic::Ordering::Relaxed);}
+   // };
    let src_var_repr_name = Ident::new(&format!("__src_var_repr_{}", src_var), src_var.span());
    let dst_var_repr_name = Ident::new(&format!("__dst_var_repr_{}", dst_var), dst_var.span());
    if equiv.representative {
@@ -437,14 +440,14 @@ fn compile_equiv_clause_head(equiv: &EquivClauseNode, _scc: &MirScc, mir: &Ascen
       let dst_var = &equiv.right_ident;
       quote! {
          let #dst_var = _self.equiv_ids_.get_dominant_elem(#src_var).unwrap_or(#src_var);
-         #set_changed_true_code
+         // #set_changed_true_code
       }
    } else {
       quote! {
          let #src_var_repr_name = _self.equiv_ids_.get_dominant_elem(&#src_var).unwrap_or(&#src_var);
          let #dst_var_repr_name = _self.equiv_ids_.get_dominant_elem(&#dst_var).unwrap_or(&#dst_var);
          _self.equiv_ids_delta_.add(#src_var_repr_name.clone(), #dst_var_repr_name.clone());
-         #set_changed_true_code
+         // #set_changed_true_code
       }
    }
 }
@@ -458,7 +461,10 @@ fn compile_head_clause(hcl: &IrHeadClause, scc: &MirScc, mir: &AscentMir) -> pro
    let head_rel_name = Ident::new(&hcl.rel.name.to_string(), hcl.span);
    let hcl_args_converted = hcl.args.iter().cloned().map(convert_head_arg).collect_vec();
    let new_row_tuple = tuple_spanned(&hcl_args_converted, hcl.args_span);
-   let new_canonical_row_tuple = if mir.config.egg_mode && hcl.rel.contains_eclass_id {
+   // TODO: do we need special handling for canonicalization in egglog mode?
+   // let use_canonical_check = mir.config.egg_mode && hcl.rel.contains_eclass_id;
+   let use_canonical_check = false;
+   let new_canonical_row_tuple = if use_canonical_check {
       let mut new_canonical_row_tuple = vec![];
       for i in 0..hcl.args.len() {
          let i_ind = syn::Index::from(i);
@@ -488,7 +494,10 @@ fn compile_head_clause(hcl: &IrHeadClause, scc: &MirScc, mir: &AscentMir) -> pro
    };
    // let def_id_code = quote_spanned! {hcl.span=> let mut #new_id_name = 0;};
    let h_rel_name = format!("{}", hcl.rel.name);
-   let def_id_code = if mir.config.egg_mode {
+   // TODO: do we need special handling for canonicalization in egglog mode?
+   // let use_canonical_check = mir.config.egg_mode;
+   let use_canonical_check = false;
+   let def_id_code = if use_canonical_check {
       let new_row = if hcl.rel.contains_eclass_id {
          quote_spanned! {hcl.span=> __new_row_canonical}
       } else {
@@ -586,7 +595,10 @@ fn compile_head_clause(hcl: &IrHeadClause, scc: &MirScc, mir: &AscentMir) -> pro
          } else {
             quote! {}
          };
-         if mir.config.egg_mode && hcl.rel.is_field_eclass_id(i) {
+         // TODO: do we need special handling for canonicalization in egglog mode?
+         // let use_canonical_check = mir.config.egg_mode && hcl.rel.is_field_eclass_id(i);
+         let use_canonical_check = false;
+         if use_canonical_check {
             parse_quote_spanned! {hcl.span=> __new_row_canonical.#ind #clone }
          } else {
             parse_quote_spanned! {hcl.span=> __new_row.#ind #clone }
@@ -635,7 +647,9 @@ fn compile_head_clause(hcl: &IrHeadClause, scc: &MirScc, mir: &AscentMir) -> pro
       }
    };
    // TODO: buggy here, make sure always use explict id relation update!
-   let update_id_code = if hcl.id_name.is_some() && !hcl.required_flag && !mir.config.egg_mode {
+   // let use_canonical_check = !mir.config.egg_mode;
+   let use_canonical_check = false;
+   let update_id_code = if hcl.id_name.is_some() && !hcl.required_flag && use_canonical_check {
       // update the full and canonical indices
       let id_arg_tuple = (0..hcl.rel.field_types.len())
          .into_iter()
@@ -675,8 +689,11 @@ fn compile_head_clause(hcl: &IrHeadClause, scc: &MirScc, mir: &AscentMir) -> pro
          //       hasher.finish() as usize
          //    };
          // };
-         if hcl.inflation_flag || (mir.config.egg_mode && hcl.rel.contains_eclass_id) {
-            let canonical_delta_insert_code = if mir.config.egg_mode && hcl.rel.contains_eclass_id {
+         // TODO: do we need special handling for canonicalization in egglog mode?
+         // let use_canonical_check = mir.config.egg_mode && hcl.rel.contains_eclass_id;
+         let use_canonical_check = false;
+         if hcl.inflation_flag || use_canonical_check {
+            let canonical_delta_insert_code = if use_canonical_check {
                quote! {
                   if #rel_full_index_write_trait::insert_if_not_present(#new_ref #head_rel_full_index_expr_canonical_delta,
                      &__new_row_canonical, ()) {
@@ -723,8 +740,10 @@ fn compile_head_clause(hcl: &IrHeadClause, scc: &MirScc, mir: &AscentMir) -> pro
       quote! {}
    };
    if !hcl.rel.is_lattice {
+      // let need_canonical_check = mir.config.egg_mode && hcl.rel.contains_eclass_id;
+      let need_canonical_check = false;
       if hcl.extern_db_name.is_none() {
-         if !hcl.inflation_flag && !(mir.config.egg_mode && hcl.rel.contains_eclass_id) {
+         if !hcl.inflation_flag && !need_canonical_check {
             quote_spanned! {hcl.span=>
                let __new_row: #row_type = #new_row_tuple;
                #def_id_code
@@ -737,8 +756,8 @@ fn compile_head_clause(hcl: &IrHeadClause, scc: &MirScc, mir: &AscentMir) -> pro
                }
             }
          } else {
-            // if there is inflation, we skip the check for if a a duplicate exists
-            if mir.config.egg_mode && hcl.rel.contains_eclass_id {
+            // if there is inflation, we skip the check for if a a duplicate exists   
+            if need_canonical_check {
                // if egglog mode and contains eclass_id, we need to use the canonical value
                // existance check is done on canonical value
                quote_spanned! {hcl.span=>
@@ -872,7 +891,7 @@ fn clause_bind_and_continue(
 ) -> proc_macro2::TokenStream {
    let mut assignments = vec![];
    let mut is_eclass_args = vec![];
-   let is_delta_rel = rel.version == MirRelationVersion::Delta;
+   // let is_delta_rel = rel.version == MirRelationVersion::Delta;
 
    let mut any_vars = false;
    for (ind_in_tuple, var) in vars {
@@ -884,7 +903,9 @@ fn clause_bind_and_continue(
       // In egglog mode, If relation is not delta, we need to iterate over the equivalence
       // class of the value, inflation of delta happens allowing deduplicated tuples to be added
       // into delta relations.
-      let need_inflation = !is_delta_rel && mir.config.egg_mode && rel.relation.is_field_eclass_id(ind_in_tuple);
+      // let need_inflation = !is_delta_rel && mir.config.egg_mode && rel.relation.is_field_eclass_id(ind_in_tuple);
+      // TODO: fix inflation for eclass_id, now fully disabled
+      let need_inflation = false;
       is_eclass_args.push(need_inflation);
       any_vars = true;
       // In egglog mode, we need to iterate over the equivalence class of the value

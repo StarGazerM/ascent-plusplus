@@ -72,13 +72,15 @@ fn test_slog_order_compile() {
 fn test_slog_fact_compile() {
    let tokens = quote! {
       (struct Foobar)
-      (define foo usize usize)
-      (define bar usize usize)
-      (define foobar sexpr sexpr)
+      (define number i32)
+      (define var &'static str)
+      (define add eclass eclass)
+      (define mul eclass eclass)
 
-      (foo 1 2)
-      (bar 3 4)
-      (foobar (foo 1 2) (bar 3 4))
+      // 2 * (x * 3)
+      (mul (number 2) (mul (var "x") (number 3)))
+      // 6 * xs
+      (mul (number 6) (var "x"))
    };
 
    write_to_scratchpad(tokens, quote! {}, false);
@@ -108,7 +110,7 @@ fn test_normal_rule_compile() {
       (define tc usize usize)
 
       [(tc x y) <-- (edge x y)]
-      [(tc x y) <-- (edge x y) (tc x y)]
+      [(tc x y) <-- (edge x z) (tc z y)]
    };
 
    write_to_scratchpad(tokens, quote! {}, false);
@@ -222,13 +224,13 @@ fn test_escape_syntax_compile3 () {
       (define empty1 usize)
       (define empty2 usize)
       
-      ,(empty1(x) <-- empty2(x);)
+      ,(empty1(x, id) <-- empty2(x, id);)
    };
    write_to_scratchpad(tokens, quote! {}, false);
 }
 
 #[test]
-fn test_rewrite_clause_compile() {
+fn test_rewrite_clause_compile() {  // this test is not correct
    let tokens = quote! {
       (struct EClassTest)
 
@@ -243,8 +245,7 @@ fn test_rewrite_clause_compile() {
       (foobar ?(foo 1) ?(bar 1))
       [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
 
-      [(res x) <-- (foobar x y)
-         ,(if x == y)]
+      [(res x) <-- (foobar x x)]
    };
    write_to_scratchpad(tokens, quote! {}, false);
 }

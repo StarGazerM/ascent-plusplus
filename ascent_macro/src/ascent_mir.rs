@@ -337,8 +337,12 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir>{
          for bi in rule.body_items.iter() {
             if let MirBodyItem::Agg(agg) = bi {
                if dynamic_relations.contains_key(&agg.rel.relation) {
-                  return Err(syn::Error::new(agg.span, 
-                     format!("use of aggregated relation {} cannot be stratified", &agg.rel.relation.name)));
+                  if !hir.config.allow_non_stratified_agg{
+                     return Err(syn::Error::new(agg.span, 
+                        format!("use of aggregated relation {} cannot be stratified", &agg.rel.relation.name)));
+                  } else {
+                     eprintln!("WARNING: use of aggregated relation {} cannot be stratified", &agg.rel.relation.name);
+                  }
                }
             }
          }

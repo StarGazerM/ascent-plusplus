@@ -106,3 +106,10 @@ pub fn not(mut inp: impl Iterator<Item = ()>) -> impl Iterator<Item = ()>
    let any = inp.next().is_some();
    if any {None} else {Some(())}.into_iter()
 }
+
+/// collect all the items in the input iterator as a vector
+pub fn collect<'a, N: 'a>(inp: impl Iterator<Item = (&'a N,)>) -> impl Iterator<Item = Vec<N>>
+where N: Clone
+{
+   std::iter::once(inp.map(|tuple| tuple.0.clone()).collect())
+}

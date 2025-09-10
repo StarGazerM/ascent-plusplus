@@ -24,14 +24,12 @@ fn test_nested_fact() {
 
       [(output y) <-- (input x) (length (do_length x) y)]
    }
-
    let mut prog = PathLength::default();
 
    prog.run();
    println!("{:?}", prog.input);
    println!("{:?}", prog.output);
    println!("{:?}", prog.do_length);
-   println!("{:?}", prog.path_id);
 }
 
 #[test]
@@ -107,14 +105,15 @@ fn test_eclass() {
       (define res eclass)
 
       (foobar (foo 1) (bar 1))
-      // [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
-      (rewrite! (foo x) (bar x))
+      [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+      // (rewrite! (foo x) (bar x))
 
       [(res x) <-- (foobar x x)]
    }
 
    let mut prog = EClassTest::default();
    prog.run();
+   println!("{:?}", prog.foo);
    println!("{:?}", prog.foobar);
    println!("{:?}", prog.res);
 }
@@ -153,8 +152,29 @@ fn test_ast() {
    }
    let mut prog = AST::default();
    prog.run();
+   println!("{:?}", prog.number);
+   println!("{:?}", prog.var);
    println!("{:?}", prog.mul);
    println!("{:?}", prog.add);
-   println!("{:?}", prog.number_id);
-   println!("{:?}", prog.var_id);
+}
+
+#[test]
+fn test_aggregator() {
+   slog! {
+      (struct AggregatorTest)
+
+      (define foo i32 i32)
+      (define bar i32 Vec<i32>)
+
+      (foo 1 2)
+      (foo 3 4)
+      (foo 1 6)
+
+      [(bar x ,(y.clone())) <-- (foo x _) ,(agg y = collect(v) in foo(x, v, _))]
+   }
+
+   let mut prog = AggregatorTest::default();
+   prog.run();
+   println!("{:?}", prog.foo);
+   println!("{:?}", prog.bar);
 }
