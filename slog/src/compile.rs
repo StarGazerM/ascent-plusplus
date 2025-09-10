@@ -81,7 +81,12 @@ fn compile_slog_clause_unstructured_head(
             if is_eclass {
                let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), id.span());
                arg_canonicalization.push(quote_spanned! { id.span() =>
-                  let #cl_arg = _self.runtime_total.__equiv_ind_common.combined.get_dominant_elem(#id).unwrap_or(#id)
+                  let #cl_arg = _self.runtime_total
+                     .__equiv_ind_common.combined
+                     .get_dominant_elem(#id)
+                     .unwrap_or(_self.runtime_delta
+                        .__equiv_ind_common.combined
+                        .get_dominant_elem(#id).unwrap_or(#id))
                });
                Some(quote_spanned! { id.span() => #cl_arg })
             } else {
@@ -93,7 +98,11 @@ fn compile_slog_clause_unstructured_head(
             if is_eclass {
                let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), constant.span());
                arg_canonicalization.push(quote_spanned! { constant.span() =>
-                  let #cl_arg = _self.runtime_total.__equiv_ind_common.combined.get_dominant_elem(&#constant).unwrap_or(&#constant)
+                  let #cl_arg = _self.runtime_total.__equiv_ind_common.combined
+                     .get_dominant_elem(&#constant)
+                     .unwrap_or(_self.runtime_delta.
+                        __equiv_ind_common.combined
+                        .get_dominant_elem(&#constant).unwrap_or(#constant))
                });
                Some(quote_spanned! { constant.span() => #cl_arg })
             } else {
@@ -110,13 +119,21 @@ fn compile_slog_clause_unstructured_head(
                });
                if is_eclass {
                   arg_canonicalization.push(quote_spanned! { expr.span() =>
-                     let #cl_arg = _self.runtime_total.__equiv_ind_common.combined.get_dominant_elem(#cl_arg_e).unwrap_or(#cl_arg_e)
+                     let #cl_arg = _self.runtime_total.__equiv_ind_common.combined
+                        .get_dominant_elem(#cl_arg_e)
+                        .unwrap_or(_self.runtime_delta.
+                           __equiv_ind_common.combined
+                           .get_dominant_elem(#cl_arg_e).unwrap_or(#cl_arg_e))
                   });
                }
             } else {
                if is_eclass {
                   arg_canonicalization.push(quote_spanned! { expr.span() =>
-                     let #cl_arg = _self.runtime_total.__equiv_ind_common.combined.get_dominant_elem(#expr).unwrap_or(#expr)
+                     let #cl_arg = _self.runtime_total.__equiv_ind_common.combined
+                        .get_dominant_elem(#expr)
+                        .unwrap_or(_self.runtime_delta.
+                           __equiv_ind_common.combined
+                           .get_dominant_elem(#expr).unwrap_or(#expr))
                   });
                }
             }

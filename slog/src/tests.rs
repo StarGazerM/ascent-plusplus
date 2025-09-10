@@ -245,7 +245,7 @@ fn test_rewrite_clause_compile() {  // this test is not correct
       (foobar ?(foo 1) ?(bar 1))
       [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
 
-      [(res x) <-- (foobar x x)]
+      [(res x) <-- (foobar x y) ,(if x == y)]
    };
    write_to_scratchpad(tokens, quote! {}, false);
 }

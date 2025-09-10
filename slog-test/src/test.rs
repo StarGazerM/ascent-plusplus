@@ -108,7 +108,8 @@ fn test_eclass() {
       [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
       // (rewrite! (foo x) (bar x))
 
-      [(res x) <-- (foobar x x)]
+      [(res x) <-- (foobar x y)
+         ,(if x == y)]
    }
 
    let mut prog = EClassTest::default();
@@ -116,6 +117,7 @@ fn test_eclass() {
    println!("{:?}", prog.foo);
    println!("{:?}", prog.foobar);
    println!("{:?}", prog.res);
+
 }
 
 #[test]
