@@ -1,0 +1,464 @@
+// syntax.rs
+// define the syntax of slog
+// slog mostly use sexprs
+
+use itertools::Either;
+use proc_macro2::TokenStream;
+use quote::quote;
+use syn::parse::{Parse, ParseStream};
+use syn::{Ident, Token, braced, bracketed, parenthesized};
+
+
+// keywords
+pub mod kw_slog {
+   syn::custom_punctuation!(LongLeftArrow, ==>);
+   syn::custom_punctuation!(LongRightArrow, <==);
+   syn::custom_punctuation!(ExistsBang, >?);
+   syn::custom_keyword!(or);
+   syn::custom_keyword!(sexpr);
+   syn::custom_keyword!(eclass);
+   syn::custom_keyword!(define);
+   syn::custom_keyword!(rewrite);
+   syn::custom_keyword!(union);
+}
+
+/* #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BangParen {
+   pub bang: Token![!],
+   pub paren: syn::token::Paren,
+} */
+
+/* #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QuestionParen {
+   pub question: Token![?],
+   pub paren: syn::token::Paren,
+} */
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ParenType {
+   Regular,
+   Curly,
+   BangParen,
+   QuestionParen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SlogSExprClause {
+   pub paren: ParenType,
+   pub rel_name: Ident,
+   pub args: Vec<SlogClauseArg>,
+   pub id_var: Option<Ident>,
+}
+
+impl Parse for SlogSExprClause {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      let (content, paren, id_var) = if input.peek(Token![!]) {
+         let content;
+         let _bang = input.parse::<Token![!]>()?;
+         let _paren = parenthesized!(content in input);
+         (content, ParenType::BangParen, None)
+      } else if input.peek(Token![?]) {
+         let content;
+         let _question = input.parse::<Token![?]>()?;
+         let _paren = parenthesized!(content in input);
+         (content, ParenType::QuestionParen, None)
+      } else if input.peek(syn::token::Paren) {
+         let content;
+         let _paren = parenthesized!(content in input);
+         if content.peek(Token![=]) {
+            let _eq = content.parse::<Token![=]>()?;
+            let id_var = content.parse::<Ident>()?;
+            let content_inner;
+            let _paren2 = parenthesized!(content_inner in content);
+            (content_inner, ParenType::Regular, Some(id_var))
+         } else {
+            (content, ParenType::Regular, None)
+         }
+      } else if input.peek(syn::token::Brace) {
+         let content;
+         let _brace = braced!(content in input);
+         (content, ParenType::Curly, None)
+      } else {
+         return Err(input.error("expected regular parentheses or curly braces"));
+      };
+
+      let rel_name = content.parse::<Ident>()?;
+
+      let mut args = Vec::new();
+      while !content.is_empty() {
+         args.push(content.parse::<SlogClauseArg>()?);
+      }
+
+      Ok(SlogSExprClause { paren, rel_name, args, id_var })
+   }
+}
+
+fn is_slog_paren(input: &ParseStream) -> bool {
+   input.peek(syn::token::Paren) || input.peek(syn::token::Brace) || input.peek(Token![!]) || input.peek(Token![?])
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SlogUnionClause {
+   pub _paren: syn::token::Paren,
+   pub _union: kw_slog::union,
+   pub clause_lhs: Either<Ident, SlogSExprClause>,
+   pub clause_rhs: Either<Ident, SlogSExprClause>,
+}
+
+impl Parse for SlogUnionClause {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      // remove the paren
+      let content;
+      let _paren = parenthesized!(content in input);
+      let _union = content.parse::<kw_slog::union>()?;
+      let clause_lhs = if content.peek(syn::Ident) {
+         Either::Left(content.parse::<Ident>()?)
+      } else {
+         Either::Right(content.parse::<SlogSExprClause>()?)
+      };
+      // let _arrow = content.parse::<Token![=>]>()?;
+      let clause_rhs = if content.peek(syn::Ident) {
+         Either::Left(content.parse::<Ident>()?)
+      } else {
+         Either::Right(content.parse::<SlogSExprClause>()?)
+      };
+      Ok(SlogUnionClause { _paren, _union, clause_lhs, clause_rhs })
+   }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SlogClauseArg {
+   LogicVar(Ident, bool),
+   Constant(syn::Lit),
+   Wildcard,
+   RustExpr(syn::Expr),
+   SlogClause(Box<SlogSExprClause>),
+}
+
+impl Parse for SlogClauseArg {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      // a escaped rust expr use quasi quote `,(...)`
+      if input.peek(syn::token::Comma) {
+         let _ = input.parse::<syn::token::Comma>()?;
+         let content;
+         parenthesized!(content in input);
+         let expr = content.parse::<syn::Expr>()?;
+         Ok(SlogClauseArg::RustExpr(expr))
+      } else if is_slog_paren(&input) {
+         let clause = input.parse::<SlogSExprClause>()?;
+         Ok(SlogClauseArg::SlogClause(Box::new(clause)))
+      } else if input.peek(syn::Lit) {
+         let lit = input.parse::<syn::Lit>()?;
+         Ok(SlogClauseArg::Constant(lit))
+      } else if input.peek(Token![_]) {
+         let _ = input.parse::<Token![_]>()?;
+         Ok(SlogClauseArg::Wildcard)
+      } else {
+         let need_inflation = input.peek(Token![@]);
+         if input.peek(Token![@]) {
+            let _ = input.parse::<Token![@]>()?;
+         }
+         let logic_var = input.parse::<Ident>()?;
+         Ok(SlogClauseArg::LogicVar(logic_var, need_inflation))
+      }
+   }
+}
+
+// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// pub struct Disjunction {
+//     pub _or: syn::token::Or,
+//     pub clauses: Vec<Vec<SlogSExprClause>>,
+// }
+
+// impl Parse for Disjunction {
+//     fn parse(input: ParseStream) -> syn::Result<Self> {
+
+//     }
+// }
+
+// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// pub struct ExplicitIDClause {
+//    pub id_var: Ident,
+//    pub clause: SlogSExprClause,
+// }
+// impl Parse for ExplicitIDClause {
+//    fn parse(input: ParseStream) -> syn::Result<Self> {
+//       let content;
+//       let _paren = parenthesized!(content in input);
+//       let _eq = content.parse::<Token![=]>()?;
+//       let id_var = content.parse::<Ident>()?;
+//       let mut clause = content.parse::<SlogSExprClause>()?;
+//       clause.id_var = Some(id_var.clone());
+//       Ok(ExplicitIDClause { id_var, clause })
+//    }
+// }
+
+// impl ExplicitIDClause {
+//    pub fn get_sexpr_clause(&self) -> Option<SlogSExprClause> {
+//       let mut new_clause = self.clause.clone();
+//       new_clause.id_var = Some(self.id_var.clone());
+//       Some(new_clause)
+//    }
+// }
+
+// fn peek_explicit_id_clause(input: ParseStream) -> bool { input.peek(syn::token::Paren) && input.peek2(syn::token::Eq) }
+
+#[derive(Debug, Clone)]
+pub enum SlogRuleBodyItem {
+   SlogSExprClause(SlogSExprClause),
+   NegatedSlogSExprClause(SlogSExprClause),
+   // ExplicitIDClause(ExplicitIDClause),
+   AscentClause(TokenStream),
+}
+
+impl SlogRuleBodyItem {
+   pub fn get_sexpr_clause(&self) -> Option<SlogSExprClause> {
+      match self {
+         SlogRuleBodyItem::SlogSExprClause(clause) => Some(clause.clone()),
+         SlogRuleBodyItem::NegatedSlogSExprClause(clause) => Some(clause.clone()),
+         // SlogRuleBodyItem::ExplicitIDClause(expid) => expid.get_sexpr_clause(),
+         SlogRuleBodyItem::AscentClause(_) => None,
+      }
+   }
+}
+
+impl Parse for SlogRuleBodyItem {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      // if input.peek(syn::token::Paren) && input.peek2(Token![.]) {
+      //    let id_clause = input.parse::<ExplicitIDClause>()?;
+      //    Ok(SlogRuleBodyItem::ExplicitIDClause(id_clause))
+      // } else
+      if input.peek(Token![~]) && input.peek(syn::token::Paren) {
+         let _ = input.parse::<Token![~]>()?;
+         let clause = input.parse::<SlogSExprClause>()?;
+         Ok(SlogRuleBodyItem::NegatedSlogSExprClause(clause))
+      } else if input.peek(syn::token::Paren) {
+         // todo!("wwww {} {:?}", input.to_string(), input.peek3(syn::token::Paren));
+         let clause = input.parse::<SlogSExprClause>()?;
+         Ok(SlogRuleBodyItem::SlogSExprClause(clause))
+      } else if input.peek(Token![,]) {
+         let _ = input.parse::<Token![,]>()?;
+         let content;
+         let _ = parenthesized!(content in input);
+         Ok(SlogRuleBodyItem::AscentClause(content.parse()?))
+      } else {
+         Err(input.error(format!("body:expected slog s-expr clause or explicit id clause:\n{}", input.to_string())))
+      }
+   }
+}
+
+#[derive(Debug, Clone)]
+pub enum SlogRuleHeadItem {
+   // ExplicitIDClause(ExplicitIDClause),
+   SlogSExprClause(SlogSExprClause),
+   UnionClause(SlogUnionClause),
+}
+
+impl Parse for SlogRuleHeadItem {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      if input.peek(syn::token::Paren) {
+         // continue to parse by fork and peek inside paren
+         let input_fork = input.fork();
+         let content;
+         let _ = parenthesized!(content in input_fork);
+         if content.peek(kw_slog::union) {
+            let union_clause = input.parse::<SlogUnionClause>()?;
+            Ok(SlogRuleHeadItem::UnionClause(union_clause))
+         }
+         // else if content.peek(syn::token::Eq) {
+         //    let id_clause = input.parse::<ExplicitIDClause>()?;
+         //    Ok(SlogRuleHeadItem::ExplicitIDClause(id_clause))
+         // }
+         else {
+            let clause = input.parse::<SlogSExprClause>()?;
+            Ok(SlogRuleHeadItem::SlogSExprClause(clause))
+         }
+      } else {
+         Err(input.error(format!("head : expected slog s-expr clause or explicit id clause:\n{}", input.to_string())))
+      }
+   }
+}
+
+// impl SlogRuleHeadItem {
+//    fn get_sexpr_clause(&self) -> Option<&SlogSExprClause> {
+//       match self {
+//          SlogRuleHeadItem::SlogSExprClause(clause) => Some(clause),
+//          _ => None,
+//       }
+//    }
+// }
+
+#[derive(Debug, Clone)]
+pub struct SlogRule {
+   pub heads: Vec<SlogRuleHeadItem>,
+   pub body: Vec<SlogRuleBodyItem>,
+}
+
+impl Parse for SlogRule {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      let content;
+      let _ = bracketed!(content in input);
+      if has_left_arrow(&content) {
+         let mut heads = Vec::new();
+         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
+            heads.push(content.parse::<SlogRuleHeadItem>()?);
+         }
+         let _arrow = content.parse::<Token![<-]>()?;
+         let _ = content.parse::<Token![-]>()?;
+         let mut body = Vec::new();
+         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
+            body.push(content.parse::<SlogRuleBodyItem>()?);
+         }
+         Ok(SlogRule { heads, body })
+      } else {
+         // right arrow, reverse the order of the body and heads
+         let mut body = Vec::new();
+         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
+            body.push(content.parse::<SlogRuleBodyItem>()?);
+         }
+         let _arrow = content.parse::<Token![-]>()?;
+         let _ = content.parse::<Token![->]>()?;
+         let mut heads = Vec::new();
+         while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
+            heads.push(content.parse::<SlogRuleHeadItem>()?);
+         }
+         Ok(SlogRule { heads, body })
+      }
+   }
+}
+
+fn has_left_arrow(input: ParseStream) -> bool {
+   let input_str = input.to_string();
+   // check if the input contains "<--"
+   input_str.contains("<-")
+}
+
+#[derive(Debug, Clone)]
+pub struct SlogRelationDecl {
+   pub _relation: kw_slog::define,
+   pub rel_name: Ident,
+   pub arg_types: Vec<syn::Type>,
+   pub is_eclass: bool,
+}
+
+impl Parse for SlogRelationDecl {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      let content;
+      let _ = parenthesized!(content in input);
+      // let id = content.parse::<Ident>()?;
+      let _relation = content.parse::<kw_slog::define>()?;
+      let rel_name = content.parse::<Ident>()?;
+      let mut is_eclass = false;
+      let mut arg_types = Vec::new();
+      while !content.is_empty() {
+         if content.peek(kw_slog::sexpr) {
+            content.parse::<kw_slog::sexpr>()?;
+            arg_types.push(syn::parse2(quote! { usize })?);
+         } else if content.peek(kw_slog::eclass) {
+            content.parse::<kw_slog::eclass>()?;
+            arg_types.push(syn::parse2(quote! { eclass_id })?);
+            is_eclass = true;
+         } else {
+            arg_types.push(content.parse::<syn::Type>()?);
+         }
+      }
+      Ok(SlogRelationDecl { _relation, rel_name, arg_types, is_eclass })
+   }
+}
+
+#[derive(Debug, Clone)]
+pub enum SlogProgramLine {
+   RelationDecl(SlogRelationDecl),
+   Rule(SlogRule),
+   Ascent(TokenStream),
+   Fact(SlogSExprClause),
+}
+
+impl Parse for SlogProgramLine {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      if input.peek(syn::token::Paren) {
+         // get the second token
+         let input_fork = input.fork();
+         let content;
+         let _ = parenthesized!(content in input_fork);
+         if content.peek(kw_slog::define) {
+            let relation_decl = input.parse::<SlogRelationDecl>()?;
+            Ok(SlogProgramLine::RelationDecl(relation_decl))
+         } else if content.peek(kw_slog::rewrite) {
+            // rewrite is syntax sugar for union with 2 joined body clauses
+            let content_inner;
+            let _ = parenthesized!(content_inner in input);
+            let _rewrite = content_inner.parse::<kw_slog::rewrite>()?;
+            let _ = content_inner.parse::<Token![!]>()?;
+            let mut body = vec![];
+            let mut lhs_sexpr = content_inner.parse::<SlogSExprClause>()?;
+            let mut rhs_sexpr = content_inner.parse::<SlogSExprClause>()?;
+            lhs_sexpr.id_var = Some(Ident::new("lhs_id", _rewrite.span));
+            rhs_sexpr.id_var = Some(Ident::new("rhs_id", _rewrite.span));
+            let head = SlogRuleHeadItem::UnionClause(SlogUnionClause {
+               _paren: syn::token::Paren::default(),
+               _union: kw_slog::union(_rewrite.span),
+               clause_lhs: Either::Left(lhs_sexpr.id_var.clone().unwrap()),
+               clause_rhs: Either::Left(rhs_sexpr.id_var.clone().unwrap()),
+            });
+            body.push(SlogRuleBodyItem::SlogSExprClause(lhs_sexpr));
+            body.push(SlogRuleBodyItem::SlogSExprClause(rhs_sexpr));
+            Ok(SlogProgramLine::Rule(SlogRule { heads: vec![head], body }))
+         } else {
+            // parse the fact
+            let fact = input.parse::<SlogSExprClause>()?;
+            Ok(SlogProgramLine::Fact(fact))
+         }
+      } else if input.peek(syn::token::Bracket) {
+         let rule = input.parse::<SlogRule>()?;
+         Ok(SlogProgramLine::Rule(rule))
+      } else if input.peek(Token![,]) {
+         let _ = input.parse::<Token![,]>()?;
+         let content;
+         let _ = parenthesized!(content in input);
+         Ok(SlogProgramLine::Ascent(content.parse()?))
+      } else {
+         // fact
+         input.parse::<Token![#]>()?;
+         let fact = input.parse::<SlogSExprClause>()?;
+         Ok(SlogProgramLine::Fact(fact))
+      }
+   }
+}
+
+#[derive(Debug, Clone)]
+pub struct SlogMeta {
+   pub _paren: syn::token::Paren,
+   // pub vis: syn::Visibility,
+   pub _struct: Token![struct],
+   pub struct_name: Ident,
+}
+
+impl Parse for SlogMeta {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      let content;
+      let _paren = parenthesized!(content in input);
+      // let vis = content.parse::<syn::Visibility>()?;
+      let _struct = content.parse::<Token![struct]>()?;
+      let struct_name = content.parse::<Ident>()?;
+      Ok(SlogMeta { _paren, _struct, struct_name })
+   }
+}
+
+#[derive(Debug, Clone)]
+pub struct SlogProgram {
+   pub meta: SlogMeta,
+   pub lines: Vec<SlogProgramLine>,
+}
+
+impl Parse for SlogProgram {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      // search to check if <-- is present
+      let meta = input.parse::<SlogMeta>()?;
+      let mut lines = Vec::new();
+      while !input.is_empty() {
+         lines.push(input.parse::<SlogProgramLine>()?);
+      }
+      Ok(SlogProgram { meta, lines })
+   }
+}

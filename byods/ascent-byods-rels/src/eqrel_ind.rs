@@ -219,8 +219,8 @@ impl<T: Clone + Hash + Eq> RelIndexMerge for EqRelInd0<'_, T> {
 
 #[derive(Clone)]
 pub struct EqRelIndCommon<T: Clone + Hash + Eq> {
-   pub(crate) old: Rc<EqRel<T>>,
-   pub(crate) combined: Rc<EqRel<T>>,
+   pub old: Rc<EqRel<T>>,
+   pub combined: Rc<EqRel<T>>,
 }
 
 impl<T: Clone + Hash + Eq> EqRelIndCommon<T> {

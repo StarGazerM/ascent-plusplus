@@ -23,12 +23,16 @@ pub(crate) struct AscentConfig {
    pub generate_run_partial: bool,
    pub inter_rule_parallelism: bool,
    pub default_ds: DsAttributeContents,
+   // pub delta_first: bool,
+   pub allow_non_stratified_agg: bool,
 }
 
 impl AscentConfig {
    const MEASURE_RULE_TIMES_ATTR: &'static str = "measure_rule_times";
    const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
+   // const DELTA_FIRST_ATTR: &'static str = "delta_first";
+   const ALLOW_NON_STRATIFIED_AGG_ATTR: &'static str = "allow_non_stratified_agg";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
       let include_rule_times = attrs
@@ -49,11 +53,25 @@ impl AscentConfig {
          .map(|attr| attr.meta.require_path_only())
          .transpose()?;
 
+      // let delta_first = attrs
+      //    .iter()
+      //    .find(|attr| attr.meta.path().is_ident(Self::DELTA_FIRST_ATTR))
+      //    .map(|attr| attr.meta.require_path_only())
+      //    .transpose()?;
+
+      let allow_non_stratified_agg = attrs
+         .iter()
+         .find(|attr| attr.meta.path().is_ident(Self::ALLOW_NON_STRATIFIED_AGG_ATTR))
+         .map(|attr| attr.meta.require_path_only())
+         .transpose()?;
+
       let recognized_attrs = [
          Self::MEASURE_RULE_TIMES_ATTR,
          Self::GENERATE_RUN_TIMEOUT_ATTR,
          Self::INTER_RULE_PARALLELISM_ATTR,
          REL_DS_ATTR,
+         // Self::DELTA_FIRST_ATTR,
+         Self::ALLOW_NON_STRATIFIED_AGG_ATTR,
       ];
       for attr in attrs.iter() {
          if !recognized_attrs.iter().any(|recognized_attr| attr.meta.path().is_ident(recognized_attr)) {
@@ -71,10 +89,12 @@ impl AscentConfig {
          .unwrap_or_else(|| DsAttributeContents { path: parse_quote! {::ascent::rel}, args: TokenStream::default() });
       Ok(AscentConfig {
          inter_rule_parallelism: inter_rule_parallelism.is_some(),
-         attrs,
+         attrs: attrs.clone(),
          include_rule_times,
          generate_run_partial,
          default_ds,
+         // delta_first: delta_first.is_some(),
+         allow_non_stratified_agg: allow_non_stratified_agg.is_some(),
       })
    }
 }

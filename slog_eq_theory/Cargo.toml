@@ -1,0 +1,16 @@
+[package]
+name = "slog_eq_theory"
+edition = "2024"
+version.workspace = true
+
+[lib]
+# proc-macro = true
+
+[dependencies]
+# syn = { version = "2.0.57", features = ["derive", "full", "extra-traits", "visit-mut"] } 
+# quote = "1.0"
+# proc-macro2 = "1.0"
+# slog = { path = "../slog" }
+ascent = { path = "../ascent" }
+# ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
+# lazy_static = "1.4.0"
