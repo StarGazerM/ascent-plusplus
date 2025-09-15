@@ -9,8 +9,7 @@ use syn::{Attribute, Error, Expr, Pat, Type, parse_quote, parse2};
 
 use crate::AscentProgram;
 use crate::ascent_syntax::{
-   BodyClauseArg, BodyItemNode, CondClause, DsAttributeContents, GeneratorNode, RelationIdentity, RelationNode,
-   RuleNode, Signatures,
+   BodyClauseArg, BodyItemNode, CondClause, DsAttributeContents, GeneratorNode, JoinStrategy, RelationIdentity, RelationNode, RuleNode, Signatures
 };
 use crate::syn_utils::{expr_get_vars, pattern_get_vars};
 use crate::utils::{dedup_all_keep_last_by, expr_to_ident, is_wild_card, tuple_type};
@@ -122,6 +121,7 @@ pub(crate) struct IrRule {
    pub head_clauses: Vec<IrHeadClause>,
    pub body_items: Vec<IrBodyItem>,
    pub simple_join_start_index: Option<usize>,
+   pub join_strategy: Option<JoinStrategy>,
 }
 
 #[allow(unused)]
@@ -137,8 +137,9 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
       }
    }
    format!(
-      "{} <-- {}",
+      "{} <-- {} {}",
       rule.head_clauses.iter().map(|hcl| hcl.rel.name.to_string()).join(", "),
+      rule.join_strategy.as_ref().map(|s| s.to_string()).unwrap_or("".to_string()),
       rule.body_items.iter().map(bitem_to_str).join(", ")
    )
 }
@@ -338,25 +339,26 @@ fn get_ds_attr(attrs: &[Attribute]) -> syn::Result<Option<DsAttributeContents>> 
    }
 }
 
-fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result<(IrRule, Vec<IrRelation>)> {
+pub(crate) fn extend_grounded_vars(
+   grounded_vars: &mut Vec<Ident>, new_vars: impl IntoIterator<Item = Ident>,
+) -> syn::Result<()> {
+   for v in new_vars.into_iter() {
+      if grounded_vars.contains(&v) {
+         // TODO: may someday this will work
+         let other_var = grounded_vars.iter().find(|&x| x == &v).unwrap();
+         let other_err = Error::new(other_var.span(), "variable being shadowed");
+         let mut err = Error::new(v.span(), format!("`{v}` shadows another variable with the same name"));
+         err.combine(other_err);
+         return Err(err);
+      }
+      grounded_vars.push(v);
+   }
+   Ok(())
+}
+
+pub(crate) fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result<(IrRule, Vec<IrRelation>)> {
    let mut body_items = vec![];
    let mut grounded_vars = vec![];
-   fn extend_grounded_vars(
-      grounded_vars: &mut Vec<Ident>, new_vars: impl IntoIterator<Item = Ident>,
-   ) -> syn::Result<()> {
-      for v in new_vars.into_iter() {
-         if grounded_vars.contains(&v) {
-            // TODO may someday this will work
-            let other_var = grounded_vars.iter().find(|&x| x == &v).unwrap();
-            let other_err = Error::new(other_var.span(), "variable being shadowed");
-            let mut err = Error::new(v.span(), format!("`{v}` shadows another variable with the same name"));
-            err.combine(other_err);
-            return Err(err);
-         }
-         grounded_vars.push(v);
-      }
-      Ok(())
-   }
 
    let first_clause_ind =
       rule.body_items.iter().enumerate().find(|(_, bi)| matches!(bi, BodyItemNode::Clause(..))).map(|(i, _)| i);
@@ -501,7 +503,7 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
       }
    }
 
-   Ok((IrRule { simple_join_start_index, head_clauses, body_items }, vec![]))
+   Ok((IrRule { simple_join_start_index, head_clauses, body_items, join_strategy: rule.join_strategy.clone() }, vec![]))
 }
 
 pub fn ir_name_for_rel_indices(rel: &Ident, indices: &[usize]) -> Ident {

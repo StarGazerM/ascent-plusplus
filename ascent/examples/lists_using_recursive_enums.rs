@@ -49,12 +49,14 @@ ascent! {
     relation list(Rc<List<char>>);
 
     list(nil!());
-    list(cons!(c.clone(), l.clone())) <-- char(c), list(l), len(l, n), if *n < 5;
+    list(cons!(c.clone(), l.clone())) <--
+        char(c), list(l), len(l, n),
+        if *n < 5;
 
     relation len(Rc<List<char>>, usize);
 
     len(nil!(), 0);
-    len(l.clone(), n + 1) <-- char(c), len(r, n), let l = cons!(c.clone(), r.clone()), list(&l);
+    // len(l.clone(), n + 1) <--char(c), len(r, n), let l = cons!(c.clone(), r.clone()), list(&l);
 
     relation res(Res);
 

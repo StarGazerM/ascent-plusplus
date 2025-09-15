@@ -1,3 +1,4 @@
+#![allow(mismatched_lifetime_syntaxes)]
 use core::panic;
 use std::hash::{BuildHasherDefault, Hash};
 use std::rc::Rc;

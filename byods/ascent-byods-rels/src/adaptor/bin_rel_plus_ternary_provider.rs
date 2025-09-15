@@ -86,7 +86,7 @@ mod test {
 
       ($name: ident, ($col0: ty, $col1: ty, $col2: ty), $indices: tt, ser, ()) => {
          $crate::adaptor::bin_rel_to_ternary::BinRelToTernaryWrapper<
-            // reverse_map_1 required:
+            // reverse_map_1 required:q
             {$crate::inds_contain!($indices, [1]) || $crate::inds_contain!($indices, [1, 2])},
             // reverse_map_2 required:
             {$crate::inds_contain!($indices, [2]) || $crate::inds_contain!($indices, [1, 2])},

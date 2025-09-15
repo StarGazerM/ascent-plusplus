@@ -21,6 +21,29 @@ pub trait FactTypes: Copy + Clone + Debug {
     type Path: Atom;
 }
 
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub enum List<T> {
+   Cons(T, Rc<List<T>>),
+   Nil,
+}
+
+macro_rules! cons {
+   ($h: expr, $t: expr) => {
+        Rc::new(List::Cons($h, $t))
+    };
+}
+
+macro_rules! nil {
+   () => {
+        Rc::new(List::Nil)
+    };
+}
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Res(&'static str);
+
+
 #[warn(warnings)]
 #[allow(unused_imports)]
 #[allow(dead_code)]
@@ -35,3 +58,5 @@ fn _test<T: FactTypes>() {
    todo!("here");
    ;
 }
+
+

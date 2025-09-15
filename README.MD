@@ -208,6 +208,24 @@ ascent_par! {
 
 ```
 
+### Join Reordering
+Ascent supports reordering of clauses in a rule. This is useful when the order of clauses in a rule is not optimal for the given join strategy.
+```Rust
+ascent! {
+   relation r(i32, i32);
+   relation tc(i32, i32);
+   tc(x, y) <-- #[heuristic_reordering] tc(x, y),tc(y, z);
+   // result join plan:
+   // tc(x, y) delta ⋈ tc(y, z) full
+   // tc(y, z) delta ⋈ tc(x, y) full
+   tc(x, z) <-- tc(x, y), tc(y, z);
+   // result join plan:
+   // tc(x, y) delta ⋈ tc(y, z) full
+   // tc(x, y) full ⋈ tc(y, z) delta
+}
+```
+currently, the only supported join strategy is `heuristic_reordering`, which will try to pull delta version of clauses to the front of the rule.
+
 ### Misc
 - **`#![measure_rule_times]`** causes execution times of individual rules to be measured. Example: 
    ```Rust
