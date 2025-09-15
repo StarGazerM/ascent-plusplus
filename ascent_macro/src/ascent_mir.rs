@@ -9,12 +9,11 @@ use proc_macro2::{Ident, Span};
 use syn::{Expr, Type};
 
 use crate::ascent_hir::{
-   AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrRelation, IrRule,
-   RelationMetadata,
+   extend_grounded_vars, get_indices_given_grounded_variables, AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrRelation, IrRule, RelationMetadata
 };
 use crate::ascent_mir::MirRelationVersion::*;
 use crate::ascent_syntax::{CondClause, GeneratorNode, RelationIdentity, Signatures};
-use crate::syn_utils::pattern_get_vars;
+use crate::syn_utils::{expr_get_vars, pattern_get_vars};
 use crate::utils::{expr_to_ident, intersects, pat_to_ident, tuple_type};
 
 pub(crate) struct AscentMir {
@@ -114,6 +113,26 @@ impl MirBodyItem {
          MirBodyItem::Generator(gen) => pattern_get_vars(&gen.pattern),
          MirBodyItem::Cond(cond) => cond.bound_vars(),
          MirBodyItem::Agg(agg) => pattern_get_vars(&agg.pat),
+      }
+   }
+
+   pub fn defined_vars(&self) -> Vec<Ident> {
+      match self {
+         MirBodyItem::Clause(cl) => {
+            cl.cond_clauses.iter().flat_map(|cc| cc.bound_vars()).collect()
+         },
+         MirBodyItem::Generator(gen) => pattern_get_vars(&gen.pattern),
+         MirBodyItem::Cond(cond) => cond.bound_vars(),
+         MirBodyItem::Agg(agg) => pattern_get_vars(&agg.pat),
+      }
+   }
+
+   pub fn joined_vars(&self) -> Vec<Ident> {
+      match self {
+         MirBodyItem::Clause(cl) => {
+            cl.args.iter().filter_map(expr_to_ident).collect()
+         },
+         _ => vec![],
       }
    }
 }
@@ -229,6 +248,298 @@ fn get_hir_dep_graph(hir: &AscentIr) -> Vec<(usize, usize)> {
    edges
 }
 
+// reorder all rules in the SCC
+fn reorder_mir_scc(scc: &MirScc) -> syn::Result<(MirScc, Vec<MirRelation>)> {
+   let mut new_rules: Vec<MirRule> = vec![];
+   let mut dep_relations: Vec<MirRelation> = vec![];
+   let mut addtional_mir_relations: Vec<MirRelation> = vec![];
+   for rule in scc.rules.iter() {
+      let (new_rule, new_relations) = reorder_mir_rule(rule)?;
+      new_rules.push(new_rule);
+      dep_relations.extend(new_relations);
+   }
+   // add dep_relations to scc.dynamic_relations 
+   let mut new_dynamic_relations = scc.dynamic_relations.clone();
+   let mut new_body_only_relations = scc.body_only_relations.clone();
+   for relation in dep_relations.iter() {
+      // check if in dyn rel
+      let in_dyn_rel = scc.dynamic_relations.contains_key(&relation.relation);
+      let in_body_only_rel = scc.body_only_relations.contains_key(&relation.relation);
+      if in_dyn_rel {
+         let updated = new_dynamic_relations.entry(relation.relation.clone()) 
+            .or_default().insert(mir_relation_to_ir_relation(relation));
+
+         if updated {
+            addtional_mir_relations.push(relation.clone());
+         }
+      }
+      if in_body_only_rel {
+         let updated = new_body_only_relations.entry(relation.relation.clone())
+            .or_default().insert(mir_relation_to_ir_relation(relation));
+         if updated {
+            addtional_mir_relations.push(relation.clone());
+         }
+      }
+   }
+   
+
+   Ok((MirScc {
+      rules: new_rules,
+      dynamic_relations: new_dynamic_relations,
+      body_only_relations: new_body_only_relations,
+      is_looping: scc.is_looping,
+   }, addtional_mir_relations))
+}
+
+fn mir_relation_to_ir_relation(relation: &MirRelation) -> IrRelation {
+   IrRelation::new(relation.relation.clone(), relation.indices.clone())
+}
+
+// reorder a rule:
+// 1. construct a join graph of all clauses
+//    - the nodes are the clauses, the edges are variable 
+//    - if a clause and another clause share bounded variables, there is an edge between them
+//    - the weight of the edge is the number of shared bounded variables
+// 2. start from the clause with delta, set the next clause as the one with the highest weight
+// 3. if no next clause, set the start as unselected clause appeared first in original rule
+// 4. repeat 2 and 3 until all clauses are set
+// 5. construct the new rule
+fn reorder_mir_rule(rule: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> {
+   let mut new_body_items = vec![];
+   let start_idx = rule.simple_join_start_index.unwrap_or(0);
+   let mut join_graph = DiGraphMap::<_, usize>::new();
+   for (i, bitem) in rule.body_items.iter().enumerate() {
+      join_graph.add_node(i);
+      let bitem_joined_vars = bitem.joined_vars();
+      let bitem_defined_vars = bitem.defined_vars();
+      // if defined_var exists, add from all nodes after it to it
+      if !bitem_defined_vars.is_empty() {
+         for after_i in i + 1..rule.body_items.len() {
+            join_graph.add_edge(i, after_i, 1);
+         }
+      }
+      for (j, bitem2) in rule.body_items.iter().enumerate() {
+         if i == j {
+            continue;
+         }
+         let bitem2_joined_vars = bitem2.joined_vars();
+         // let bitem2_defined_vars = bitem2.defined_vars();
+         for var_ident in bitem2_joined_vars.iter() {
+            if bitem_joined_vars.contains(var_ident)  {
+               // check if edge (i, j) exists
+               join_graph.add_edge(i, j, join_graph.edge_weight(i, j).unwrap_or(&0) + 1);
+            }
+         }
+      }
+   }
+   let mut selected_idxs = vec![];
+   for i in 0..start_idx {
+      selected_idxs.push(i);
+      new_body_items.push(rule.body_items[i].clone());
+   }
+   // initialize unselected_idxs to delta clause, (if many, first one)
+   let mut new_start_idx = start_idx;
+   let mut has_delta = false;
+   for (i, bitem) in rule.body_items.iter().enumerate() {
+      match bitem {
+         MirBodyItem::Clause(bcl) if bcl.rel.version == MirRelationVersion::Delta => {
+            if i == start_idx {
+               // if the start_idx is a delta clause, no needreordering
+               return Ok((rule.clone(), vec![]));
+            }
+            new_start_idx = i;
+            has_delta = true;
+            // check if this is a simple relation: aka, all args are logical vars
+            break;
+         },
+         _ => {},
+      };
+   }
+   if !has_delta {
+      // if no delta, no reordering
+      return Ok((rule.clone(), vec![]));
+   }
+   selected_idxs.push(new_start_idx);
+
+   let mut unselected_idxs = (start_idx..rule.body_items.len()).collect_vec();
+   while !unselected_idxs.is_empty() {
+      new_body_items.push(rule.body_items[new_start_idx].clone());
+      // find and remove next_idx from unselected_idxs
+      if let Some(idx) = unselected_idxs.iter().position(|&idx| idx == new_start_idx) {
+         unselected_idxs.remove(idx);
+      } else {
+         return Err(syn::Error::new(Span::call_site(),
+            format!("start_idx {} next_idx {} not found in unselected_idxs {:?}, selected_idxs {:?}, rule: {}",
+               start_idx, new_start_idx, unselected_idxs, selected_idxs, mir_rule_summary(rule) )));
+      }
+      if unselected_idxs.is_empty() {
+         break;
+      }
+      // linearize the join graph
+      new_start_idx = if let Some((_, possible_next_idx, _)) = join_graph.edges(new_start_idx)
+         .filter(|(_, to, _)| unselected_idxs.contains(&to))
+         .max_by_key(|(_, _, weight)| *weight) {
+         possible_next_idx
+      } else {
+         unselected_idxs[0]
+      };
+      selected_idxs.push(new_start_idx);
+   }
+   // assert nothing is left in join_graph
+   assert!(rule.body_items.len() == new_body_items.len());
+
+   let reordered_rule = MirRule {
+      body_items: new_body_items,
+      head_clause: rule.head_clause.clone(),
+      simple_join_start_index: rule.simple_join_start_index,
+      reorderable: rule.reorderable,
+   };
+
+   
+   // reconstruct the rule from the original rule and the reordered rule
+   reselect_index(reordered_rule, rule)
+}
+
+// reselect the index of reordered rule
+// It generate new rule and new indices need to be prepared in SCC.
+fn reselect_index(rule: MirRule, fallback: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> {
+   let mut new_body_items = vec![];
+   let mut grounded_vars = vec![];
+   let mut new_relations = vec![];
+   let mut grounded_vars_after_first_clause = vec![];
+
+   // let first_clause_ind = rule.simple_join_start_index;
+   let mut first_two_clauses_simple = rule.simple_join_start_index.is_some()
+      && matches!(rule.body_items.get(rule.simple_join_start_index.unwrap() + 1), Some(MirBodyItem::Clause(..)));
+
+   for (cls_ind, bitem) in rule.body_items.iter().enumerate() {
+      match bitem {
+         MirBodyItem::Clause(bcl) => {
+            // when at the first clause
+            if rule.simple_join_start_index.map(|ind| ind + 1) == Some(cls_ind) && first_two_clauses_simple {
+               let mut self_vars = HashSet::new();
+               for var in bcl.args.iter().filter_map(expr_to_ident) {
+                  if !self_vars.insert(var) {
+                     first_two_clauses_simple = false;
+                  }
+               }
+               for cond_cl in bcl.cond_clauses.iter() {
+                  let cond_expr = cond_cl.expr();
+                  let expr_idents = expr_get_vars(cond_expr);
+                  if !expr_idents.iter().all(|v| self_vars.contains(v)) {
+                     first_two_clauses_simple = false;
+                     break;
+                  }
+                  self_vars.extend(cond_cl.bound_vars());
+               }
+            }
+            let mut indices = vec![];
+            let mut new_grounded_vars = vec![];
+            for (i, arg) in bcl.args.iter().enumerate() {
+               if let Some(var) = expr_to_ident(arg) {
+                  if grounded_vars.contains(&var) {
+                     indices.push(i);
+                  } else{
+                     new_grounded_vars.push(var);
+                  }
+               } else {
+                  indices.push(i);
+               }
+            }
+            grounded_vars.extend(new_grounded_vars.clone());
+            let ir_rel = IrRelation::new(bcl.rel.relation.clone(), indices);
+            let mir_rel = MirRelation::from(ir_rel, bcl.rel.version);
+            new_relations.push(mir_rel.clone());
+            let ir_bcl = MirBodyClause {
+               rel: mir_rel,
+               args: bcl.args.clone(),
+               rel_args_span: bcl.rel_args_span.clone(),
+               args_span: bcl.args_span.clone(),
+               cond_clauses: bcl.cond_clauses.clone(),
+            };
+            new_body_items.push(MirBodyItem::Clause(ir_bcl));
+            let ind = rule.simple_join_start_index.unwrap_or(0); 
+            if cls_ind > ind {
+               grounded_vars_after_first_clause.extend(new_grounded_vars);
+            }   
+         },
+         MirBodyItem::Generator(gen) => {
+            let new_grounded_vars = pattern_get_vars(&gen.pattern);
+            extend_grounded_vars(&mut grounded_vars, new_grounded_vars.clone())?;
+            new_body_items.push(bitem.clone());
+            let ind = rule.simple_join_start_index.unwrap_or(0); 
+            if cls_ind > ind {
+               grounded_vars_after_first_clause.extend(new_grounded_vars);
+            }
+         },
+         MirBodyItem::Cond(cond) => {
+            new_body_items.push(bitem.clone());
+            let new_grounded_vars = cond.bound_vars();
+            extend_grounded_vars(&mut grounded_vars, new_grounded_vars.clone())?;
+            let ind = rule.simple_join_start_index.unwrap_or(0); 
+            if cls_ind > ind {
+               grounded_vars_after_first_clause.extend(new_grounded_vars);
+            }
+         },
+         MirBodyItem::Agg(agg) => {
+            let new_grounded_vars = pattern_get_vars(&agg.pat);
+            extend_grounded_vars(&mut grounded_vars, new_grounded_vars.clone())?;
+            new_body_items.push(bitem.clone());
+            // TODO: will indices change?
+            let ind = rule.simple_join_start_index.unwrap_or(0); 
+            if cls_ind > ind {
+               grounded_vars_after_first_clause.extend(new_grounded_vars);
+            }    
+         }
+      }
+   }
+   // check if the first clause contains var grounded from later clauses
+   let ind = rule.simple_join_start_index.unwrap_or(0); 
+   if let MirBodyItem::Clause(bcl) = &new_body_items[ind] {
+      for arg in bcl.args.iter() {
+         let used_idents = if let Some(ident) = expr_to_ident(arg) { vec![ident] } else { expr_get_vars(arg) };
+         // eprintln!("used_idents: {:?}", used_idents);
+         if used_idents.iter().any(|var| grounded_vars_after_first_clause.contains(var)) {
+            eprintln!("WARNING: {} may contains var grounded after, cannot be reordered, may cause full scan",
+               mir_rule_summary(&rule));
+            return Ok((fallback.clone(), vec![]));
+         }
+      }
+   }
+   
+
+   // handle index selection for the first clause
+   if first_two_clauses_simple {
+      let simple_join_ir_relations = if let Some(ind) = rule.simple_join_start_index {
+         let (bcl1, bcl2) = match &new_body_items[ind..ind + 2] {
+            [MirBodyItem::Clause(bcl1), MirBodyItem::Clause(bcl2)] => (bcl1, bcl2),
+            _ => panic!("incorrect simple join handling in ascent_mir"),
+         };
+         let bcl2_vars = bcl2.args.iter().filter_map(expr_to_ident).collect_vec();
+         let indices = get_indices_given_grounded_variables(&bcl1.args, &bcl2_vars);
+         let new_cl1_ir_relation = IrRelation::new(bcl1.rel.relation.clone(), indices);
+         let new_cl1_mir_relation = MirRelation::from(new_cl1_ir_relation, bcl1.rel.version);
+         new_relations.push(new_cl1_mir_relation.clone());
+         vec![new_cl1_mir_relation]
+      } else {
+         vec![]
+      };
+      if let Some(ind) = rule.simple_join_start_index {
+         if let MirBodyItem::Clause(cl1) = &mut new_body_items[ind] {
+            cl1.rel = simple_join_ir_relations[0].clone();
+         }
+      }
+   };
+   
+   let reordered_rule = MirRule {
+      body_items: new_body_items,
+      head_clause: rule.head_clause.clone(),
+      simple_join_start_index: rule.simple_join_start_index,
+      reorderable: rule.reorderable,
+   };
+   Ok((reordered_rule, new_relations))
+}
+
 pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
    let dep_graph = get_hir_dep_graph(hir);
    let mut dep_graph = DiGraphMap::<_, ()>::from_edges(&dep_graph);
@@ -240,6 +551,12 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
    let mut sccs = condensation(dep_graph, true);
 
    let mut mir_sccs = vec![];
+   let mut updated_ir_relations : HashMap<RelationIdentity, HashSet<IrRelation>>=
+      hir.relations_ir_relations.clone();
+   let mut updated_full_indices : HashMap<RelationIdentity, IrRelation> =
+      hir.relations_full_indices.clone();
+   let mut updated_lattices_full_indices : HashMap<RelationIdentity, IrRelation> = 
+      hir.lattices_full_indices.clone();
    for scc in sccs.node_weights().collect_vec().iter().rev() {
       let mut dynamic_relations: HashMap<RelationIdentity, HashSet<IrRelation>> = HashMap::new();
       let mut body_only_relations: HashMap<RelationIdentity, HashSet<IrRelation>> = HashMap::new();
@@ -274,10 +591,11 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
          }
       }
 
-      let rules = scc
+      let rules: syn::Result<Vec<_>> = scc
          .iter()
-         .flat_map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set))
-         .collect_vec();
+         .map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set))
+         .collect();
+      let rules = rules?.into_iter().flatten().collect_vec();
 
       for rule in rules.iter() {
          for bi in rule.body_items.iter() {
@@ -291,7 +609,26 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
             }
          }
       }
-      let mir_scc = MirScc { rules, dynamic_relations, body_only_relations, is_looping };
+      let mir_scc = {
+         let mir_scc = MirScc { rules, dynamic_relations, body_only_relations, is_looping };
+         let (reordered_mir_scc, additional_mir_relations) = reorder_mir_scc(&mir_scc)?;
+         for relation in additional_mir_relations.iter() {
+            if relation.version == MirRelationVersion::Total {
+               if relation.relation.is_lattice {
+                  updated_lattices_full_indices.insert(
+                     relation.relation.clone(), mir_relation_to_ir_relation(relation));
+               } else {
+                  // add if not exists
+                  updated_full_indices.entry(relation.relation.clone())
+                     .or_insert(mir_relation_to_ir_relation(relation));
+               }
+            } 
+            updated_ir_relations.entry(relation.relation.clone())
+               .or_default().insert(mir_relation_to_ir_relation(relation));
+         }
+         reordered_mir_scc
+         // mir_scc
+      };
       mir_sccs.push(mir_scc);
    }
 
@@ -309,9 +646,12 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
    Ok(AscentMir {
       sccs: mir_sccs,
       deps: sccs_dep_graph,
-      relations_ir_relations: hir.relations_ir_relations.clone(),
-      relations_full_indices: hir.relations_full_indices.clone(),
-      lattices_full_indices: hir.lattices_full_indices.clone(),
+      // relations_ir_relations: hir.relations_ir_relations.clone(),
+      // relations_full_indices: hir.relations_full_indices.clone(),
+      // lattices_full_indices: hir.lattices_full_indices.clone(),
+      relations_ir_relations: updated_ir_relations,
+      relations_full_indices: updated_full_indices,
+      lattices_full_indices: updated_lattices_full_indices,
       relations_metadata: hir.relations_metadata.clone(),
       signatures: hir.signatures.clone(),
       config: hir.config.clone(),
@@ -319,7 +659,7 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
    })
 }
 
-fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>) -> Vec<MirRule> {
+fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>) -> syn::Result<Vec<MirRule>> {
    fn versions_base(count: usize) -> Vec<Vec<MirRelationVersion>> {
       if count == 0 {
          vec![]
@@ -413,7 +753,7 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
       mir_body_items.push(mir_bodys)
    }
 
-   mir_body_items
+   let mir_rules: Vec<MirRule> = mir_body_items
       .into_iter()
       .map(|bcls| {
          // rule is reorderable if it is a simple join and the second clause does not depend on items
@@ -422,12 +762,14 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
             let pre_first_clause_vars = bcls.iter().take(ind).flat_map(MirBodyItem::bound_vars);
             !intersects(pre_first_clause_vars, bcls[ind + 1].bound_vars())
          });
-         MirRule {
+         let mir_rule = MirRule {
             body_items: bcls,
             head_clause: rule.head_clauses.clone(),
             simple_join_start_index: rule.simple_join_start_index,
             reorderable,
-         }
+         };
+         mir_rule
       })
-      .collect()
+      .collect();
+   Ok(mir_rules)
 }

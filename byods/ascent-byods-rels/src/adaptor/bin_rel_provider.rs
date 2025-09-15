@@ -59,6 +59,7 @@ pub(crate) mod test {
 
    pub use super::{rel, rel_codegen, rel_full_ind, rel_ind};
 
+   #[allow(dead_code)]
    pub struct DummyRel<T0, T1>(PhantomData<(T0, T1)>);
 
    impl<T0, T1> Default for DummyRel<T0, T1> {
@@ -117,7 +118,6 @@ pub(crate) mod test {
       relation foo(u32, usize);
 
       foo(*x as u32, *y as usize) <-- foo(y, x);
-      foo(x, y) <-- foo(x, y), foo(& (*y as u32), (*x as usize));
-
+      foo(x, y) <-- foo(x, y), let uy = *y as u32, let ux = *x as usize, foo(&uy, &ux);
    }
 }

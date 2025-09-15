@@ -318,25 +318,26 @@ fn get_ds_attr(attrs: &[Attribute]) -> syn::Result<Option<DsAttributeContents>> 
    }
 }
 
-fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result<(IrRule, Vec<IrRelation>)> {
+pub(crate) fn extend_grounded_vars(
+   grounded_vars: &mut Vec<Ident>, new_vars: impl IntoIterator<Item = Ident>,
+) -> syn::Result<()> {
+   for v in new_vars.into_iter() {
+      if grounded_vars.contains(&v) {
+         // TODO: may someday this will work
+         let other_var = grounded_vars.iter().find(|&x| x == &v).unwrap();
+         let other_err = Error::new(other_var.span(), "variable being shadowed");
+         let mut err = Error::new(v.span(), format!("`{v}` shadows another variable with the same name"));
+         err.combine(other_err);
+         return Err(err);
+      }
+      grounded_vars.push(v);
+   }
+   Ok(())
+}
+
+pub(crate) fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result<(IrRule, Vec<IrRelation>)> {
    let mut body_items = vec![];
    let mut grounded_vars = vec![];
-   fn extend_grounded_vars(
-      grounded_vars: &mut Vec<Ident>, new_vars: impl IntoIterator<Item = Ident>,
-   ) -> syn::Result<()> {
-      for v in new_vars.into_iter() {
-         if grounded_vars.contains(&v) {
-            // TODO may someday this will work
-            let other_var = grounded_vars.iter().find(|&x| x == &v).unwrap();
-            let other_err = Error::new(other_var.span(), "variable being shadowed");
-            let mut err = Error::new(v.span(), format!("`{v}` shadows another variable with the same name"));
-            err.combine(other_err);
-            return Err(err);
-         }
-         grounded_vars.push(v);
-      }
-      Ok(())
-   }
 
    let first_clause_ind =
       rule.body_items.iter().enumerate().find(|(_, bi)| matches!(bi, BodyItemNode::Clause(..))).map(|(i, _)| i);

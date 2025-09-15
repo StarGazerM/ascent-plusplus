@@ -118,7 +118,7 @@ fn parse_generics_with_where_clause(input: ParseStream) -> Result<Generics> {
    Ok(res)
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub struct RelationNode {
    pub attrs: Vec<Attribute>,
    pub name: Ident,
