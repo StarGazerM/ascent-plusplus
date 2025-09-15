@@ -9,8 +9,7 @@ use syn::{Attribute, Error, Expr, Pat, Type, parse_quote, parse2};
 
 use crate::AscentProgram;
 use crate::ascent_syntax::{
-   BodyClauseArg, BodyItemNode, CondClause, DsAttributeContents, GeneratorNode, RelationIdentity, RelationNode,
-   RuleNode, Signatures,
+   BodyClauseArg, BodyItemNode, CondClause, DsAttributeContents, GeneratorNode, JoinStrategy, RelationIdentity, RelationNode, RuleNode, Signatures
 };
 use crate::syn_utils::{expr_get_vars, pattern_get_vars};
 use crate::utils::{dedup_all_keep_last_by, expr_to_ident, is_wild_card, tuple_type};
@@ -102,6 +101,7 @@ pub(crate) struct IrRule {
    pub head_clauses: Vec<IrHeadClause>,
    pub body_items: Vec<IrBodyItem>,
    pub simple_join_start_index: Option<usize>,
+   pub join_strategy: Option<JoinStrategy>,
 }
 
 #[allow(unused)]
@@ -117,8 +117,9 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
       }
    }
    format!(
-      "{} <-- {}",
+      "{} <-- {} {}",
       rule.head_clauses.iter().map(|hcl| hcl.rel.name.to_string()).join(", "),
+      rule.join_strategy.as_ref().map(|s| s.to_string()).unwrap_or("".to_string()),
       rule.body_items.iter().map(bitem_to_str).join(", ")
    )
 }
@@ -482,7 +483,7 @@ pub(crate) fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> 
       }
    }
 
-   Ok((IrRule { simple_join_start_index, head_clauses, body_items }, vec![]))
+   Ok((IrRule { simple_join_start_index, head_clauses, body_items, join_strategy: rule.join_strategy.clone() }, vec![]))
 }
 
 pub fn ir_name_for_rel_indices(rel: &Ident, indices: &[usize]) -> Ident {

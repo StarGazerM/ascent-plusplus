@@ -464,9 +464,25 @@ impl AggregatorNode {
    }
 }
 
+#[derive(Clone, Parse)]
+pub struct JoinStrategy {
+   pub _pound_token: Token![#],
+   #[bracket]
+   _strategy_bracket: syn::token::Bracket,
+   #[inside(_strategy_bracket)]
+   pub strategy: Ident,
+}
+
+impl ToString for JoinStrategy {
+   fn to_string(&self) -> String {
+      format!("#[{}]", self.strategy)
+   }
+}
+
 pub struct RuleNode {
    pub head_clauses: Punctuated<HeadItemNode, Token![,]>,
    pub body_items: Vec<BodyItemNode>, // Punctuated<BodyItemNode, Token![,]>,
+   pub join_strategy: Option<JoinStrategy>,
 }
 
 impl Parse for RuleNode {
@@ -481,12 +497,17 @@ impl Parse for RuleNode {
 
       if input.peek(Token![;]) {
          input.parse::<Token![;]>()?;
-         Ok(RuleNode { head_clauses, body_items: vec![] /*Punctuated::default()*/ })
+         Ok(RuleNode { head_clauses, body_items: vec![], join_strategy: None })
       } else {
          input.parse::<kw::LongLeftArrow>()?;
+         let join_strategy = if input.peek(Token![#]) {
+            Some(input.parse()?)
+         } else {
+            None
+         };
          let body_items = Punctuated::<BodyItemNode, Token![,]>::parse_separated_nonempty(input)?;
          input.parse::<Token![;]>()?;
-         Ok(RuleNode { head_clauses, body_items: body_items.into_iter().collect() })
+         Ok(RuleNode { head_clauses, body_items: body_items.into_iter().collect(), join_strategy })
       }
    }
 }
@@ -732,7 +753,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
 
    let mut res = vec![];
    for conjunction in bitems_desugar(&rule.body_items) {
-      res.push(RuleNode { body_items: conjunction, head_clauses: rule.head_clauses.clone() })
+      res.push(RuleNode { body_items: conjunction, head_clauses: rule.head_clauses.clone(), join_strategy: rule.join_strategy.clone() })
    }
    res
 }
@@ -912,6 +933,7 @@ fn rule_desugar_pattern_args(rule: RuleNode) -> RuleNode {
          })
          .collect(),
       head_clauses: rule.head_clauses,
+      join_strategy: rule.join_strategy,
    }
 }
 
@@ -1113,7 +1135,7 @@ fn rule_expand_macro_invocations(rule: RuleNode, macros: &HashMap<Ident, &MacroD
       .pipe(punctuated_try_unwrap)?
       .pipe(flatten_punctuated);
 
-   Ok(RuleNode { body_items: new_body_items, head_clauses: new_head_items })
+   Ok(RuleNode { body_items: new_body_items, head_clauses: new_head_items, join_strategy: rule.join_strategy })
 }
 
 pub(crate) fn desugar_ascent_program(mut prog: AscentProgram) -> Result<AscentProgram> {

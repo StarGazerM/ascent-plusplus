@@ -547,9 +547,11 @@ fn test_macro_in_macro() {
 #[test]
 fn test_reordering() {
    let inp = quote! {
+      relation r(i32, i32);
       relation tc(i32, i32);
-      tc(x, y) <-- for (x, y) in r.iter();
-      tc(x, z) <-- tc(x, y), tc(y, z);
+      tc(x, y) <-- r(x, y);
+      // tc(x, z) <-- tc(x, y), tc(y, z);
+      tc(x, z) <-- #[heruistic_reordering] tc(x, y), tc(y, z);
    };
    write_to_scratchpad(inp);
 }

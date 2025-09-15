@@ -12,7 +12,7 @@ use crate::ascent_hir::{
    extend_grounded_vars, get_indices_given_grounded_variables, AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrRelation, IrRule, RelationMetadata
 };
 use crate::ascent_mir::MirRelationVersion::*;
-use crate::ascent_syntax::{CondClause, GeneratorNode, RelationIdentity, Signatures};
+use crate::ascent_syntax::{CondClause, GeneratorNode, JoinStrategy, RelationIdentity, Signatures};
 use crate::syn_utils::{expr_get_vars, pattern_get_vars};
 use crate::utils::{expr_to_ident, intersects, pat_to_ident, tuple_type};
 
@@ -57,6 +57,7 @@ pub(crate) struct MirRule {
    pub body_items: Vec<MirBodyItem>,
    pub simple_join_start_index: Option<usize>,
    pub reorderable: bool,
+   pub join_strategy: Option<JoinStrategy>,
 }
 
 pub(crate) fn mir_rule_summary(rule: &MirRule) -> String {
@@ -305,6 +306,19 @@ fn mir_relation_to_ir_relation(relation: &MirRelation) -> IrRelation {
 // 4. repeat 2 and 3 until all clauses are set
 // 5. construct the new rule
 fn reorder_mir_rule(rule: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> {
+   let need_reorder = if let Some(join_strategy) = &rule.join_strategy {
+      if join_strategy.strategy == Ident::new("heruistic_reordering", Span::call_site()) {
+         eprintln!("INFO: reorder rule {} ", mir_rule_summary(rule));
+         true
+      } else {
+         false
+      }
+   } else {
+      false
+   };
+   if !need_reorder {
+      return Ok((rule.clone(), vec![]));
+   }
    let mut new_body_items = vec![];
    let start_idx = rule.simple_join_start_index.unwrap_or(0);
    let mut join_graph = DiGraphMap::<_, usize>::new();
@@ -393,6 +407,7 @@ fn reorder_mir_rule(rule: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> 
       head_clause: rule.head_clause.clone(),
       simple_join_start_index: rule.simple_join_start_index,
       reorderable: rule.reorderable,
+      join_strategy: rule.join_strategy.clone(),
    };
 
    
@@ -408,6 +423,7 @@ fn reorder_mir_rule(rule: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> 
 
 // reselect the index of reordered rule
 // It generate new rule and new indices need to be prepared in SCC.
+// This function is also used to reject the reordering if loop is detected.
 fn reselect_index(rule: MirRule, fallback: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> {
    let mut new_body_items = vec![];
    let mut grounded_vars = vec![];
@@ -415,28 +431,23 @@ fn reselect_index(rule: MirRule, fallback: &MirRule) -> syn::Result<(MirRule, Ve
    let mut grounded_vars_after_first_clause = vec![];
 
    // let first_clause_ind = rule.simple_join_start_index;
-   let mut first_two_clauses_simple = rule.simple_join_start_index.is_some()
+   let first_two_clauses_simple = rule.simple_join_start_index.is_some()
       && matches!(rule.body_items.get(rule.simple_join_start_index.unwrap() + 1), Some(MirBodyItem::Clause(..)));
 
    for (cls_ind, bitem) in rule.body_items.iter().enumerate() {
       match bitem {
          MirBodyItem::Clause(bcl) => {
-            // when at the first clause
-            if rule.simple_join_start_index.map(|ind| ind + 1) == Some(cls_ind) && first_two_clauses_simple {
-               let mut self_vars = HashSet::new();
-               for var in bcl.args.iter().filter_map(expr_to_ident) {
-                  if !self_vars.insert(var) {
-                     first_two_clauses_simple = false;
-                  }
-               }
-               for cond_cl in bcl.cond_clauses.iter() {
-                  let cond_expr = cond_cl.expr();
-                  let expr_idents = expr_get_vars(cond_expr);
-                  if !expr_idents.iter().all(|v| self_vars.contains(v)) {
-                     first_two_clauses_simple = false;
-                     break;
-                  }
-                  self_vars.extend(cond_cl.bound_vars());
+            // check if cond_cl contains var ungrounded
+            let mut self_vars = HashSet::new();
+            self_vars.extend(bcl.args.iter().filter_map(expr_to_ident));
+            for cond_cl in bcl.cond_clauses.iter() {
+               self_vars.extend(cond_cl.bound_vars());
+               let expr_idents_cond = expr_get_vars(cond_cl.expr());
+               if expr_idents_cond.iter().any(
+                  |v| !(grounded_vars.contains(v) || self_vars.contains(v))) {
+                  eprintln!("WARNING: cond clause in {} may contains var grounded after, cannot be reordered, may cause full scan",
+                     mir_rule_summary(&rule));
+                  return Ok((fallback.clone(), vec![]));
                }
             }
             let mut indices = vec![];
@@ -542,6 +553,7 @@ fn reselect_index(rule: MirRule, fallback: &MirRule) -> syn::Result<(MirRule, Ve
       head_clause: rule.head_clause.clone(),
       simple_join_start_index: rule.simple_join_start_index,
       reorderable: rule.reorderable,
+      join_strategy: rule.join_strategy.clone(),
    };
    Ok((reordered_rule, new_relations))
 }
@@ -618,6 +630,7 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
       let mir_scc = {
          let mir_scc = MirScc { rules, dynamic_relations, body_only_relations, is_looping };
          let (reordered_mir_scc, additional_mir_relations) = reorder_mir_scc(&mir_scc)?;
+
          for relation in additional_mir_relations.iter() {
             if relation.version == MirRelationVersion::Total {
                if relation.relation.is_lattice {
@@ -773,6 +786,7 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
             head_clause: rule.head_clauses.clone(),
             simple_join_start_index: rule.simple_join_start_index,
             reorderable,
+            join_strategy: rule.join_strategy.clone(),
          };
          mir_rule
       })
