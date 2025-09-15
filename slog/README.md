@@ -41,17 +41,6 @@ slog! {
 }
 ```
 
-**Expanded Ascent Code:**
-```rust
-ascent! {
-    struct MyProgram;
-    // Each relation gets a hidden ID field.
-    // This can be expressed with our modified ID syntax sugar:
-    relation ID edge(usize, usize);
-    relation ID path(usize, usize);
-}
-```
-
 ---
 
 ### Asserting Facts
@@ -65,32 +54,16 @@ slog! {
     (define bar usize usize)
     (define foobar sexpr sexpr)
 
-    #(foo 1 2)
-    #(bar 3 4)
+    (foo 1 2)
+    (bar 3 4)
 
     // A nested structural fact
-    #(foobar (foo 1 2) (bar 3 4))
+    (foobar (foo 1 2) (bar 3 4))
 
     // A fact with unification
-    #(foobar ?(foo x y) ?(bar a b))
+    (foobar ?(foo x y) ?(bar a b))
 }
 ```
-
-**Expanded Ascent Code:**
-```rust
-ascent! {
-    /* ... relations ... */
-    // Facts become rules with an empty body
-    let foo_784959 = foo(1, 2) <-- ();
-    let bar_440915 = bar(3, 4) <-- ();
-
-    // Nested facts are unified with existing relations
-    let foobar_608073 = foobar(foo_935778, bar_489815) <--
-        foo(x, y).foo_935778,
-        bar(a, b).bar_489815;
-}
-```
-*Note: The `.` syntax (`foo(x, y).foo_935778`) is another sugar we added to Ascent to bind a fact's ID to a variable.*
 
 ---
 
@@ -115,18 +88,6 @@ slog! {
 
     // Rule with multiple body clauses
     [(tc x z) <-- (edge x y) (tc y z)]
-}
-```
-
-**Expanded Ascent Code:**
-```rust
-ascent! {
-    pub struct TC;
-    relation ID edge(usize, usize);
-    relation ID tc(usize, usize);
-    
-    let tc_333141 = tc(x, y) <-- edge(x, y);
-    let tc_983452 = tc(x, z) <-- edge(x, y), tc(y, z);
 }
 ```
 
@@ -181,16 +142,6 @@ slog! {
 }
 ```
 
-**Expanded Ascent Code:**
-```rust
-ascent! {
-    /* ... relations ... */
-    let foobar_608073 = foobar(idf, bar_489815) <--
-        foo(x, y).idf,
-        bar(x, y).bar_489815;
-}
-```
-
 ---
 
 ### Seamless Ascent/Rust Integration
@@ -214,17 +165,6 @@ slog! {
 }
 ```
 
-**Expanded Ascent Code:**
-```rust
-ascent! {
-    pub struct MyProgram;
-    relation ID edge(usize, usize);
-    relation ID path(usize, usize);
-
-    let path_333141 = path(x, y) <-- edge(x, y), if y > &10;
-    let path_639465 = path(x + 1, y) <-- edge(x, y);
-}
-```
 
 ***
 
@@ -304,26 +244,6 @@ slog! {
 ### Equivalence (Coming Soon 🚧)
 
 The first siginificant change required to support equivalence is allow unification operation as query to add union-find based relation. In ascent, this can be done via BYODS extension, however directly compile slog to slog-byods will cause readability issue in generated ascent code, which cause macro code too hard to debug. To make the generated ascent code simpler, we add some special syntax sugar to ascent to support unification as clause.
-
-By adding annotate the ascent program with `#![egglog_mode]`, we can enable a ascent program natively equipment with an global hidden union-find relation.
-
-```rust
-ascent! {
-    #![egglog_mode]
-    struct EquivTest;
-
-    relation ID foo(usize);
-    relation ID bar(usize);
-
-    foo(1);
-    bar(2);
-
-    inflated_a <=> b <-- foo(a), a <=> inflated_a, bar(b), b <=>! rep_b;
-}
-```
-After egglog mode is enabled, we can use equivalence clause `<=>` and `<=>?` to add tuple and access the hidden union-find relation. Clause `<=>` is used to add two value into equivalence relation, and `<=>?` is used to fetch the representative of a given value in union-find relation.
-
-Manually inflate each value to its equivalence relation during computation and shrink during unification can be tedious to write in plain ascent. In slog we allow automatic inflation and shrinking of values by declaring column of a relation as eclass.
 
 ```rust
 slog! {

@@ -164,50 +164,10 @@ impl Parse for SlogClauseArg {
    }
 }
 
-// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-// pub struct Disjunction {
-//     pub _or: syn::token::Or,
-//     pub clauses: Vec<Vec<SlogSExprClause>>,
-// }
-
-// impl Parse for Disjunction {
-//     fn parse(input: ParseStream) -> syn::Result<Self> {
-
-//     }
-// }
-
-// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-// pub struct ExplicitIDClause {
-//    pub id_var: Ident,
-//    pub clause: SlogSExprClause,
-// }
-// impl Parse for ExplicitIDClause {
-//    fn parse(input: ParseStream) -> syn::Result<Self> {
-//       let content;
-//       let _paren = parenthesized!(content in input);
-//       let _eq = content.parse::<Token![=]>()?;
-//       let id_var = content.parse::<Ident>()?;
-//       let mut clause = content.parse::<SlogSExprClause>()?;
-//       clause.id_var = Some(id_var.clone());
-//       Ok(ExplicitIDClause { id_var, clause })
-//    }
-// }
-
-// impl ExplicitIDClause {
-//    pub fn get_sexpr_clause(&self) -> Option<SlogSExprClause> {
-//       let mut new_clause = self.clause.clone();
-//       new_clause.id_var = Some(self.id_var.clone());
-//       Some(new_clause)
-//    }
-// }
-
-// fn peek_explicit_id_clause(input: ParseStream) -> bool { input.peek(syn::token::Paren) && input.peek2(syn::token::Eq) }
-
 #[derive(Debug, Clone)]
 pub enum SlogRuleBodyItem {
    SlogSExprClause(SlogSExprClause),
    NegatedSlogSExprClause(SlogSExprClause),
-   // ExplicitIDClause(ExplicitIDClause),
    AscentClause(TokenStream),
 }
 
@@ -216,7 +176,6 @@ impl SlogRuleBodyItem {
       match self {
          SlogRuleBodyItem::SlogSExprClause(clause) => Some(clause.clone()),
          SlogRuleBodyItem::NegatedSlogSExprClause(clause) => Some(clause.clone()),
-         // SlogRuleBodyItem::ExplicitIDClause(expid) => expid.get_sexpr_clause(),
          SlogRuleBodyItem::AscentClause(_) => None,
       }
    }
@@ -224,16 +183,11 @@ impl SlogRuleBodyItem {
 
 impl Parse for SlogRuleBodyItem {
    fn parse(input: ParseStream) -> syn::Result<Self> {
-      // if input.peek(syn::token::Paren) && input.peek2(Token![.]) {
-      //    let id_clause = input.parse::<ExplicitIDClause>()?;
-      //    Ok(SlogRuleBodyItem::ExplicitIDClause(id_clause))
-      // } else
       if input.peek(Token![~]) && input.peek(syn::token::Paren) {
          let _ = input.parse::<Token![~]>()?;
          let clause = input.parse::<SlogSExprClause>()?;
          Ok(SlogRuleBodyItem::NegatedSlogSExprClause(clause))
       } else if input.peek(syn::token::Paren) {
-         // todo!("wwww {} {:?}", input.to_string(), input.peek3(syn::token::Paren));
          let clause = input.parse::<SlogSExprClause>()?;
          Ok(SlogRuleBodyItem::SlogSExprClause(clause))
       } else if input.peek(Token![,]) {
@@ -249,7 +203,6 @@ impl Parse for SlogRuleBodyItem {
 
 #[derive(Debug, Clone)]
 pub enum SlogRuleHeadItem {
-   // ExplicitIDClause(ExplicitIDClause),
    SlogSExprClause(SlogSExprClause),
    UnionClause(SlogUnionClause),
 }
@@ -265,10 +218,6 @@ impl Parse for SlogRuleHeadItem {
             let union_clause = input.parse::<SlogUnionClause>()?;
             Ok(SlogRuleHeadItem::UnionClause(union_clause))
          }
-         // else if content.peek(syn::token::Eq) {
-         //    let id_clause = input.parse::<ExplicitIDClause>()?;
-         //    Ok(SlogRuleHeadItem::ExplicitIDClause(id_clause))
-         // }
          else {
             let clause = input.parse::<SlogSExprClause>()?;
             Ok(SlogRuleHeadItem::SlogSExprClause(clause))
@@ -279,14 +228,6 @@ impl Parse for SlogRuleHeadItem {
    }
 }
 
-// impl SlogRuleHeadItem {
-//    fn get_sexpr_clause(&self) -> Option<&SlogSExprClause> {
-//       match self {
-//          SlogRuleHeadItem::SlogSExprClause(clause) => Some(clause),
-//          _ => None,
-//       }
-//    }
-// }
 
 #[derive(Debug, Clone)]
 pub struct SlogRule {

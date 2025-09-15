@@ -8,7 +8,6 @@ mod util;
 mod scratchpad;
 
 // proc macro compile slog program to ascent program
-
 #[proc_macro]
 pub fn prelude(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
    let res = quote! {
