@@ -543,3 +543,13 @@ fn test_macro_in_macro() {
 
    write_to_scratchpad(inp);
 }
+
+#[test]
+fn test_reordering() {
+   let inp = quote! {
+      relation tc(i32, i32);
+      tc(x, y) <-- for (x, y) in r.iter();
+      tc(x, z) <-- tc(x, y), tc(y, z);
+   };
+   write_to_scratchpad(inp);
+}

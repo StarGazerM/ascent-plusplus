@@ -397,7 +397,13 @@ fn reorder_mir_rule(rule: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> 
 
    
    // reconstruct the rule from the original rule and the reordered rule
-   reselect_index(reordered_rule, rule)
+   let res = reselect_index(reordered_rule, rule);
+   if res.is_err() {
+      eprintln!("WARNING: {} may contains var grounded after, cannot be reordered, may cause full scan",
+         mir_rule_summary(&rule));
+      return Ok((rule.clone(), vec![]));
+   }
+   res
 }
 
 // reselect the index of reordered rule
