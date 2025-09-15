@@ -551,7 +551,7 @@ fn test_reordering() {
       relation tc(i32, i32);
       tc(x, y) <-- r(x, y);
       // tc(x, z) <-- tc(x, y), tc(y, z);
-      tc(x, z) <-- #[heruistic_reordering] tc(x, y), tc(y, z);
+      tc(x, z) <-- #[heuristic_reordering] tc(x, y), tc(y, z);
    };
    write_to_scratchpad(inp);
 }

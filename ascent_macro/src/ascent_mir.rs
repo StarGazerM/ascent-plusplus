@@ -307,7 +307,7 @@ fn mir_relation_to_ir_relation(relation: &MirRelation) -> IrRelation {
 // 5. construct the new rule
 fn reorder_mir_rule(rule: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> {
    let need_reorder = if let Some(join_strategy) = &rule.join_strategy {
-      if join_strategy.strategy == Ident::new("heruistic_reordering", Span::call_site()) {
+      if join_strategy.strategy == Ident::new("heuristic_reordering", Span::call_site()) {
          eprintln!("INFO: reorder rule {} ", mir_rule_summary(rule));
          true
       } else {
