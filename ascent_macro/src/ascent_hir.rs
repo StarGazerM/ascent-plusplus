@@ -20,6 +20,7 @@ pub(crate) struct AscentConfig {
    pub attrs: Vec<Attribute>,
    pub include_rule_times: bool,
    pub generate_run_partial: bool,
+   pub custom_return_conditions: bool,
    pub inter_rule_parallelism: bool,
    pub default_ds: DsAttributeContents,
    // pub delta_first: bool,
@@ -32,6 +33,7 @@ impl AscentConfig {
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
    // const DELTA_FIRST_ATTR: &'static str = "delta_first";
    const ALLOW_NON_STRATIFIED_AGG_ATTR: &'static str = "allow_non_stratified_agg";
+   const CUSTOM_RETURN_CONDITIONS_ATTR: &'static str = "custom_return_conditions";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
       let include_rule_times = attrs
@@ -64,10 +66,17 @@ impl AscentConfig {
          .map(|attr| attr.meta.require_path_only())
          .transpose()?;
 
+      let custom_return_conditions = attrs
+         .iter()
+         .find(|attr| attr.meta.path().is_ident(Self::CUSTOM_RETURN_CONDITIONS_ATTR))
+         .map(|attr| attr.meta.require_path_only())
+         .transpose()?
+         .is_some();
       let recognized_attrs = [
          Self::MEASURE_RULE_TIMES_ATTR,
          Self::GENERATE_RUN_TIMEOUT_ATTR,
          Self::INTER_RULE_PARALLELISM_ATTR,
+         Self::CUSTOM_RETURN_CONDITIONS_ATTR,
          REL_DS_ATTR,
          // Self::DELTA_FIRST_ATTR,
          Self::ALLOW_NON_STRATIFIED_AGG_ATTR,
@@ -91,6 +100,7 @@ impl AscentConfig {
          attrs: attrs.clone(),
          include_rule_times,
          generate_run_partial,
+         custom_return_conditions,
          default_ds,
          // delta_first: delta_first.is_some(),
          allow_non_stratified_agg: allow_non_stratified_agg.is_some(),
