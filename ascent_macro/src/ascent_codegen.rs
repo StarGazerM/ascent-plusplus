@@ -210,6 +210,22 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          }
       }
    };
+   let run_customized = if mir.config.custom_return_conditions {
+      quote! {
+         #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
+         #[doc = "Runs the Ascent program to a fixed point or until the timeout is reached. In case of a timeout returns false"]
+         pub fn run_customized<T>(&mut self, extra_arg: T) -> bool {
+            __before_run!();
+            #run_usings
+            self.update_indices_priv();
+            let _self = self;
+            #(#sccs_compiled)*
+            true
+         }
+      }
+   } else {
+      quote! {}
+   };
    let run_code = if !is_ascent_run {
       quote! {}
    } else {
@@ -280,6 +296,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          #run_func
 
          #run_timeout_func
+         #run_customized
          // TODO remove pub update_indices at some point
          #[allow(noop_method_call, suspicious_double_ref_op)]
          fn update_indices_priv(&mut self) {

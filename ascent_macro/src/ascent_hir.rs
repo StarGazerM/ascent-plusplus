@@ -21,6 +21,7 @@ pub(crate) struct AscentConfig {
    pub attrs: Vec<Attribute>,
    pub include_rule_times: bool,
    pub generate_run_partial: bool,
+   pub custom_return_conditions: bool,
    pub inter_rule_parallelism: bool,
    pub default_ds: DsAttributeContents,
 }
@@ -29,6 +30,7 @@ impl AscentConfig {
    const MEASURE_RULE_TIMES_ATTR: &'static str = "measure_rule_times";
    const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
+   const CUSTOM_RETURN_CONDITIONS_ATTR: &'static str = "custom_return_conditions";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
       let include_rule_times = attrs
@@ -48,11 +50,17 @@ impl AscentConfig {
          .find(|attr| attr.meta.path().is_ident(Self::INTER_RULE_PARALLELISM_ATTR))
          .map(|attr| attr.meta.require_path_only())
          .transpose()?;
-
+      let custom_return_conditions = attrs
+         .iter()
+         .find(|attr| attr.meta.path().is_ident(Self::CUSTOM_RETURN_CONDITIONS_ATTR))
+         .map(|attr| attr.meta.require_path_only())
+         .transpose()?
+         .is_some();
       let recognized_attrs = [
          Self::MEASURE_RULE_TIMES_ATTR,
          Self::GENERATE_RUN_TIMEOUT_ATTR,
          Self::INTER_RULE_PARALLELISM_ATTR,
+         Self::CUSTOM_RETURN_CONDITIONS_ATTR,
          REL_DS_ATTR,
       ];
       for attr in attrs.iter() {
@@ -74,6 +82,7 @@ impl AscentConfig {
          attrs,
          include_rule_times,
          generate_run_partial,
+         custom_return_conditions,
          default_ds,
       })
    }
