@@ -39,3 +39,29 @@ pub fn slog(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
    }
 }
 
+#[proc_macro]
+pub fn slog_par(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+   let res = compile::compile(input.into(), true);
+
+   match res {
+      Ok(res) => {
+         res.into()
+      }
+      Err(err) => {
+         let err = err.to_compile_error();
+         err.into()
+      }
+   }
+}
+
+
+#[proc_macro]
+pub fn local_db(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+   compile::share_db_impl(input, false)
+}
+
+
+#[proc_macro]
+pub fn share_db(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+   compile::share_db_impl(input, true)
+}

@@ -6,7 +6,7 @@ use itertools::Either;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Ident, Result};
+use syn::{Ident, Result, braced, parse2};
 
 use crate::syntax::{
    ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule, SlogRuleBodyItem,
@@ -722,4 +722,87 @@ fn remove_nested_union_clause(program: &SlogProgram) -> SlogProgram {
       }
    }
    SlogProgram { meta: program.meta.clone(), lines: new_lines }
+}
+
+struct ShareDbInput {
+   db_name: Ident,
+   content: Vec<SlogRelationDecl>,
+}
+
+impl syn::parse::Parse for ShareDbInput {
+   fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+      let db_name = input.parse::<Ident>()?;
+      let _ = input.parse::<syn::Token![,]>()?;
+      let content;
+      let _braced = braced!(content in input);
+      // let content = content.parse_terminated(SlogRelationDecl::parse, syn::Token![,])?;
+      let mut decls = vec![];
+      while !content.is_empty() {
+         decls.push(content.parse::<SlogRelationDecl>()?);
+      }
+      Ok(ShareDbInput { db_name, content: decls })
+   }
+}
+
+pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_macro::TokenStream {
+   let ShareDbInput { db_name, content } = parse2(input.into()).unwrap();
+   let rel_decls = content.iter().map(|rel_decl| {
+      let rel_name = rel_decl.rel_name.clone();
+      let arg_types = rel_decl
+         .arg_types
+         .iter()
+         .map(|arg_type| {
+            quote! {
+               #arg_type
+            }
+         })
+         .collect::<Vec<_>>();
+      quote! {
+         (define #rel_name #(#arg_types)*)
+      }
+   });
+   let rel_decls_par = rel_decls.clone();
+   let pipe_ident = Ident::new(&format!("pipe_{}", db_name), db_name.span());
+   let rel_name_assigns = content
+      .iter()
+      .map(|rel_decl| {
+         let rel_name = rel_decl.rel_name.clone();
+         quote_spanned! { rel_decl.rel_name.span() =>
+            $to.#rel_name = $from.#rel_name;
+         }
+      })
+      .collect::<Vec<_>>();
+   let export_code = if local_scope {
+      quote! {
+         #[macro_export]
+      }
+   } else {
+      quote! {}
+   };
+   quote! {
+      #export_code
+      macro_rules! #db_name {
+         ($name:ident, { $($x:tt)* }) => {
+             slog! {
+                 (struct $name)
+                 #(#rel_decls)*
+                 $($x)*
+             }
+         };
+         ($name:ident, par, { $($x:tt)* }) => {
+            slog_par! {
+                (struct $name)
+                #(#rel_decls_par)*
+                $($x)*
+            }
+        };
+     }
+     #export_code
+     macro_rules! #pipe_ident {
+        ($from:ident, $to:ident) => {
+            #(#rel_name_assigns)*
+        };
+     }
+   }
+   .into()
 }

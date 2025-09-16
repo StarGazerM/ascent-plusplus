@@ -250,18 +250,6 @@ fn test_rewrite_clause_compile() {  // this test is not correct
    write_to_scratchpad(tokens, quote! {}, false);
 }
 
-// #[test]
-// fn test_redundant_index() {
-//    let tokens = quote! {
-//       (struct Foobar)
-//       (define foo usize usize)
-//       (define bar usize usize)
-//       (define foobar sexpr sexpr)
-//    };
-// }
-
-
-
 // a test helper function to write slog to scratchpad
 fn write_to_scratchpad(
    tokens: TokenStream, prefix: TokenStream, is_parallel: bool,

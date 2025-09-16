@@ -135,3 +135,28 @@ fn test_aggregator() {
    println!("{:?}", prog.foo);
    println!("{:?}", prog.bar);
 }
+
+#[test]
+fn test_pipe() {
+   local_db!(foobar_db, {
+      (define foo usize)
+      (define bar usize)
+   });
+   
+   use slog_eq_theory::eq_theory::eq_theory as theory_rules;
+   
+   foobar_db!(Foobar1, {
+      (foo 1)
+      (bar 2)
+   });
+   
+   foobar_db!(Foobar2, {
+      [(foo x) <-- (bar x)]
+   });
+   let mut from = Foobar1::default();
+   from.run();
+   let mut to = Foobar2::default();
+   pipe_foobar_db!(from, to);
+   println!("{:?}", to.foo);
+   println!("{:?}", to.bar);
+}
