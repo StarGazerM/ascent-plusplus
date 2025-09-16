@@ -5,7 +5,6 @@ prelude!();
 
 #[test]
 fn test_nested_fact() {
-   use slog_eq_theory::eq_theory::eq_theory as theory_rules;
    slog! {
       (struct PathLength)
       (define empty usize)
@@ -14,8 +13,6 @@ fn test_nested_fact() {
       (define do_length sexpr)
       (define input sexpr)
       (define output usize)
-
-      // ,(include_source!(theory_rules, __unify_ind_common_total, __unify_ind_common_delta );)
 
       (input (path 1 (path 2 (path 3 ?(nil 0)))))
 
@@ -39,9 +36,11 @@ fn test_nested_fact() {
 
 #[test]
 fn test_eclass() {
-   use slog_eq_theory::eq_theory::eq_theory as theory_rules;
+   use slog_theory::eq_theory::eq_theory as theory_rules_eclass;
+   use ascent::{delta, total};
    slog! {
       (struct EClassTest)
+      (theory (eclass usize unify_eclass ascent_byods_rels::eqrel))
 
       (define foo usize)
       (define bar usize)
@@ -49,7 +48,7 @@ fn test_eclass() {
       (define res eclass)
 
       (foobar (foo 1) (bar 1))
-      [(union foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+      [(unify_eclass foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
       // (rewrite! (foo x) (bar x))
 
       [(res x) <-- (foobar x y)
@@ -67,15 +66,12 @@ fn test_eclass() {
 
 #[test]
 fn test_foo_bar() {
-   use slog_eq_theory::eq_theory::eq_theory as theory_rules;
 
    slog! {
       (struct Foobar)
       (define foo usize usize)
       (define bar usize usize)
       (define foobar sexpr sexpr)
-
-      // ,(include_source!(theory_rules, __unify_ind_common_total, __unify_ind_common_delta);)
 
       [(foobar idf (bar x y)) <-- (= idf (foo x y)) (bar x y)]
    }
@@ -90,7 +86,6 @@ fn test_foo_bar() {
 
 #[test]
 fn test_ast() {
-   use slog_eq_theory::eq_theory::eq_theory as theory_rules;
 
    slog! {
       (struct AST)
@@ -115,7 +110,6 @@ fn test_ast() {
 
 #[test]
 fn test_aggregator() {
-   use slog_eq_theory::eq_theory::eq_theory as theory_rules;
 
    slog! {
       (struct AggregatorTest)
@@ -142,9 +136,7 @@ fn test_pipe() {
       (define foo usize)
       (define bar usize)
    });
-   
-   use slog_eq_theory::eq_theory::eq_theory as theory_rules;
-   
+
    foobar_db!(Foobar1, {
       (foo 1)
       (bar 2)
@@ -159,4 +151,18 @@ fn test_pipe() {
    pipe_foobar_db!(from, to);
    println!("{:?}", to.foo);
    println!("{:?}", to.bar);
+}
+
+#[test]
+fn tc_reordering() {
+   use slog_utils::id_vec;
+   slog! {
+      (struct TcReordering)
+      (define tc usize usize)
+      [(tc x y) <-- Δ (tc x y) (tc y z)]
+   }
+   let mut prog = TcReordering::default();
+   prog.tc = id_vec!(calc_id, [(1, 2), (1, 3), (2, 3), (3, 4)]);
+   prog.run();
+   println!("{:?}", prog.tc);
 }

@@ -5,7 +5,7 @@ version.workspace = true
 
 [dependencies]
 slog = { path = "../slog" }
-slog_eq_theory = { path = "../slog_eq_theory" }
+slog_theory = { path = "../slog_theory" }
 slog_utils = { path = "../slog_utils" }
 ascent = { path = "../ascent" }
 ascent-byods-rels = { path = "../byods/ascent-byods-rels" }

@@ -18,7 +18,7 @@ macro_magic = { version = "*", features = ["proc_support"] }
 rand = "0.9.0"
 ascent = { path = "../ascent"}
 ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
-slog_eq_theory = { path = "../slog_eq_theory" }
+slog_theory = { path = "../slog_theory" }
 slog_utils = { path = "../slog_utils" }
 
 [lib]
@@ -26,7 +26,7 @@ proc-macro = true
 
 [dev-dependencies]
 ascent = { path = "../ascent"}
-# slog_eq_theory = { path = "../slog_eq_theory" }
+# slog_theory = { path = "../slog_theory" }
 
 [features]
 default = ["par"]

@@ -22,3 +22,25 @@ where N: Clone
 }
 
 pub use usize as eclass_id;
+
+// WARN: Generated from Gemini, do not trust this macro
+#[macro_export]
+macro_rules! id_vec {
+    // ## Macro Matcher ##
+    // It matches the store expression, a comma, and then the list of tuples.
+    ( $calc_id:ident, [ $( ( $($fields:expr),* ) ),* $(,)? ] ) => {
+        // ## Macro Expansion ##
+        // It expands into a `vec!` literal.
+        vec![
+            // The `$()*` block repeats for each tuple in the input.
+            $(
+                // For each tuple, it generates a new, larger tuple:
+                // ( id_from_calc_id, original_field_1, original_field_2, ... )
+                (
+                    $($fields,)* // Splice in the original fields
+                    $calc_id( &( $($fields),* ) ), // Call calc_id on the original tuple
+                )
+            ),*
+        ]
+    };
+}

@@ -225,7 +225,11 @@ fn ascent_source_impl(input: proc_macro2::TokenStream) -> Result<proc_macro2::To
                #ascent_code
                $($after)*
             }
-         }
+         };
+         ( (#($#caps:ident),*), {$($cb: tt)*}, {$($after: tt)*}) => {
+            #ascent_code
+            $($after)*
+         };
       }
       pub use #macro_name as #name;
    })
@@ -275,3 +279,24 @@ pub(crate) fn ascent_impl(input: proc_macro2::TokenStream, kind: AscentMacroKind
 
    Ok(code)
 }
+
+
+#[proc_macro]
+pub fn delta(input: TokenStream) -> TokenStream {
+   // parse an relation ident constuct a ident with mangled __{}_ind_common_delta
+   let rel_ident = syn::parse2::<Ident>(input.into()).unwrap();
+   let delta_ident = Ident::new(&format!("__{}_ind_common_delta", rel_ident), rel_ident.span());
+   quote_spanned! {rel_ident.span()=>
+      #delta_ident
+   }.into()
+}
+
+#[proc_macro]
+pub fn total(input: TokenStream) -> TokenStream {
+   let rel_ident = syn::parse2::<Ident>(input.into()).unwrap();
+   let total_ident = Ident::new(&format!("__{}_ind_common_total", rel_ident), rel_ident.span());
+   quote_spanned! {rel_ident.span()=>
+      #total_ident
+   }.into()
+}
+

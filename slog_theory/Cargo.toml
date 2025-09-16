@@ -1,5 +1,5 @@
 [package]
-name = "slog_eq_theory"
+name = "slog_theory"
 edition = "2024"
 version.workspace = true
 

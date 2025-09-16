@@ -6,8 +6,7 @@ use itertools::Either;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, Token, braced, bracketed, parenthesized};
-
+use syn::{braced, bracketed, parenthesized, Expr, Ident, Path, Token, Type};
 
 // keywords
 pub mod kw_slog {
@@ -20,6 +19,15 @@ pub mod kw_slog {
    syn::custom_keyword!(define);
    syn::custom_keyword!(rewrite);
    syn::custom_keyword!(union);
+   syn::custom_keyword!(Δ);
+   syn::custom_keyword!(theory);
+
+   // for fun
+   syn::custom_keyword!(若);
+   syn::custom_keyword!(则);
+   syn::custom_keyword!(且);
+   syn::custom_keyword!(亦);
+   syn::custom_keyword!(是矣);
 }
 
 /* #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -217,8 +225,7 @@ impl Parse for SlogRuleHeadItem {
          if content.peek(kw_slog::union) {
             let union_clause = input.parse::<SlogUnionClause>()?;
             Ok(SlogRuleHeadItem::UnionClause(union_clause))
-         }
-         else {
+         } else {
             let clause = input.parse::<SlogSExprClause>()?;
             Ok(SlogRuleHeadItem::SlogSExprClause(clause))
          }
@@ -228,11 +235,11 @@ impl Parse for SlogRuleHeadItem {
    }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct SlogRule {
    pub heads: Vec<SlogRuleHeadItem>,
    pub body: Vec<SlogRuleBodyItem>,
+   pub delta_first: Option<kw_slog::Δ>,
 }
 
 impl Parse for SlogRule {
@@ -246,24 +253,26 @@ impl Parse for SlogRule {
          }
          let _arrow = content.parse::<Token![<-]>()?;
          let _ = content.parse::<Token![-]>()?;
+         let delta_first = if content.peek(kw_slog::Δ) { Some(content.parse::<kw_slog::Δ>()?) } else { None };
          let mut body = Vec::new();
          while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             body.push(content.parse::<SlogRuleBodyItem>()?);
          }
-         Ok(SlogRule { heads, body })
+         Ok(SlogRule { heads, body, delta_first })
       } else {
          // right arrow, reverse the order of the body and heads
          let mut body = Vec::new();
          while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             body.push(content.parse::<SlogRuleBodyItem>()?);
          }
+         let delta_first = if content.peek(kw_slog::Δ) { Some(content.parse::<kw_slog::Δ>()?) } else { None };
          let _arrow = content.parse::<Token![-]>()?;
          let _ = content.parse::<Token![->]>()?;
          let mut heads = Vec::new();
          while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             heads.push(content.parse::<SlogRuleHeadItem>()?);
          }
-         Ok(SlogRule { heads, body })
+         Ok(SlogRule { heads, body, delta_first })
       }
    }
 }
@@ -344,7 +353,11 @@ impl Parse for SlogProgramLine {
             });
             body.push(SlogRuleBodyItem::SlogSExprClause(lhs_sexpr));
             body.push(SlogRuleBodyItem::SlogSExprClause(rhs_sexpr));
-            Ok(SlogProgramLine::Rule(SlogRule { heads: vec![head], body }))
+            Ok(SlogProgramLine::Rule(SlogRule {
+               heads: vec![head],
+               body,
+               delta_first: Some(kw_slog::Δ(_rewrite.span)),
+            }))
          } else {
             // parse the fact
             let fact = input.parse::<SlogSExprClause>()?;
@@ -364,6 +377,74 @@ impl Parse for SlogProgramLine {
          let fact = input.parse::<SlogSExprClause>()?;
          Ok(SlogProgramLine::Fact(fact))
       }
+   }
+}
+
+#[derive(Debug, Clone)]
+pub struct SlogTheoryDecl {
+   pub name: Ident,
+   pub ty: syn::Type,
+   pub unify_rel: Ident,
+   pub ds: Path,
+   pub opt_args: Vec<Expr>, // for hygenic macros
+}
+
+impl Parse for SlogTheoryDecl {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      let content;
+      let _ = parenthesized!(content in input);
+      let name = content.parse::<Ident>()?;
+      let ty = content.parse::<syn::Type>()?;
+      let unify_rel = content.parse::<Ident>()?;
+      let ds = content.parse::<Path>()?;
+      let mut opt_args = Vec::new();
+      while !content.is_empty() {
+         opt_args.push(content.parse::<Expr>()?);
+      }
+      Ok(SlogTheoryDecl { name, ty, unify_rel, ds, opt_args })
+   }
+}
+
+
+#[derive(Debug, Clone)]
+pub struct SlogTheory {
+   pub _theory: kw_slog::theory,
+   pub names: Vec<Ident>,
+   pub uses: Vec<SlogTheoryDecl>,
+}
+
+impl SlogTheory {
+
+   pub fn get_unify_rel_by_type(&self, th_type: &Type) -> Ident {
+      for u in self.uses.iter() {
+         if u.ty == *th_type {
+            return u.unify_rel.clone();
+         }
+      }
+      panic!("unify rel not found for type {:?}", th_type);
+   }
+
+   pub fn get_theory_type_by_rel(&self, rel_name: &Ident) -> Option<SlogTheoryDecl> {
+      for u in self.uses.iter() {
+         if u.unify_rel == *rel_name {
+            return Some(u.clone());
+         }
+      }
+      None
+   }
+}
+
+impl Parse for SlogTheory {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      let content;
+      let _ = parenthesized!(content in input);
+      let _theory = content.parse::<kw_slog::theory>()?;
+      let mut uses = Vec::new();
+      while !content.is_empty() {
+         uses.push(content.parse::<SlogTheoryDecl>()?);
+      }
+      let names = uses.iter().map(|u| u.name.clone()).collect();
+      Ok(SlogTheory { _theory, names, uses })
    }
 }
 
@@ -389,6 +470,7 @@ impl Parse for SlogMeta {
 #[derive(Debug, Clone)]
 pub struct SlogProgram {
    pub meta: SlogMeta,
+   pub theory: SlogTheory,
    pub lines: Vec<SlogProgramLine>,
 }
 
@@ -396,10 +478,20 @@ impl Parse for SlogProgram {
    fn parse(input: ParseStream) -> syn::Result<Self> {
       // search to check if <-- is present
       let meta = input.parse::<SlogMeta>()?;
+      // fork the input, and peek see if it is a theory
+      let input_fork = input.fork();
+      let forked_content;
+      let _ = parenthesized!(forked_content in input_fork);
+      let theory = if forked_content.peek(kw_slog::theory) {
+         input.parse::<SlogTheory>()?
+      } else {
+         SlogTheory { _theory: kw_slog::theory(meta._struct.span), names: Vec::new(), uses: Vec::new() }
+      };
+
       let mut lines = Vec::new();
       while !input.is_empty() {
          lines.push(input.parse::<SlogProgramLine>()?);
       }
-      Ok(SlogProgram { meta, lines })
+      Ok(SlogProgram { meta, theory, lines })
    }
 }

@@ -307,8 +307,8 @@ pub enum CEqRelIndCommon<T: Clone + Hash + Eq> {
 
 #[derive(Clone)]
 pub struct EqRelPair<T: Clone + Hash + Eq> {
-   pub(crate) old: EqRel<T>,
-   pub(crate) combined: EqRel<T>,
+   pub old: EqRel<T>,
+   pub combined: EqRel<T>,
 }
 
 impl<T: Clone + Hash + Eq> Default for EqRelPair<T> {
@@ -318,25 +318,25 @@ impl<T: Clone + Hash + Eq> Default for EqRelPair<T> {
 impl<T: Clone + Hash + Eq> Freezable for CEqRelIndCommon<T> {}
 
 impl<T: Clone + Hash + Eq> CEqRelIndCommon<T> {
-   fn unwrap_frozen(&self) -> &EqRelPair<T> {
+   pub fn unwrap_frozen(&self) -> &EqRelPair<T> {
       match self {
          CEqRelIndCommon::Frozen(old) => old,
          CEqRelIndCommon::Unfrozen(_) => panic!("unwrap_frozen() called on Unfrozen"),
       }
    }
-   fn unwrap_mut_frozen(&mut self) -> &mut EqRelPair<T> {
+   pub fn unwrap_mut_frozen(&mut self) -> &mut EqRelPair<T> {
       match self {
          CEqRelIndCommon::Frozen(old) => old,
          CEqRelIndCommon::Unfrozen(_) => panic!("unwrap_mut_frozen() called on Unfrozen"),
       }
    }
-   fn unwrap_mut_unfrozen(&mut self) -> &mut EqRel<T> {
+   pub fn unwrap_mut_unfrozen(&mut self) -> &mut EqRel<T> {
       match self {
          CEqRelIndCommon::Unfrozen(uf) => uf.get_mut().unwrap(),
          CEqRelIndCommon::Frozen(_) => panic!("unwrap_mut_unfrozen called on Frozen"),
       }
    }
-   fn unwrap_unfrozen(&self) -> &Mutex<EqRel<T>> {
+   pub fn unwrap_unfrozen(&self) -> &Mutex<EqRel<T>> {
       match self {
          CEqRelIndCommon::Unfrozen(uf) => uf,
          CEqRelIndCommon::Frozen(_) => panic!("unwrap_unfrozen called on Frozen"),
