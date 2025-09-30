@@ -317,6 +317,14 @@ impl CondClause {
       }
    }
 
+   pub fn used_vars(&self) -> Vec<Ident> {
+      match self {
+         CondClause::IfLet(cl) => expr_get_vars(&cl.exp),
+         CondClause::If(cl) => expr_get_vars(&cl.cond),
+         CondClause::Let(cl) => expr_get_vars(&cl.exp),
+      }
+   }
+
    /// returns the expression associated with the CondClause.
    /// Useful for determining clause dependencies
    pub fn expr(&self) -> &Expr {

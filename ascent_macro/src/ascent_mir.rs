@@ -117,23 +117,27 @@ impl MirBodyItem {
       }
    }
 
-   pub fn defined_vars(&self) -> Vec<Ident> {
+   pub fn used_vars(&self) -> Vec<Ident> {
       match self {
          MirBodyItem::Clause(cl) => {
-            cl.cond_clauses.iter().flat_map(|cc| cc.bound_vars()).collect()
+            let mut used_vars = vec![];
+            for arg in cl.args.iter() {
+               used_vars.extend(expr_get_vars(arg));
+            }
+            for cond_cl in cl.cond_clauses.iter() {
+               used_vars.extend(cond_cl.used_vars());
+            }
+            used_vars
          },
-         MirBodyItem::Generator(gen) => pattern_get_vars(&gen.pattern),
-         MirBodyItem::Cond(cond) => cond.bound_vars(),
-         MirBodyItem::Agg(agg) => pattern_get_vars(&agg.pat),
-      }
-   }
-
-   pub fn joined_vars(&self) -> Vec<Ident> {
-      match self {
-         MirBodyItem::Clause(cl) => {
-            cl.args.iter().filter_map(expr_to_ident).collect()
+         MirBodyItem::Generator(gen) => expr_get_vars(&gen.expr),
+         MirBodyItem::Cond(cond) => cond.used_vars(),
+         MirBodyItem::Agg(agg) => {
+            let mut used_vars = vec![];
+            for arg in agg.rel_args.iter() {
+               used_vars.extend(expr_get_vars(arg));
+            }
+            used_vars
          },
-         _ => vec![],
       }
    }
 }
@@ -297,18 +301,10 @@ fn mir_relation_to_ir_relation(relation: &MirRelation) -> IrRelation {
 }
 
 // reorder a rule:
-// 1. construct a join graph of all clauses
-//    - the nodes are the clauses, the edges are variable 
-//    - if a clause and another clause share bounded variables, there is an edge between them
-//    - the weight of the edge is the number of shared bounded variables
-// 2. start from the clause with delta, set the next clause as the one with the highest weight
-// 3. if no next clause, set the start as unselected clause appeared first in original rule
-// 4. repeat 2 and 3 until all clauses are set
-// 5. construct the new rule
 fn reorder_mir_rule(rule: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> {
    let need_reorder = if let Some(join_strategy) = &rule.join_strategy {
       if join_strategy.strategy == Ident::new("heuristic_reordering", Span::call_site()) {
-         eprintln!("INFO: reorder rule {} ", mir_rule_summary(rule));
+         // eprintln!("INFO: reorder rule {} ", mir_rule_summary(rule));
          true
       } else {
          false
@@ -319,97 +315,103 @@ fn reorder_mir_rule(rule: &MirRule) -> syn::Result<(MirRule, Vec<MirRelation>)> 
    if !need_reorder {
       return Ok((rule.clone(), vec![]));
    }
-   let mut new_body_items = vec![];
-   let start_idx = rule.simple_join_start_index.unwrap_or(0);
-   let mut join_graph = DiGraphMap::<_, usize>::new();
-   for (i, bitem) in rule.body_items.iter().enumerate() {
-      join_graph.add_node(i);
-      let bitem_joined_vars = bitem.joined_vars();
-      let bitem_defined_vars = bitem.defined_vars();
-      // if defined_var exists, add from all nodes after it to it
-      if !bitem_defined_vars.is_empty() {
-         for after_i in i + 1..rule.body_items.len() {
-            join_graph.add_edge(i, after_i, 1);
-         }
-      }
-      for (j, bitem2) in rule.body_items.iter().enumerate() {
-         if i == j {
-            continue;
-         }
-         let bitem2_joined_vars = bitem2.joined_vars();
-         // let bitem2_defined_vars = bitem2.defined_vars();
-         for var_ident in bitem2_joined_vars.iter() {
-            if bitem_joined_vars.contains(var_ident)  {
-               // check if edge (i, j) exists
-               join_graph.add_edge(i, j, join_graph.edge_weight(i, j).unwrap_or(&0) + 1);
-            }
-         }
-      }
-   }
-   let mut selected_idxs = vec![];
-   for i in 0..start_idx {
-      selected_idxs.push(i);
-      new_body_items.push(rule.body_items[i].clone());
-   }
-   // initialize unselected_idxs to delta clause, (if many, first one)
-   let mut new_start_idx = start_idx;
-   let mut has_delta = false;
-   for (i, bitem) in rule.body_items.iter().enumerate() {
-      match bitem {
-         MirBodyItem::Clause(bcl) if bcl.rel.version == MirRelationVersion::Delta => {
-            if i == start_idx {
-               // if the start_idx is a delta clause, no needreordering
-               return Ok((rule.clone(), vec![]));
-            }
-            new_start_idx = i;
-            has_delta = true;
-            // check if this is a simple relation: aka, all args are logical vars
-            break;
-         },
-         _ => {},
-      };
-   }
-   if !has_delta {
-      // if no delta, no reordering
+   
+   // find the delta clause
+   let delta_cls_idx = rule.body_items.iter().position(|bitem| matches!(bitem, MirBodyItem::Clause(bcl) if bcl.rel.version == MirRelationVersion::Delta));
+   if delta_cls_idx.is_none() {
       return Ok((rule.clone(), vec![]));
    }
-   selected_idxs.push(new_start_idx);
-
-   let mut unselected_idxs = (start_idx..rule.body_items.len()).collect_vec();
-   while !unselected_idxs.is_empty() {
-      new_body_items.push(rule.body_items[new_start_idx].clone());
-      // find and remove next_idx from unselected_idxs
-      if let Some(idx) = unselected_idxs.iter().position(|&idx| idx == new_start_idx) {
-         unselected_idxs.remove(idx);
-      } else {
-         return Err(syn::Error::new(Span::call_site(),
-            format!("start_idx {} next_idx {} not found in unselected_idxs {:?}, selected_idxs {:?}, rule: {}",
-               start_idx, new_start_idx, unselected_idxs, selected_idxs, mir_rule_summary(rule) )));
-      }
-      if unselected_idxs.is_empty() {
-         break;
-      }
-      // linearize the join graph
-      new_start_idx = if let Some((_, possible_next_idx, _)) = join_graph.edges(new_start_idx)
-         .filter(|(_, to, _)| unselected_idxs.contains(&to))
-         .max_by_key(|(_, _, weight)| *weight) {
-         possible_next_idx
-      } else {
-         unselected_idxs[0]
-      };
-      selected_idxs.push(new_start_idx);
+   // if delta clause is alread the first clause, return
+   if delta_cls_idx == Some(rule.simple_join_start_index.unwrap_or(0)) {
+      return Ok((rule.clone(), vec![]));
    }
-   // assert nothing is left in join_graph
-   assert!(rule.body_items.len() == new_body_items.len());
+   let delta_cls_idx = delta_cls_idx.unwrap();
+   let delta_clause = rule.body_items.get(delta_cls_idx).unwrap();
+   let delta_clause_bound_vars = delta_clause.bound_vars();
+   let delta_clause = match delta_clause {
+      MirBodyItem::Clause(bcl) => bcl,
+      _ => panic!("delta clause is not a clause"),
+   };
+   // check if the delta clause doesn't contains bounded variables
+   
+   // let mut clause_before_delta_idx: Vec<usize> = vec![];
+   let mut unselected_idx: Vec<usize> = (0..rule.body_items.len()).filter(|&i| i != delta_cls_idx).collect();
+   // loop over all args to see if it contains constants or unbound vars
+   for arg in delta_clause.args.iter() {
+      if let Some(_var) = expr_to_ident(arg) {
+         continue;
+      }
+      let vars = expr_get_vars(arg);
+      if vars.iter().any(|var| !delta_clause_bound_vars.contains(var)) {
+         // contains unbound vars, can't be reordered
+         eprintln!("WARNING: {} delta clause contains unbound vars, cannot be reordered", mir_rule_summary(rule));
+         return Ok((rule.clone(), vec![]));
+      }
+   }
 
+   let mut clause_after_delta_idx = vec![];
+   let mut grounded_vars = delta_clause_bound_vars.clone();
+   // reorder by search next connective clause in the rules
+   // if not found, pick any of those
+   while !unselected_idx.is_empty() {
+      let mut selected_idx = None;
+      let mut prev_joined_cnts = 0;
+      let mut cur_ground = vec![];
+      for i in unselected_idx.iter() {
+         let bitem = rule.body_items.get(*i).unwrap();
+         // populate possible new grounded vars
+         let mut self_vars = bitem.bound_vars();
+         self_vars.dedup();
+         let used_vars = bitem.used_vars();
+         // if any used var is not not grounded nor in self_vars, skip
+         if used_vars.iter().any(|var| !grounded_vars.contains(var) && !self_vars.contains(var)) {
+            continue;
+         }
+         // count joined vars
+         let cur_joined_cnts = used_vars.iter().filter(|var| grounded_vars.contains(var)).count();
+         if cur_joined_cnts > prev_joined_cnts || selected_idx.is_none() {
+            selected_idx = Some(*i);
+            prev_joined_cnts = cur_joined_cnts;
+            cur_ground = self_vars;
+         } else {
+            // less joined vars, skip
+            continue;
+         }
+      }
+      if selected_idx.is_none() {
+         eprintln!("WARNING: no clause can be reordered, may cause full scan");
+         return Ok((rule.clone(), vec![]));
+      }
+      let selected_idx = selected_idx.unwrap();
+      clause_after_delta_idx.push(selected_idx);
+      // delete selected_idx from unselected_idx
+      let pos = unselected_idx.iter().position(|&i| i == selected_idx);
+      if pos.is_none() {
+         panic!("selected_idx not found in unselected_idx");
+      }
+      unselected_idx.remove(pos.unwrap());
+
+      for var in cur_ground.iter() {
+         if !grounded_vars.contains(var) {
+            grounded_vars.push(var.clone());
+         }
+      }
+   }
+   let mut reordered_body_items: Vec<MirBodyItem> = vec![];
+   // for i in clause_before_delta_idx.iter() {
+   //    reordered_body_items.push(rule.body_items.get(*i).unwrap().clone());
+   // }
+   reordered_body_items.push(MirBodyItem::Clause(delta_clause.clone()));
+   for i in clause_after_delta_idx.iter() {
+      reordered_body_items.push(rule.body_items.get(*i).unwrap().clone());
+   }
    let reordered_rule = MirRule {
-      body_items: new_body_items,
+      body_items: reordered_body_items,
       head_clause: rule.head_clause.clone(),
       simple_join_start_index: rule.simple_join_start_index,
       reorderable: rule.reorderable,
       join_strategy: rule.join_strategy.clone(),
    };
-
    
    // reconstruct the rule from the original rule and the reordered rule
    let res = reselect_index(reordered_rule, rule);
@@ -555,6 +557,7 @@ fn reselect_index(rule: MirRule, fallback: &MirRule) -> syn::Result<(MirRule, Ve
       reorderable: rule.reorderable,
       join_strategy: rule.join_strategy.clone(),
    };
+   eprintln!("reordered_rule: {:?}", mir_rule_summary(&reordered_rule));
    Ok((reordered_rule, new_relations))
 }
 
