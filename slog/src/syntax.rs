@@ -4,7 +4,7 @@
 
 use itertools::Either;
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{quote, quote_spanned, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::{braced, bracketed, parenthesized, Expr, Ident, Path, Token, Type};
 
@@ -405,12 +405,37 @@ impl Parse for SlogTheoryDecl {
    }
 }
 
+impl ToTokens for SlogTheoryDecl {
+   fn to_tokens(&self, tokens: &mut TokenStream) {
+      let name = self.name.clone();
+      let ty = self.ty.clone();
+      let unify_rel = self.unify_rel.clone();
+      let ds = self.ds.clone();
+      let opt_args = self.opt_args.clone();
+      let code = quote_spanned! {name.span() =>
+         (#name #ty #unify_rel #ds #(#opt_args)*)
+      };
+      tokens.extend(code);
+   }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct SlogTheory {
    pub _theory: kw_slog::theory,
    pub names: Vec<Ident>,
    pub uses: Vec<SlogTheoryDecl>,
+}
+
+impl ToTokens for SlogTheory {
+   fn to_tokens(&self, tokens: &mut TokenStream) {
+      let uses = self.uses.clone();
+      let _theory = self._theory.clone();
+      let code = quote_spanned! {_theory.span =>
+         (#_theory #(#uses)*)
+      };
+      tokens.extend(code);
+   }
 }
 
 impl SlogTheory {

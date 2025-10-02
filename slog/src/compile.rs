@@ -6,11 +6,10 @@ use itertools::Either;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Ident, Result, Type, braced, parse2};
+use syn::{braced, parse2, Ident, Path, Result, Type};
 
 use crate::syntax::{
-   ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule, SlogRuleBodyItem,
-   SlogRuleHeadItem, SlogSExprClause, SlogTheory, SlogUnionClause,
+   kw_slog, ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule, SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause, SlogTheory, SlogUnionClause
 };
 use crate::util::new_ident;
 
@@ -818,13 +817,23 @@ fn remove_nested_union_clause(program: &SlogProgram) -> SlogProgram {
 
 struct ShareDbInput {
    db_name: Ident,
+   theory: SlogTheory,
    content: Vec<SlogRelationDecl>,
+   kont_macro: Path,
 }
 
 impl syn::parse::Parse for ShareDbInput {
    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
       let db_name = input.parse::<Ident>()?;
       let _ = input.parse::<syn::Token![,]>()?;
+      // peek if its paren
+      let theory = if input.peek(syn::token::Paren) {
+         let theory = input.parse::<SlogTheory>()?;
+         let _ = input.parse::<syn::Token![,]>()?;
+         theory
+      } else {
+         SlogTheory { _theory: kw_slog::theory(db_name.span()), names: vec![], uses: vec![] }
+      };
       let content;
       let _braced = braced!(content in input);
       // let content = content.parse_terminated(SlogRelationDecl::parse, syn::Token![,])?;
@@ -832,12 +841,21 @@ impl syn::parse::Parse for ShareDbInput {
       while !content.is_empty() {
          decls.push(content.parse::<SlogRelationDecl>()?);
       }
-      Ok(ShareDbInput { db_name, content: decls })
+      let _ = input.parse::<syn::Token![,]>()?;
+      let kont_macro = input.parse::<Path>()?;
+      Ok(ShareDbInput { db_name, theory, content: decls, kont_macro })
    }
 }
 
 pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_macro::TokenStream {
-   let ShareDbInput { db_name, content } = parse2(input.into()).unwrap();
+   let ShareDbInput { db_name, theory, content, kont_macro } = parse2(input.into()).unwrap();
+   let theory_code = if theory.uses.is_empty() {
+      quote! {}
+   } else {
+      quote! {
+         #theory
+      }
+   };
    let rel_decls = content.iter().map(|rel_decl| {
       let rel_name = rel_decl.rel_name.clone();
       let arg_types = rel_decl
@@ -852,7 +870,7 @@ pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_
       quote! {
          (define #rel_name #(#arg_types)*)
       }
-   });
+   }).collect::<Vec<_>>();
    let rel_decls_par = rel_decls.clone();
    let pipe_ident = Ident::new(&format!("pipe_{}", db_name), db_name.span());
    let rel_name_assigns = content
@@ -864,6 +882,7 @@ pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_
          }
       })
       .collect::<Vec<_>>();
+   // let  theory
    let export_code = if local_scope {
       quote! {
          #[macro_export]
@@ -875,18 +894,20 @@ pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_
       #export_code
       macro_rules! #db_name {
          ($name:ident, { $($x:tt)* }) => {
-             slog! {
-                 (struct $name)
+             #kont_macro!($name, {
+                 #theory_code
                  #(#rel_decls)*
-                 $($x)*
-             }
+             }, {
+                $($x)*
+             }, slog)
          };
          ($name:ident, par, { $($x:tt)* }) => {
-            slog_par! {
-                (struct $name)
+            #kont_macro!($name, {
+                #theory_code
                 #(#rel_decls_par)*
+            }, {
                 $($x)*
-            }
+            }, slog_par)
         };
      }
      #export_code

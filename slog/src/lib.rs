@@ -17,6 +17,7 @@ pub fn prelude(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
       use ascent_byods_rels::eqrel;
       use slog_utils::calc_id;
       use slog_utils::collect;
+      use slog_utils::slog_gen;
       // use slog_theory::canonicalize;
       // use slog_theory::unification_ds;
       // use slog_theory::theory_propagation;
