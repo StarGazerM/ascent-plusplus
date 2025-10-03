@@ -144,6 +144,7 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
          IrBodyItem::Cond(CondClause::IfLet(..)) => format!("if let ⋯"),
          IrBodyItem::Cond(CondClause::Let(..)) => format!("let ⋯"),
          IrBodyItem::Agg(agg) => format!("agg {}", agg.rel.ir_name()),
+         IrBodyItem::Magg(magg) => format!("magg {}", magg.rel.ir_name()),
       }
    }
    format!(
@@ -167,6 +168,7 @@ pub(crate) enum IrBodyItem {
    Generator(GeneratorNode),
    Cond(CondClause),
    Agg(IrAggClause),
+   Magg(IrMaggClause),
 }
 
 impl IrBodyItem {
@@ -174,6 +176,7 @@ impl IrBodyItem {
       match self {
          IrBodyItem::Clause(bcl) => Some(&bcl.rel),
          IrBodyItem::Agg(agg) => Some(&agg.rel),
+         IrBodyItem::Magg(magg) => Some(&magg.rel),
          IrBodyItem::Generator(_) | IrBodyItem::Cond(_) => None,
       }
    }
@@ -201,6 +204,15 @@ pub(crate) struct IrAggClause {
    pub bound_args: Vec<Ident>,
    pub rel: IrRelation,
    pub rel_args: Vec<Expr>,
+}
+
+#[derive(Clone)]
+pub(crate) struct IrMaggClause {
+   pub span: Span,
+   pub agged_var: Ident,
+   pub aggregator: Expr,
+   pub arg_exprs: Vec<Expr>,
+   pub rel: IrRelation,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
@@ -312,6 +324,7 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
          let rel = match bitem {
             IrBodyItem::Clause(bcl) => Some(&bcl.rel),
             IrBodyItem::Agg(agg) => Some(&agg.rel),
+            IrBodyItem::Magg(magg) => Some(&magg.rel),
             _ => None,
          };
          if let Some(rel) = rel {
@@ -473,6 +486,24 @@ pub(crate) fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> 
             };
             body_items.push(IrBodyItem::Agg(ir_agg_clause));
          },
+         BodyItemNode::Magg(ref magg) => {
+            extend_grounded_vars(&mut grounded_vars, vec![magg.agged_var.clone()])?;
+            // find the rel in program
+            let rel = prog.relations.iter().rev().find(|r| &magg.rel == &r.name);
+            if rel.is_none() {
+               return Err(Error::new(magg.rel.span(), format!("relation `{}` is not defined", magg.rel)));
+            }
+            let rel = rel.unwrap();
+            let ir_rel = IrRelation::new(RelationIdentity::from(rel), vec![]);
+            let ir_magg_clause = IrMaggClause {
+               span: magg.magg_kw.span,
+               agged_var: magg.agged_var.clone(),
+               aggregator: magg.aggregator.get_expr(),
+               arg_exprs: magg.arg_exprs.iter().cloned().collect_vec(),
+               rel: ir_rel,
+            };
+            body_items.push(IrBodyItem::Magg(ir_magg_clause));
+         }
          _ => panic!("unrecognized body item"),
       }
    }
@@ -558,3 +589,9 @@ pub(crate) fn prog_get_relation<'a>(
       None => Err(Error::new(name.span(), format!("relation `{}` is not defined", name))),
    }
 }
+
+// pub(crate) fn prog_get_relation_canonical<'a>(
+//    prog: &'a AscentProgram, name: &Ident
+// ) -> syn::Result<&'a RelationNode> {
+//    prog.relations.iter().rev().find(|r| name == &r.name)
+// }
