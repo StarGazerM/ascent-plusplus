@@ -49,6 +49,7 @@ mod kw {
       pub fn span(&self) -> Span { join_spans([self.0.span, self.1.span, self.2.span]) }
    }
    syn::custom_keyword!(agg);
+   syn::custom_keyword!(magg);
    syn::custom_keyword!(ident);
    syn::custom_keyword!(expr);
 
@@ -118,7 +119,7 @@ fn parse_generics_with_where_clause(input: ParseStream) -> Result<Generics> {
    Ok(res)
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub struct RelationNode {
    pub attrs: Vec<Attribute>,
    pub name: Ident,
@@ -161,6 +162,8 @@ pub enum BodyItemNode {
    Generator(GeneratorNode),
    #[peek(kw::agg, name = "aggregate clause")]
    Agg(AggClauseNode),
+   #[peek(kw::magg, name = "monotonic aggregate clause")]
+   Magg(MaggClauseNode),
    #[peek_with(peek_macro_invocation, name = "macro invocation")]
    MacroInvocation(syn::ExprMacro),
    #[peek(Ident, name = "body clause")]
@@ -317,6 +320,14 @@ impl CondClause {
       }
    }
 
+   pub fn used_vars(&self) -> Vec<Ident> {
+      match self {
+         CondClause::IfLet(cl) => expr_get_vars(&cl.exp),
+         CondClause::If(cl) => expr_get_vars(&cl.cond),
+         CondClause::Let(cl) => expr_get_vars(&cl.exp),
+      }
+   }
+
    /// returns the expression associated with the CondClause.
    /// Useful for determining clause dependencies
    pub fn expr(&self) -> &Expr {
@@ -464,9 +475,40 @@ impl AggregatorNode {
    }
 }
 
+#[derive(Clone, Parse)]
+pub struct MaggClauseNode {
+   pub magg_kw: kw::magg,
+   pub agged_var: Ident,
+   pub _eq_token: Token![=],
+   pub aggregator: AggregatorNode,
+   #[paren]
+   pub _agg_arg_paren: syn::token::Paren,
+   #[inside(_agg_arg_paren)]
+   #[call(Punctuated::parse_terminated)]
+   pub arg_exprs: Punctuated<Expr, Token![,]>,
+   pub _in_kw: Token![in],
+   pub rel: Ident
+}
+
+#[derive(Clone, Parse)]
+pub struct JoinStrategy {
+   pub _pound_token: Token![#],
+   #[bracket]
+   _strategy_bracket: syn::token::Bracket,
+   #[inside(_strategy_bracket)]
+   pub strategy: Ident,
+}
+
+impl ToString for JoinStrategy {
+   fn to_string(&self) -> String {
+      format!("#[{}]", self.strategy)
+   }
+}
+
 pub struct RuleNode {
    pub head_clauses: Punctuated<HeadItemNode, Token![,]>,
    pub body_items: Vec<BodyItemNode>, // Punctuated<BodyItemNode, Token![,]>,
+   pub join_strategy: Option<JoinStrategy>,
 }
 
 impl Parse for RuleNode {
@@ -481,12 +523,17 @@ impl Parse for RuleNode {
 
       if input.peek(Token![;]) {
          input.parse::<Token![;]>()?;
-         Ok(RuleNode { head_clauses, body_items: vec![] /*Punctuated::default()*/ })
+         Ok(RuleNode { head_clauses, body_items: vec![], join_strategy: None })
       } else {
          input.parse::<kw::LongLeftArrow>()?;
+         let join_strategy = if input.peek(Token![#]) {
+            Some(input.parse()?)
+         } else {
+            None
+         };
          let body_items = Punctuated::<BodyItemNode, Token![,]>::parse_separated_nonempty(input)?;
          input.parse::<Token![;]>()?;
-         Ok(RuleNode { head_clauses, body_items: body_items.into_iter().collect() })
+         Ok(RuleNode { head_clauses, body_items: body_items.into_iter().collect(), join_strategy })
       }
    }
 }
@@ -502,6 +549,7 @@ pub(crate) fn rule_node_summary(rule: &RuleNode) -> String {
          BodyItemNode::Disjunction(_) => todo!(),
          BodyItemNode::Cond(_cl) => format!("if_"),
          BodyItemNode::Agg(agg) => format!("agg {}", agg.rel),
+         BodyItemNode::Magg(magg) => format!("magg {}", magg.rel),
          BodyItemNode::Negation(neg) => format!("! {}", neg.rel),
          BodyItemNode::MacroInvocation(m) => format!("{:?}!(..)", m.mac.path),
       }
@@ -698,6 +746,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
          BodyItemNode::Clause(_) => vec![vec![bitem.clone()]],
          BodyItemNode::Cond(_) => vec![vec![bitem.clone()]],
          BodyItemNode::Agg(_) => vec![vec![bitem.clone()]],
+         BodyItemNode::Magg(_) => vec![vec![bitem.clone()]],
          BodyItemNode::Negation(_) => vec![vec![bitem.clone()]],
          BodyItemNode::Disjunction(d) => {
             let mut res = vec![];
@@ -732,7 +781,7 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
 
    let mut res = vec![];
    for conjunction in bitems_desugar(&rule.body_items) {
-      res.push(RuleNode { body_items: conjunction, head_clauses: rule.head_clauses.clone() })
+      res.push(RuleNode { body_items: conjunction, head_clauses: rule.head_clauses.clone(), join_strategy: rule.join_strategy.clone() })
    }
    res
 }
@@ -741,6 +790,7 @@ fn body_item_get_bound_vars(bi: &BodyItemNode) -> Vec<Ident> {
    match bi {
       BodyItemNode::Generator(gen) => pattern_get_vars(&gen.pattern),
       BodyItemNode::Agg(agg) => pattern_get_vars(&agg.pat),
+      BodyItemNode::Magg(magg) => vec![magg.agged_var.clone()],
       BodyItemNode::Clause(cl) => cl.args.iter().flat_map(|arg| arg.get_vars()).collect(),
       BodyItemNode::Negation(_cl) => vec![],
       BodyItemNode::Disjunction(disj) =>
@@ -754,6 +804,7 @@ fn body_item_visit_bound_vars_mut(bi: &mut BodyItemNode, visitor: &mut dyn FnMut
    match bi {
       BodyItemNode::Generator(gen) => pattern_visit_vars_mut(&mut gen.pattern, visitor),
       BodyItemNode::Agg(agg) => pattern_visit_vars_mut(&mut agg.pat, visitor),
+      BodyItemNode::Magg(magg) => visitor(&mut magg.agged_var),
       BodyItemNode::Clause(cl) =>
          for arg in cl.args.iter_mut() {
             match arg {
@@ -796,6 +847,14 @@ fn body_item_visit_exprs_free_vars_mut(
             visit(arg)
          }
          if let AggregatorNode::Expr(e) = &mut agg.aggregator {
+            visit(e)
+         }
+      },
+      BodyItemNode::Magg(magg) => {
+         for arg in magg.arg_exprs.iter_mut() {
+            visit(arg)
+         }
+         if let AggregatorNode::Expr(e) = &mut magg.aggregator {
             visit(e)
          }
       },
@@ -912,6 +971,7 @@ fn rule_desugar_pattern_args(rule: RuleNode) -> RuleNode {
          })
          .collect(),
       head_clauses: rule.head_clauses,
+      join_strategy: rule.join_strategy,
    }
 }
 
@@ -956,6 +1016,9 @@ fn rule_desugar_repeated_vars(mut rule: RuleNode) -> RuleNode {
          BodyItemNode::Agg(agg) =>
             for ident in pattern_get_vars(&agg.pat) {
                grounded_vars.entry(ident).or_insert(i);
+            },
+         BodyItemNode::Magg(magg) => {
+               grounded_vars.entry(magg.agged_var.clone()).or_insert(i);
             },
          BodyItemNode::Negation(_) => (),
          BodyItemNode::Disjunction(_) => panic!("unrecognized BodyItemNode variant"),
@@ -1113,7 +1176,7 @@ fn rule_expand_macro_invocations(rule: RuleNode, macros: &HashMap<Ident, &MacroD
       .pipe(punctuated_try_unwrap)?
       .pipe(flatten_punctuated);
 
-   Ok(RuleNode { body_items: new_body_items, head_clauses: new_head_items })
+   Ok(RuleNode { body_items: new_body_items, head_clauses: new_head_items, join_strategy: rule.join_strategy })
 }
 
 pub(crate) fn desugar_ascent_program(mut prog: AscentProgram) -> Result<AscentProgram> {

@@ -1,3 +1,4 @@
+#![allow(mismatched_lifetime_syntaxes)]
 use std::hash::{BuildHasherDefault, Hash};
 use std::iter::{FlatMap, Repeat, Zip};
 

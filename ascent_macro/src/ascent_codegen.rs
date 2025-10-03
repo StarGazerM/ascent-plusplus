@@ -1077,6 +1077,21 @@ fn compile_mir_rule_inner(
 
             }
          },
+         MirBodyItem::Magg(magg) => {
+            let agged_var = &magg.agged_var;
+            // generate comm_ind var name for rel
+            let ind_comm_var_name = rel_ind_common_var_name(&magg.rel.relation);
+            let ind_comm_delta_var_name = ir_relation_version_var_name(&ind_comm_var_name, MirRelationVersion::Delta);
+            let ind_comm_total_var_name = ir_relation_version_var_name(&ind_comm_var_name, MirRelationVersion::Total);
+
+            let agg_func = &magg.aggregator;
+            let arg_exprs = &magg.arg_exprs;
+            let _self = quote! { _self };
+            quote_spanned! {magg.span=>
+               let #agged_var = #agg_func(#ind_comm_delta_var_name, #ind_comm_total_var_name, #(#arg_exprs)* );
+               #next_loop
+            }
+         }
       }
    } else {
       quote! {
