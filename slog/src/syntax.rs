@@ -21,6 +21,7 @@ pub mod kw_slog {
    syn::custom_keyword!(union);
    syn::custom_keyword!(Δ);
    syn::custom_keyword!(theory);
+   syn::custom_keyword!(provenance);
 
    // for fun
    syn::custom_keyword!(若);
@@ -284,11 +285,29 @@ fn has_left_arrow(input: ParseStream) -> bool {
 }
 
 #[derive(Debug, Clone)]
+pub enum SlogType {
+   Theory(Ident),
+   Rust(syn::Type),
+}
+
+impl Parse for SlogType {
+   fn parse(input: ParseStream) -> syn::Result<Self> {
+      if input.peek(Token![@]) {
+         let _ = input.parse::<Token![@]>()?;
+         let id = input.parse::<Ident>()?;
+         Ok(SlogType::Theory(id))
+      } else {
+         let ty = input.parse::<syn::Type>()?;
+         Ok(SlogType::Rust(ty))
+      }
+   }
+}
+
+#[derive(Debug, Clone)]
 pub struct SlogRelationDecl {
    pub _relation: kw_slog::define,
    pub rel_name: Ident,
-   pub arg_types: Vec<syn::Type>,
-   pub is_eclass: bool,
+   pub arg_types: Vec<SlogType>,
 }
 
 impl Parse for SlogRelationDecl {
@@ -298,21 +317,11 @@ impl Parse for SlogRelationDecl {
       // let id = content.parse::<Ident>()?;
       let _relation = content.parse::<kw_slog::define>()?;
       let rel_name = content.parse::<Ident>()?;
-      let mut is_eclass = false;
       let mut arg_types = Vec::new();
       while !content.is_empty() {
-         if content.peek(kw_slog::sexpr) {
-            content.parse::<kw_slog::sexpr>()?;
-            arg_types.push(syn::parse2(quote! { usize })?);
-         } else if content.peek(kw_slog::eclass) {
-            content.parse::<kw_slog::eclass>()?;
-            arg_types.push(syn::parse2(quote! { eclass_id })?);
-            is_eclass = true;
-         } else {
-            arg_types.push(content.parse::<syn::Type>()?);
-         }
+         arg_types.push(content.parse::<SlogType>()?);
       }
-      Ok(SlogRelationDecl { _relation, rel_name, arg_types, is_eclass })
+      Ok(SlogRelationDecl { _relation, rel_name, arg_types })
    }
 }
 
@@ -386,6 +395,7 @@ pub struct SlogTheoryDecl {
    pub ty: syn::Type,
    pub unify_rel: Ident,
    pub ds: Path,
+   pub provenance: Option<kw_slog::provenance>,
    pub opt_args: Vec<Expr>, // for hygenic macros
 }
 
@@ -397,11 +407,12 @@ impl Parse for SlogTheoryDecl {
       let ty = content.parse::<syn::Type>()?;
       let unify_rel = content.parse::<Ident>()?;
       let ds = content.parse::<Path>()?;
+      let provenance = if content.peek(kw_slog::provenance) { Some(content.parse::<kw_slog::provenance>()?) } else { None };
       let mut opt_args = Vec::new();
       while !content.is_empty() {
          opt_args.push(content.parse::<Expr>()?);
       }
-      Ok(SlogTheoryDecl { name, ty, unify_rel, ds, opt_args })
+      Ok(SlogTheoryDecl { name, ty, unify_rel, ds, provenance, opt_args })
    }
 }
 
@@ -411,9 +422,10 @@ impl ToTokens for SlogTheoryDecl {
       let ty = self.ty.clone();
       let unify_rel = self.unify_rel.clone();
       let ds = self.ds.clone();
+      let provenance = self.provenance.clone();
       let opt_args = self.opt_args.clone();
       let code = quote_spanned! {name.span() =>
-         (#name #ty #unify_rel #ds #(#opt_args)*)
+         (#name #ty #unify_rel #ds #provenance #(#opt_args)*)
       };
       tokens.extend(code);
    }
@@ -440,19 +452,37 @@ impl ToTokens for SlogTheory {
 
 impl SlogTheory {
 
-   pub fn get_unify_rel_by_type(&self, th_type: &Type) -> Ident {
+   pub fn get_unify_rel_by_name(&self, th_name: &Ident) -> Option<Ident> {
       for u in self.uses.iter() {
-         if u.ty == *th_type {
-            return u.unify_rel.clone();
+         if u.name == *th_name {
+            return Some(u.unify_rel.clone());
          }
       }
-      panic!("unify rel not found for type {:?}", th_type);
+      None
    }
 
-   pub fn get_theory_type_by_rel(&self, rel_name: &Ident) -> Option<SlogTheoryDecl> {
+   pub fn get_theory_decl_by_name(&self, th_name: &Ident) -> Option<SlogTheoryDecl> {
+      for u in self.uses.iter() {
+         if u.name == *th_name {
+            return Some(u.clone());
+         }
+      }
+      None
+   }
+
+   pub fn get_theory_decl_by_rel_name(&self, rel_name: &Ident) -> Option<SlogTheoryDecl> {
       for u in self.uses.iter() {
          if u.unify_rel == *rel_name {
             return Some(u.clone());
+         }
+      }
+      None
+   }
+
+   pub fn get_theory_type_by_name(&self, th_name: &Ident) -> Option<Type> {
+      for u in self.uses.iter() {
+         if &u.name == th_name {
+            return Some(u.ty.clone());
          }
       }
       None

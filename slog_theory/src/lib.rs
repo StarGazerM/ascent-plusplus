@@ -1,3 +1,4 @@
+pub use paste::paste;
 
 pub mod eq_theory {
    use ascent::ascent_source;
@@ -34,12 +35,10 @@ pub mod eq_theory {
 
    #[macro_export]
    macro_rules! canonicalize_eclass {
-      ($h1:tt, $h2:tt, $input: tt) => {
-         $h1.combined.get_dominant_elem($input).unwrap_or($h2.combined.get_dominant_elem($input).unwrap_or($input))
-      };
-
-      ($h:tt, $input: tt) => {
-         $h.combined.get_dominant_elem($input).unwrap_or($input)
+      ($h1:tt, $input: tt) => {
+         paste! {
+            total!($h1).combined.get_dominant_elem($input).unwrap_or(delta!($h1).combined.get_dominant_elem($input).unwrap_or($input))
+         }
       };
    }
 }

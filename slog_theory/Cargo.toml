@@ -12,5 +12,6 @@ version.workspace = true
 # proc-macro2 = "1.0"
 # slog = { path = "../slog" }
 ascent = { path = "../ascent" }
+paste = "*"
 # ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
 # lazy_static = "1.4.0"

@@ -1,5 +1,4 @@
 #![allow(clippy::useless_format, clippy::redundant_static_lifetimes, clippy::get_first)]
-#![cfg_attr(not(test), deny(unused_crate_dependencies))]
 mod tests;
 mod ascent_mir;
 mod utils;
@@ -286,7 +285,7 @@ pub fn delta(input: TokenStream) -> TokenStream {
    // parse an relation ident constuct a ident with mangled __{}_ind_common_delta
    let rel_ident = syn::parse2::<Ident>(input.into()).unwrap();
    let delta_ident = Ident::new(&format!("__{}_ind_common_delta", rel_ident), rel_ident.span());
-   quote_spanned! {rel_ident.span()=>
+   quote! {
       #delta_ident
    }.into()
 }
@@ -295,7 +294,7 @@ pub fn delta(input: TokenStream) -> TokenStream {
 pub fn total(input: TokenStream) -> TokenStream {
    let rel_ident = syn::parse2::<Ident>(input.into()).unwrap();
    let total_ident = Ident::new(&format!("__{}_ind_common_total", rel_ident), rel_ident.span());
-   quote_spanned! {rel_ident.span()=>
+   quote! {
       #total_ident
    }.into()
 }

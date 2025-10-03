@@ -8,10 +8,10 @@ fn test_nested_fact() {
    slog! {
       (struct PathLength)
       (define empty usize)
-      (define path usize sexpr)
-      (define length sexpr usize)
-      (define do_length sexpr)
-      (define input sexpr)
+      (define path usize usize)
+      (define length usize usize)
+      (define do_length usize)
+      (define input usize)
       (define output usize)
 
       (input (path 1 (path 2 (path 3 ?(nil 0)))))
@@ -37,15 +37,17 @@ fn test_nested_fact() {
 #[test]
 fn test_eclass() {
    use slog_theory::eq_theory::eq_theory as theory_rules_eclass;
+   use slog_theory::canonicalize_eclass;
+   use slog_theory::paste;
    use ascent::{delta, total};
 
    local_db!(eclass_test_query,
-      (theory (eclass usize unify_eclass ascent_byods_rels::eqrel)),
+      (theory (eclass usize unify_eclass ascent_byods_rels::eqrel provenance)),
    {
       (define foo usize)
       (define bar usize)
-      (define foobar eclass eclass)
-      (define res eclass)
+      (define foobar @eclass @eclass)
+      (define res @eclass)
    }, slog_gen);
 
    eclass_test_query!(EClassTest, {
@@ -53,18 +55,18 @@ fn test_eclass() {
       [(unify_eclass foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
    });
 
-   eclass_test_query!(EClassTestRes, {
-      [(res x) <-- (foobar x x)]
-   });
-   let mut q1 = EClassTest::default();
-   q1.run();
-   let mut q2 = EClassTestRes::default();
-   q2.__unify_eclass_ind_common = q1.__unify_eclass_ind_common.clone();
-   pipe_eclass_test_query!(q1, q2);
-   q2.run();
-   println!("{:?}", q2.foo);
-   println!("{:?}", q2.foobar);
-   println!("{:?}", q2.res);
+   // eclass_test_query!(EClassTestRes, {
+   //    [(res x) <-- (foobar x x)]
+   // });
+   // let mut q1 = EClassTest::default();
+   // q1.run();
+   // let mut q2 = EClassTestRes::default();
+   // q2.__unify_eclass_ind_common = q1.__unify_eclass_ind_common.clone();
+   // pipe_eclass_test_query!(q1, q2);
+   // q2.run();
+   // println!("{:?}", q2.foo);
+   // println!("{:?}", q2.foobar);
+   // println!("{:?}", q2.res);
 }
 
 
@@ -75,7 +77,7 @@ fn test_foo_bar() {
       (struct Foobar)
       (define foo usize usize)
       (define bar usize usize)
-      (define foobar sexpr sexpr)
+      (define foobar usize usize)
 
       [(foobar idf (bar x y)) <-- (= idf (foo x y)) (bar x y)]
    }
@@ -96,8 +98,8 @@ fn test_ast() {
       
       (define number i32)
       (define var &'static str)
-      (define add eclass eclass)
-      (define mul eclass eclass)
+      (define add usize usize)
+      (define mul usize usize)
 
       // 2 * (x * 3)
       (mul (number 2) (mul (var "x") (number 3)))

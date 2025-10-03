@@ -6,10 +6,11 @@ use itertools::Either;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{braced, parse2, Ident, Path, Result, Type};
+use syn::{Ident, Path, Result, braced, parse2};
 
 use crate::syntax::{
-   kw_slog, ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule, SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause, SlogTheory, SlogUnionClause
+   ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule, SlogRuleBodyItem,
+   SlogRuleHeadItem, SlogSExprClause, SlogTheory, SlogType, SlogUnionClause, kw_slog,
 };
 use crate::util::new_ident;
 
@@ -22,51 +23,53 @@ fn compile_slog_meta(meta: &SlogMeta) -> Result<TokenStream> {
    })
 }
 
-fn type_is_theory(ty: &Type, theory: &SlogTheory) -> bool {
-   theory.names.iter().any(|name| name.to_string().contains(&ty.to_token_stream().to_string()))
-}
-
-fn canonicalize_theory(ty: &Type, theory: &SlogTheory) -> Option<Ident> {
-   if type_is_theory(ty, theory) {
-      Some(new_ident(&format!("canonicalize_{}", ty.to_token_stream().to_string())))
+fn canonicalize_theory(th_name: &Ident, theory: &SlogTheory) -> Option<Ident> {
+   if let Some(th) = theory.get_theory_decl_by_name(th_name){
+      Some(Ident::new(&format!("canonicalize_{}", th_name.to_token_stream().to_string()),th.unify_rel.span()))
    } else {
       None
    }
 }
 
-
 fn compile_slog_relation_decl(decl: &SlogRelationDecl, theory: &SlogTheory) -> Result<TokenStream> {
    let rel_name = decl.rel_name.clone();
    let arg_types = decl.arg_types.clone();
    // TODO: make prov track code more general
-   let prov_track_code = if decl.is_eclass {
+   let prov_track_code = {
       let id_name = new_ident(&format!("{}_idv", rel_name));
       let mut heads = vec![];
       let mut args = vec![];
       for (i, arg_ty) in arg_types.iter().enumerate() {
-         // track provenance
-         let arg_name = new_ident(&format!("arg_{}", i));
-         if format!("{}", quote! {#arg_ty}).contains("eclass") {
-            heads.push(quote_spanned! { arg_ty.span() =>
-               deriv(#id_name, #arg_name)
-            });
+         // track provenance for theory type if needed
+         if let SlogType::Theory(th_name) = arg_ty {
+            if let Some(th) = theory.get_theory_decl_by_name(th_name) {
+               if th.provenance.is_none() {
+                  continue;
+               }
+               let arg_name = new_ident(&format!("arg_{}", i));
+               heads.push(quote_spanned! { th_name.span() =>
+                  deriv(#id_name, #arg_name)
+               });
+               args.push(arg_name);
+            }
          }
-         args.push(arg_name);
       }
-      quote_spanned! { decl.rel_name.span() =>
-         #(#heads),* <--  #rel_name(#(#args),*, #id_name);
-      }
-   } else {
-      quote! {}
-   };
-   let arg_types_tokens = arg_types.iter().map(|arg_type| {
-      if !type_is_theory(arg_type, theory) {
-         quote! { #arg_type }
+      if heads.is_empty() {
+         quote! {}
       } else {
-         // construct new type name
-         let new_type_name = new_ident(&format!("{}_type", arg_type.to_token_stream().to_string()));
-         quote! { #new_type_name }
+         quote_spanned! { decl.rel_name.span() =>
+            #(#heads),* <--  #rel_name(#(#args),*, #id_name);
+         }
       }
+   };
+   let arg_types_tokens = arg_types.iter().map(|arg_type| match arg_type {
+      SlogType::Theory(th_name) => {
+         let ty = theory.get_theory_type_by_name(th_name).unwrap();
+         quote! { #ty }
+      },
+      SlogType::Rust(ty) => {
+         quote! { #ty }
+      },
    });
    Ok(quote_spanned! { decl.rel_name.span() =>
       relation #rel_name(#(#arg_types_tokens),*, usize);
@@ -76,8 +79,8 @@ fn compile_slog_relation_decl(decl: &SlogRelationDecl, theory: &SlogTheory) -> R
 }
 
 fn compile_slog_clause_unstructured_head(
-   clause: &SlogSExprClause, theory: &SlogTheory, clause_num: usize,
-   rel_to_arg_types: &HashMap<String, Vec<syn::Type>>, new_id_decls: &mut Vec<TokenStream>,
+   clause: &SlogSExprClause, theory: &SlogTheory, clause_num: usize, rel_to_arg_types: &HashMap<String, Vec<SlogType>>,
+   new_id_decls: &mut Vec<TokenStream>,
 ) -> Result<TokenStream> {
    let rel_name = clause.rel_name.clone();
    let args = clause.args.clone();
@@ -85,16 +88,15 @@ fn compile_slog_clause_unstructured_head(
    let arg_types = if arg_types.is_none() {
       if clause.rel_name.to_string() == "nil" {
          let ty: syn::Type = syn::parse2(quote! { usize }).unwrap();
-         vec![ty.clone(), ty.clone()]
-      } else if let Some(th) = theory.get_theory_type_by_rel(&rel_name) {
-         vec![th.ty.clone(), th.ty.clone()]
+         vec![SlogType::Rust(ty.clone()), SlogType::Rust(ty.clone())]
+      } else if let Some(th) = theory.get_theory_decl_by_rel_name(&rel_name) {
+         vec![SlogType::Rust(th.ty.clone()), SlogType::Rust(th.ty.clone())]
       } else {
          return Err(syn::Error::new_spanned(
             clause.rel_name.clone(),
             format!("relation {} not found in rel_to_arg_types {:?}", rel_name, rel_to_arg_types),
          ));
       }
-      
    } else {
       arg_types.unwrap().clone()
    };
@@ -105,16 +107,15 @@ fn compile_slog_clause_unstructured_head(
       .iter()
       .enumerate()
       .map(|(i, arg)| {
-         // let is_eclass = arg_types[i].to_token_stream().to_string().contains("eclass");
-         let is_theory_var = type_is_theory(&arg_types[i], theory);
+         let ty = &arg_types[i];
          match arg {
             SlogClauseArg::LogicVar(id, _) =>
-               if is_theory_var {
+               if let SlogType::Theory(th_name) = ty {
                   let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), id.span());
-                  let canonicalize_macro = canonicalize_theory(&arg_types[i], theory);
-                  let unify_rel = theory.get_unify_rel_by_type(&arg_types[i]);
+                  let canonicalize_macro = canonicalize_theory(&th_name, theory);
+                  let unify_rel = theory.get_unify_rel_by_name(&th_name);
                   arg_canonicalization.push(quote_spanned! { id.span() =>
-                     let #cl_arg = #canonicalize_macro!(total!(#unify_rel), delta!(#unify_rel), #id)
+                     let #cl_arg = #canonicalize_macro!(#unify_rel, #id)
                   });
                   Some(quote_spanned! { id.span() => #cl_arg })
                } else {
@@ -122,12 +123,12 @@ fn compile_slog_clause_unstructured_head(
                },
             SlogClauseArg::SlogClause(_) => None,
             SlogClauseArg::Constant(constant) =>
-               if is_theory_var {
+               if let SlogType::Theory(th_name) = ty {
                   let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), constant.span());
-                  let canonicalize_macro = canonicalize_theory(&arg_types[i], theory);
-                  let unify_rel = theory.get_unify_rel_by_type(&arg_types[i]);
+                  let canonicalize_macro = canonicalize_theory(&th_name, theory);
+                  let unify_rel = theory.get_unify_rel_by_name(&th_name);
                   arg_canonicalization.push(quote_spanned! { constant.span() =>
-                     let #cl_arg = #canonicalize_macro!(total!(#unify_rel), delta!(#unify_rel), #constant)
+                     let #cl_arg = #canonicalize_macro!(#unify_rel, #constant)
                   });
                   Some(quote_spanned! { constant.span() => #cl_arg })
                } else {
@@ -141,23 +142,23 @@ fn compile_slog_clause_unstructured_head(
                   expr_alias.push(quote_spanned! { expr.span() =>
                      let #cl_arg_e = #expr
                   });
-                  if is_theory_var {
-                     let canonicalize_macro = canonicalize_theory(&arg_types[i], theory);
-                     let unify_rel = theory.get_unify_rel_by_type(&arg_types[i]);
+                  if let SlogType::Theory(th_name) = ty {
+                     let canonicalize_macro = canonicalize_theory(&th_name, theory);
+                     let unify_rel = theory.get_unify_rel_by_name(&th_name);
                      arg_canonicalization.push(quote_spanned! { expr.span() =>
-                        let #cl_arg = #canonicalize_macro!(total!(#unify_rel), delta!(#unify_rel), #cl_arg_e)
+                        let #cl_arg = #canonicalize_macro!(#unify_rel, #cl_arg_e)
                      });
                   }
                } else {
-                  if is_theory_var {
-                     let canonicalize_macro = canonicalize_theory(&arg_types[i], theory);
-                     let unify_rel = theory.get_unify_rel_by_type(&arg_types[i]);
+                  if let SlogType::Theory(th_name) = ty {
+                     let canonicalize_macro = canonicalize_theory(&th_name, theory);
+                     let unify_rel = theory.get_unify_rel_by_name(&th_name);
                      arg_canonicalization.push(quote_spanned! { expr.span() =>
-                        let #cl_arg = #canonicalize_macro!(total!(#unify_rel), delta!(#unify_rel), #expr)
+                        let #cl_arg = #canonicalize_macro!(#unify_rel, #expr)
                      });
                   }
                }
-               if is_theory_var {
+               if let SlogType::Theory(_) = ty {
                   if clause_num != 0 {
                      Some(quote_spanned! { expr.span() => #cl_arg_e })
                   } else {
@@ -185,7 +186,7 @@ fn compile_slog_clause_unstructured_head(
 
    // let id_rel_name = Ident::new(&format!("{}_id", rel_name), rel_name.span());
    let rel_name_str = rel_name.to_string();
-   if let Some(_th) = theory.get_theory_type_by_rel(&rel_name) {
+   if let Some(_th) = theory.get_theory_decl_by_rel_name(&rel_name) {
       Ok(quote_spanned! { rel_name.span() =>
          #rel_name(#(#args_tokens),*)
       })
@@ -207,17 +208,17 @@ fn compile_slog_clause_unstructured_head(
 }
 
 fn compile_slog_clause_unstructured_body(
-   clause: &SlogSExprClause, theory: &SlogTheory, ignore_id: bool, rel_to_arg_types: &HashMap<String, Vec<syn::Type>>,
+   clause: &SlogSExprClause, theory: &SlogTheory, ignore_id: bool, rel_to_arg_types: &HashMap<String, Vec<SlogType>>,
    clause_num: usize, all_clauses: &Vec<SlogRuleBodyItem>,
 ) -> Result<TokenStream> {
    let rel_name = clause.rel_name.clone();
    let arg_types = rel_to_arg_types.get(&rel_name.to_string());
    let arg_types = if arg_types.is_none() {
-      if clause.rel_name.to_string() == "nil"  {
+      if clause.rel_name.to_string() == "nil" {
          let ty: syn::Type = syn::parse2(quote! { usize }).unwrap();
-         vec![ty.clone(), ty.clone()]
-      } else if let Some(th) = theory.get_theory_type_by_rel(&rel_name) {
-         vec![th.ty.clone(), th.ty.clone()]
+         vec![SlogType::Rust(ty.clone()), SlogType::Rust(ty.clone())]
+      } else if let Some(th) = theory.get_theory_decl_by_rel_name(&rel_name) {
+         vec![SlogType::Rust(th.ty.clone()), SlogType::Rust(th.ty.clone())]
       } else {
          return Err(syn::Error::new_spanned(
             clause.rel_name.clone(),
@@ -252,24 +253,13 @@ fn compile_slog_clause_unstructured_body(
       .iter()
       .enumerate()
       .map(|(i, arg)| {
-         // check if arg type is eclass
-         // let is_eclass = arg_types[i].to_token_stream().to_string().contains("eclass");
-         let is_theory_var = type_is_theory(&arg_types[i], theory);
-         if !is_theory_var {
-            match arg {
-               SlogClauseArg::LogicVar(id, _) => Some(quote_spanned! {id.span()=> #id }),
-               SlogClauseArg::SlogClause(_) => None,
-               SlogClauseArg::Constant(constant) => Some(quote_spanned! {constant.span()=> #constant }),
-               SlogClauseArg::Wildcard => Some(quote! { _ }),
-               SlogClauseArg::RustExpr(expr) => Some(quote_spanned! {expr.span()=> #expr }),
-            }
-         } else {
-            let unify_relation = theory.get_unify_rel_by_type(&arg_types[i]);
+         // check if arg type is theory type, which need unification
+         if let SlogType::Theory(th_name) = &arg_types[i] {
+            let unify_relation = theory.get_unify_rel_by_name(&th_name);
             match arg {
                SlogClauseArg::LogicVar(id, _) => {
                   // binding, inflate and join with equiv
                   if !is_bound_var(id) {
-                     // let inflated_id = new_ident(&format!("inflated_{}", id));
                      let inflated_id = Ident::new(&format!("inflated_{}", id), id.span());
                      clause_after_code_vec.push(quote_spanned! {id.span()=>
                         #unify_relation(#inflated_id, #id)
@@ -288,6 +278,14 @@ fn compile_slog_clause_unstructured_body(
                   #expr
                }}),
             }
+         } else {
+            match arg {
+               SlogClauseArg::LogicVar(id, _) => Some(quote_spanned! {id.span()=> #id }),
+               SlogClauseArg::SlogClause(_) => None,
+               SlogClauseArg::Constant(constant) => Some(quote_spanned! {constant.span()=> #constant }),
+               SlogClauseArg::Wildcard => Some(quote! { _ }),
+               SlogClauseArg::RustExpr(expr) => Some(quote_spanned! {expr.span()=> #expr }),
+            }
          }
       })
       .collect::<Vec<_>>();
@@ -298,7 +296,7 @@ fn compile_slog_clause_unstructured_body(
          format!("unstructured clause must be all logic vars or all constants {:?}", clause),
       ));
    }
-   if let Some(_th) = theory.get_theory_type_by_rel(&rel_name) {
+   if let Some(_th) = theory.get_theory_decl_by_rel_name(&rel_name) {
       Ok(quote_spanned! {clause.rel_name.span()=>
          #rel_name(#(#args_tokens),*)
          #(,#clause_after_code_vec)*
@@ -320,7 +318,7 @@ fn compile_slog_clause_unstructured_body(
 }
 
 fn compile_slog_line(
-   line: &SlogProgramLine, rel_to_arg_types: &HashMap<String, Vec<syn::Type>>, theory: &SlogTheory,
+   line: &SlogProgramLine, rel_to_arg_types: &HashMap<String, Vec<SlogType>>, theory: &SlogTheory,
 ) -> Result<TokenStream> {
    match line {
       SlogProgramLine::Rule(rule) => compile_slog_rule_unstructured(rule, theory, rel_to_arg_types),
@@ -345,7 +343,10 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
       .lines
       .iter()
       .filter_map(|line| match line {
-         SlogProgramLine::RelationDecl(decl) => Some((decl.rel_name.to_string(), decl.arg_types.clone())),
+         SlogProgramLine::RelationDecl(decl) => {
+            // eprintln!("decl >>>>>>>>>>>>>>>>>>> {:?}", decl.arg_types.clone());
+            Some((decl.rel_name.to_string(), decl.arg_types.clone()))
+         },
          _ => None,
       })
       .collect::<HashMap<_, _>>();
@@ -440,7 +441,7 @@ pub(crate) fn compile(tokens: TokenStream, is_parallel: bool) -> Result<TokenStr
 }
 
 fn compile_slog_rule_unstructured(
-   rule: &SlogRule, theory: &SlogTheory, rel_to_arg_types: &HashMap<String, Vec<syn::Type>>,
+   rule: &SlogRule, theory: &SlogTheory, rel_to_arg_types: &HashMap<String, Vec<SlogType>>,
 ) -> Result<TokenStream> {
    let mut new_id_decls = vec![];
    let heads = rule
@@ -493,14 +494,14 @@ fn compile_slog_rule_unstructured(
       .collect::<Result<Vec<_>>>()?;
    // if body is empty, add a dummy body
    if bodys.is_empty() {
-   //    let defaults = theory
-   //       .uses
-   //       .iter()
-   //       .map(|u| {
-   //          let unify_rel_name = Ident::new(&format!("unify_{}", u.name.to_string()), u.name.span());
-   //          quote! { #unify_rel_name(Default::default(), Default::default()) }
-   //       })
-   //       .collect::<Vec<_>>();
+      //    let defaults = theory
+      //       .uses
+      //       .iter()
+      //       .map(|u| {
+      //          let unify_rel_name = Ident::new(&format!("unify_{}", u.name.to_string()), u.name.span());
+      //          quote! { #unify_rel_name(Default::default(), Default::default()) }
+      //       })
+      //       .collect::<Vec<_>>();
       bodys.push(quote! { nil(0, _)  });
    }
    let delta_first_code = if rule.delta_first.is_some() {
@@ -856,21 +857,27 @@ pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_
          #theory
       }
    };
-   let rel_decls = content.iter().map(|rel_decl| {
-      let rel_name = rel_decl.rel_name.clone();
-      let arg_types = rel_decl
-         .arg_types
-         .iter()
-         .map(|arg_type| {
-            quote! {
-               #arg_type
-            }
-         })
-         .collect::<Vec<_>>();
-      quote! {
-         (define #rel_name #(#arg_types)*)
-      }
-   }).collect::<Vec<_>>();
+   let rel_decls = content
+      .iter()
+      .map(|rel_decl| {
+         let rel_name = rel_decl.rel_name.clone();
+         let arg_types = rel_decl
+            .arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+               SlogType::Theory(th_name) => {
+                  quote! { @#th_name }
+               },
+               SlogType::Rust(ty) => {
+                  quote! { #ty }
+               },
+            })
+            .collect::<Vec<_>>();
+         quote! {
+            (define #rel_name #(#arg_types)*)
+         }
+      })
+      .collect::<Vec<_>>();
    let rel_decls_par = rel_decls.clone();
    let pipe_ident = Ident::new(&format!("pipe_{}", db_name), db_name.span());
    let rel_name_assigns = content
