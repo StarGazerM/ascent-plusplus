@@ -9,7 +9,7 @@ use proc_macro2::{Ident, Span};
 use syn::{Expr, Type};
 
 use crate::ascent_hir::{
-   extend_grounded_vars, get_indices_given_grounded_variables, AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrRelation, IrRule, RelationMetadata
+   extend_grounded_vars, get_indices_given_grounded_variables, AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrMaggClause, IrRelation, IrRule, RelationMetadata
 };
 use crate::ascent_mir::MirRelationVersion::*;
 use crate::ascent_syntax::{CondClause, GeneratorNode, JoinStrategy, RelationIdentity, Signatures};
@@ -70,6 +70,7 @@ pub(crate) fn mir_rule_summary(rule: &MirRule) -> String {
          MirBodyItem::Cond(CondClause::IfLet(..)) => format!("if let ⋯"),
          MirBodyItem::Cond(CondClause::Let(..)) => format!("let ⋯"),
          MirBodyItem::Agg(agg) => format!("agg {}", agg.rel.ir_name()),
+         MirBodyItem::Magg(magg) => format!("magg {}", magg.rel.ir_name()),
       }
    }
    format!(
@@ -87,6 +88,7 @@ pub(crate) enum MirBodyItem {
    Generator(GeneratorNode),
    Cond(CondClause),
    Agg(IrAggClause),
+   Magg(IrMaggClause),
 }
 
 impl MirBodyItem {
@@ -114,6 +116,7 @@ impl MirBodyItem {
          MirBodyItem::Generator(gen) => pattern_get_vars(&gen.pattern),
          MirBodyItem::Cond(cond) => cond.bound_vars(),
          MirBodyItem::Agg(agg) => pattern_get_vars(&agg.pat),
+         MirBodyItem::Magg(magg) => vec![magg.agged_var.clone()],
       }
    }
 
@@ -134,6 +137,13 @@ impl MirBodyItem {
          MirBodyItem::Agg(agg) => {
             let mut used_vars = vec![];
             for arg in agg.rel_args.iter() {
+               used_vars.extend(expr_get_vars(arg));
+            }
+            used_vars
+         },
+         MirBodyItem::Magg(magg) => {
+            let mut used_vars = vec![];
+            for arg in magg.arg_exprs.iter() {
                used_vars.extend(expr_get_vars(arg));
             }
             used_vars
@@ -509,6 +519,16 @@ fn reselect_index(rule: MirRule, fallback: &MirRule) -> syn::Result<(MirRule, Ve
             if cls_ind > ind {
                grounded_vars_after_first_clause.extend(new_grounded_vars);
             }    
+         },
+         MirBodyItem::Magg(magg) => {
+            let new_grounded_vars = vec![magg.agged_var.clone()];
+            extend_grounded_vars(&mut grounded_vars, new_grounded_vars.clone())?;
+            new_body_items.push(bitem.clone());
+            // TODO: will indices change?
+            let ind = rule.simple_join_start_index.unwrap_or(0); 
+            if cls_ind > ind {
+               grounded_vars_after_first_clause.extend(new_grounded_vars);
+            }
          }
       }
    }
@@ -746,6 +766,7 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
          IrBodyItem::Cond(cl) => MirBodyItem::Cond(cl.clone()),
          IrBodyItem::Generator(gen) => MirBodyItem::Generator(gen.clone()),
          IrBodyItem::Agg(agg) => MirBodyItem::Agg(agg.clone()),
+         IrBodyItem::Magg(magg) => MirBodyItem::Magg(magg.clone()),
       }
    }
 
