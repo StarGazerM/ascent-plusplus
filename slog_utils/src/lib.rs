@@ -53,3 +53,16 @@ macro_rules! slog_gen {
         }
     };
 }
+
+#[macro_export]
+macro_rules! ascent_gen {
+   ($struct_name:ident, { $($prev_code:tt)* }, { $($new_code:tt)* }, $slog_macro:ident) => {
+        $slog_macro! {
+            #![allow_non_stratified_agg]
+            pub struct $struct_name;
+            $($prev_code)*
+            $($new_code)*
+        }
+    }
+}
+

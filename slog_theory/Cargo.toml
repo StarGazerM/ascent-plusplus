@@ -10,8 +10,9 @@ version.workspace = true
 # syn = { version = "2.0.57", features = ["derive", "full", "extra-traits", "visit-mut"] } 
 # quote = "1.0"
 # proc-macro2 = "1.0"
-# slog = { path = "../slog" }
+slog = { path = "../slog" }
 ascent = { path = "../ascent" }
-paste = "*"
+slog_utils = { path = "../slog_utils" }
+ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
 # ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
 # lazy_static = "1.4.0"

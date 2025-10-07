@@ -34,12 +34,30 @@ fn test_nested_fact() {
 }
 
 
+macro_rules! eq_theory {
+   (($unification_rel:ident),{
+        $macro_call:ident
+    },{
+        $($before:tt)*
+    },{
+        $($after:tt)*
+    }) => {
+        slog_gen!({
+            unify_eclass(parent_a,parent_b)<--unify_eclass(child_a,child_b),deriv(parent_a,child_a),deriv(parent_b,child_b),agg sibs_a = collect(sib)in deriv(parent_a,sib),agg sibs_b = collect(sib)in deriv(parent_b,sib),if total!($unification_rel).combined.equiv_vec_huh(&sibs_a, &sibs_b)||delta!($unification_rel).combined.equiv_vec_huh(&sibs_a, &sibs_b);
+            $($before)*
+        },{
+            unify_eclass(parent_a,parent_b)<--unify_eclass(child_a,child_b),deriv(parent_a,child_a),deriv(parent_b,child_b),agg sibs_a = collect(sib)in deriv(parent_a,sib),agg sibs_b = collect(sib)in deriv(parent_b,sib),if total!($unification_rel).combined.equiv_vec_huh(&sibs_a, &sibs_b)||delta!($unification_rel).combined.equiv_vec_huh(&sibs_a, &sibs_b);
+            $($after)*
+        }, $macro_call)
+    };
+}
+
 #[test]
 fn test_eclass() {
-   use slog_theory::eq_theory::eq_theory as theory_rules_eclass;
-   use slog_theory::canonicalize_eclass;
-   use slog_theory::paste;
+   use slog_theory::eq_theory as theory_rules_eclass;
+   use slog_theory::eq_theory::canonicalize_eclass;
    use ascent::{delta, total};
+   use slog_utils::{ascent_gen};
 
    local_db!(eclass_test_query,
       (theory (eclass usize unify_eclass ascent_byods_rels::eqrel provenance)),
@@ -52,21 +70,21 @@ fn test_eclass() {
 
    eclass_test_query!(EClassTest, {
       (foobar (foo 1) (bar 1))
-      [(unify_eclass foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x))]
+      [(unify_eclass foo1 bar1) <-- (= foo1 (foo x)) (= bar1 (bar x)) ]
    });
 
-   // eclass_test_query!(EClassTestRes, {
-   //    [(res x) <-- (foobar x x)]
-   // });
-   // let mut q1 = EClassTest::default();
-   // q1.run();
-   // let mut q2 = EClassTestRes::default();
-   // q2.__unify_eclass_ind_common = q1.__unify_eclass_ind_common.clone();
-   // pipe_eclass_test_query!(q1, q2);
-   // q2.run();
-   // println!("{:?}", q2.foo);
-   // println!("{:?}", q2.foobar);
-   // println!("{:?}", q2.res);
+   eclass_test_query!(EClassTestRes, {
+      [(res x) <-- (foobar x y) ,(if x == y)]
+   });
+
+   let mut q1 = EClassTest::default();
+   q1.run();
+   let mut q2 = EClassTestRes::default();
+   pipe_eclass_test_query!(q1, q2);
+   q2.run();
+   println!("{:?}", q2.foo);
+   println!("{:?}", q2.foobar);
+   println!("{:?}", q2.res);
 }
 
 
@@ -147,9 +165,8 @@ fn test_pipe() {
       (foo 1)
       (bar 2)
    });
-   
    foobar_db!(Foobar2, {
-      [(foo x) <-- (bar x) (foo ,(x + 1))]
+      [(foo x) <-- (bar x)  (foo x)]
    });
    let mut from = Foobar1::default();
    from.run();

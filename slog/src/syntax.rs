@@ -31,17 +31,6 @@ pub mod kw_slog {
    syn::custom_keyword!(是矣);
 }
 
-/* #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BangParen {
-   pub bang: Token![!],
-   pub paren: syn::token::Paren,
-} */
-
-/* #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct QuestionParen {
-   pub question: Token![?],
-   pub paren: syn::token::Paren,
-} */
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ParenType {
@@ -548,5 +537,82 @@ impl Parse for SlogProgram {
          lines.push(input.parse::<SlogProgramLine>()?);
       }
       Ok(SlogProgram { meta, theory, lines })
+   }
+}
+
+
+pub struct ShareDbInput {
+   pub db_name: Ident,
+   pub theory: SlogTheory,
+   pub content: Vec<SlogRelationDecl>,
+   pub kont_macro: Path,
+}
+
+impl syn::parse::Parse for ShareDbInput {
+   fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+      let db_name = input.parse::<Ident>()?;
+      let _ = input.parse::<syn::Token![,]>()?;
+      // peek if its paren
+      let theory = if input.peek(syn::token::Paren) {
+         let theory = input.parse::<SlogTheory>()?;
+         let _ = input.parse::<syn::Token![,]>()?;
+         theory
+      } else {
+         SlogTheory { _theory: kw_slog::theory(db_name.span()), names: vec![], uses: vec![] }
+      };
+      let content;
+      let _braced = braced!(content in input);
+      // let content = content.parse_terminated(SlogRelationDecl::parse, syn::Token![,])?;
+      let mut decls = vec![];
+      while !content.is_empty() {
+         decls.push(content.parse::<SlogRelationDecl>()?);
+      }
+      let _ = input.parse::<syn::Token![,]>()?;
+      let kont_macro = input.parse::<Path>()?;
+      Ok(ShareDbInput { db_name, theory, content: decls, kont_macro })
+   }
+}
+
+#[derive(Debug, Clone)]
+pub struct SlogGenInput {
+   pub struct_name: Ident,
+   pub prev_code: TokenStream,
+   pub new_code: TokenStream,
+   pub slog_macro: Ident,
+}
+
+impl syn::parse::Parse for SlogGenInput {
+   fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+      let struct_name = input.parse::<Ident>()?;
+      let _ = input.parse::<syn::Token![,]>()?;
+      let prev_content;
+      let _ = braced!(prev_content in input);
+      let prev_code = prev_content.parse::<TokenStream>()?;
+      let _ = input.parse::<syn::Token![,]>()?;
+      let new_content;
+      let _ = braced!(new_content in input);
+      let new_code = new_content.parse::<TokenStream>()?;
+      let _ = input.parse::<syn::Token![,]>()?;
+      let slog_macro = input.parse::<Ident>()?;
+      Ok(SlogGenInput { struct_name, prev_code, new_code, slog_macro })
+   }
+}
+
+#[derive(Debug, Clone)]
+pub struct SlogSourceInput {
+   pub struct_name: Ident,
+   pub opt_args: Vec<Ident>,
+   pub content: TokenStream,
+}
+
+impl syn::parse::Parse for SlogSourceInput {
+   fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+      let struct_name = input.parse::<Ident>()?;
+      let opt_content;
+      let _ = parenthesized!(opt_content in input);
+      let opt_args = opt_content.parse_terminated(Ident::parse, syn::Token![,])?;
+      let _ = input.parse::<syn::Token![:]>()?;
+      let content = input.parse::<TokenStream>()?;
+      Ok(SlogSourceInput { struct_name, opt_args: opt_args.into_iter().collect(), content })
    }
 }

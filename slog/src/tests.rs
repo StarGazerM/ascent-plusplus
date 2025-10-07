@@ -264,8 +264,8 @@ fn write_to_scratchpad(
    // add `\n` to every line
    let code_str = code_str.replace(";", ";\n");
    let code_in_template = template.replace("todo!(());", &code_str);
-   std::fs::write("src/scratchpad.rs", prefix.to_string()).unwrap();
-   std::fs::write("src/scratchpad.rs", code_in_template).unwrap();
-   std::process::Command::new("rustfmt").args(&["src/scratchpad.rs"]).spawn().unwrap().wait().unwrap();
+   std::fs::write("../slog_test/src/scratchpad.rs", prefix.to_string()).unwrap();
+   std::fs::write("../slog_test/src/scratchpad.rs", code_in_template).unwrap();
+   std::process::Command::new("rustfmt").args(&["../slog_test/src/scratchpad.rs"]).spawn().unwrap().wait().unwrap();
    code
 }

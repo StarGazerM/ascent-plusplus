@@ -1105,7 +1105,7 @@ fn compile_mir_rule_inner(
             let arg_exprs = &magg.arg_exprs;
             let _self = quote! { _self };
             quote_spanned! {magg.span=>
-               let #agged_var = #agg_func(#ind_comm_delta_var_name, #ind_comm_total_var_name, #(#arg_exprs)* );
+               let #agged_var = #agg_func(&#ind_comm_delta_var_name, &#ind_comm_total_var_name, #(#arg_exprs)* );
                #next_loop
             }
          }

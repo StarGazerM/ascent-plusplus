@@ -6,13 +6,12 @@ use itertools::Either;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Ident, Path, Result, braced, parse2};
+use syn::{Ident, Result};
 
 use crate::syntax::{
-   ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule, SlogRuleBodyItem,
-   SlogRuleHeadItem, SlogSExprClause, SlogTheory, SlogType, SlogUnionClause, kw_slog,
+   ParenType, SlogClauseArg, SlogMeta, SlogProgram, SlogProgramLine, SlogRelationDecl, SlogRule, SlogRuleBodyItem, SlogRuleHeadItem, SlogSExprClause, SlogTheory, SlogType, SlogUnionClause
 };
-use crate::util::new_ident;
+use crate::util::{new_ident, respan_to_call_site};
 
 fn compile_slog_meta(meta: &SlogMeta) -> Result<TokenStream> {
    // let vis = meta.vis.clone();
@@ -112,10 +111,11 @@ fn compile_slog_clause_unstructured_head(
             SlogClauseArg::LogicVar(id, _) =>
                if let SlogType::Theory(th_name) = ty {
                   let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), id.span());
-                  let canonicalize_macro = canonicalize_theory(&th_name, theory);
+                  let canonicalize_fn = canonicalize_theory(&th_name, theory);
                   let unify_rel = theory.get_unify_rel_by_name(&th_name);
                   arg_canonicalization.push(quote_spanned! { id.span() =>
-                     let #cl_arg = #canonicalize_macro!(#unify_rel, #id)
+                     magg #cl_arg = #canonicalize_fn(#id) in #unify_rel
+                     // let #cl_arg = 0
                   });
                   Some(quote_spanned! { id.span() => #cl_arg })
                } else {
@@ -125,10 +125,10 @@ fn compile_slog_clause_unstructured_head(
             SlogClauseArg::Constant(constant) =>
                if let SlogType::Theory(th_name) = ty {
                   let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), constant.span());
-                  let canonicalize_macro = canonicalize_theory(&th_name, theory);
+                  let canonicalize_fn = canonicalize_theory(&th_name, theory);
                   let unify_rel = theory.get_unify_rel_by_name(&th_name);
                   arg_canonicalization.push(quote_spanned! { constant.span() =>
-                     let #cl_arg = #canonicalize_macro!(#unify_rel, #constant)
+                     let #cl_arg = #canonicalize_fn(#constant) in #unify_rel
                   });
                   Some(quote_spanned! { constant.span() => #cl_arg })
                } else {
@@ -143,18 +143,18 @@ fn compile_slog_clause_unstructured_head(
                      let #cl_arg_e = #expr
                   });
                   if let SlogType::Theory(th_name) = ty {
-                     let canonicalize_macro = canonicalize_theory(&th_name, theory);
+                     let canonicalize_fn = canonicalize_theory(&th_name, theory);
                      let unify_rel = theory.get_unify_rel_by_name(&th_name);
                      arg_canonicalization.push(quote_spanned! { expr.span() =>
-                        let #cl_arg = #canonicalize_macro!(#unify_rel, #cl_arg_e)
+                        let #cl_arg = #canonicalize_fn(#cl_arg_e) in #unify_rel
                      });
                   }
                } else {
                   if let SlogType::Theory(th_name) = ty {
-                     let canonicalize_macro = canonicalize_theory(&th_name, theory);
+                     let canonicalize_fn = canonicalize_theory(&th_name, theory);
                      let unify_rel = theory.get_unify_rel_by_name(&th_name);
                      arg_canonicalization.push(quote_spanned! { expr.span() =>
-                        let #cl_arg = #canonicalize_macro!(#unify_rel, #expr)
+                        let #cl_arg = #canonicalize_fn(#expr) in #unify_rel
                      });
                   }
                }
@@ -350,14 +350,25 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
          _ => None,
       })
       .collect::<HashMap<_, _>>();
-   let lines = program
+   let decl_lines = program
       .lines
       .iter()
-      .map(|line| compile_slog_line(line, &rel_to_arg_types, &program.theory))
+      .filter_map(|line| match line {
+         SlogProgramLine::RelationDecl(decl) => {
+            Some(compile_slog_relation_decl(decl, &program.theory))
+         },
+         _ => None,
+      })
       .collect::<Result<Vec<_>>>()?;
-   let lines = quote! {
-      #(#lines)*
-   };
+   let query_lines = program
+      .lines
+      .iter()
+      .filter_map(|line| match line {
+         SlogProgramLine::RelationDecl(_) => None,
+         _ => Some(compile_slog_line(line, &rel_to_arg_types, &program.theory)),
+      })
+      .collect::<Result<Vec<_>>>()?;
+
    let slog_mode = if !is_parallel {
       quote! {
          ascent
@@ -380,12 +391,13 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
             // provenance relation
             relation deriv(usize, usize);
 
-            #lines
+            #(#decl_lines)*
+            #(#query_lines)*
          }
       })
    } else {
-      let mut theorized_code = quote! { #lines };
       let mut theory_rel_decls = vec![];
+      let mut theorized_code = quote! {};
       for (i, t) in program.theory.uses.iter().enumerate() {
          let macro_call = Ident::new(&format!("theory_rules_{}", t.name.to_string()), t.name.span());
          let macro_args_opt = t.opt_args.iter().map(|arg| quote_spanned! {arg.span()=> #arg}).collect::<Vec<_>>();
@@ -398,33 +410,37 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
             relation #theory_rel_name(#theory_rel_ty, #theory_rel_ty);
          });
          if i != num_theories - 1 {
-            theorized_code = quote! {
-               #macro_call! { (#theory_rel_name #(,#macro_args_opt)*), { #theory_rel_default #theorized_code} }
-            };
+            // theorized_code = quote! {
+            //    #macro_call! { (#theory_rel_name #(,#macro_args_opt)*), { #theory_rel_default #(#query_lines)* } }
+            // };
+            todo!("TODO: multiple theories is not supported yet");
          } else {
+            let struct_name = program.meta.struct_name.clone();
             theorized_code = quote! {
                #macro_call! {
-                  (#theory_rel_name #(,#macro_args_opt)*),
+                  (#theory_rel_name), (#struct_name), 
                   { #slog_mode },
                   {
-                     #![allow_non_stratified_agg]
-                     #meta
-
+                     // #![allow_non_stratified_agg]
+                     // #meta
                      relation nil(usize, usize);
                      nil(1, calc_id(&("nil", 1)));
                      nil(0, calc_id(&("nil", 0))) <-- nil(1, _);
                      // provenance relation
                      relation deriv(usize, usize);
                      #(#theory_rel_decls)*
+                     #(#decl_lines)*
                   },
                   {
-                     #theory_rel_default #theorized_code
+                     #theory_rel_default #(#query_lines)*
                   }
                }
             }
          }
       }
-      eprintln!("theorized_code {}", theorized_code.to_string());
+      // respan to call site
+      let theorized_code = respan_to_call_site(theorized_code);
+      // eprintln!("theorized_code {}", theorized_code.to_string());
       Ok(theorized_code)
    }
 }
@@ -814,115 +830,4 @@ fn remove_nested_union_clause(program: &SlogProgram) -> SlogProgram {
       }
    }
    SlogProgram { meta: program.meta.clone(), theory: program.theory.clone(), lines: new_lines }
-}
-
-struct ShareDbInput {
-   db_name: Ident,
-   theory: SlogTheory,
-   content: Vec<SlogRelationDecl>,
-   kont_macro: Path,
-}
-
-impl syn::parse::Parse for ShareDbInput {
-   fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-      let db_name = input.parse::<Ident>()?;
-      let _ = input.parse::<syn::Token![,]>()?;
-      // peek if its paren
-      let theory = if input.peek(syn::token::Paren) {
-         let theory = input.parse::<SlogTheory>()?;
-         let _ = input.parse::<syn::Token![,]>()?;
-         theory
-      } else {
-         SlogTheory { _theory: kw_slog::theory(db_name.span()), names: vec![], uses: vec![] }
-      };
-      let content;
-      let _braced = braced!(content in input);
-      // let content = content.parse_terminated(SlogRelationDecl::parse, syn::Token![,])?;
-      let mut decls = vec![];
-      while !content.is_empty() {
-         decls.push(content.parse::<SlogRelationDecl>()?);
-      }
-      let _ = input.parse::<syn::Token![,]>()?;
-      let kont_macro = input.parse::<Path>()?;
-      Ok(ShareDbInput { db_name, theory, content: decls, kont_macro })
-   }
-}
-
-pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_macro::TokenStream {
-   let ShareDbInput { db_name, theory, content, kont_macro } = parse2(input.into()).unwrap();
-   let theory_code = if theory.uses.is_empty() {
-      quote! {}
-   } else {
-      quote! {
-         #theory
-      }
-   };
-   let rel_decls = content
-      .iter()
-      .map(|rel_decl| {
-         let rel_name = rel_decl.rel_name.clone();
-         let arg_types = rel_decl
-            .arg_types
-            .iter()
-            .map(|arg_type| match arg_type {
-               SlogType::Theory(th_name) => {
-                  quote! { @#th_name }
-               },
-               SlogType::Rust(ty) => {
-                  quote! { #ty }
-               },
-            })
-            .collect::<Vec<_>>();
-         quote! {
-            (define #rel_name #(#arg_types)*)
-         }
-      })
-      .collect::<Vec<_>>();
-   let rel_decls_par = rel_decls.clone();
-   let pipe_ident = Ident::new(&format!("pipe_{}", db_name), db_name.span());
-   let rel_name_assigns = content
-      .iter()
-      .map(|rel_decl| {
-         let rel_name = rel_decl.rel_name.clone();
-         quote_spanned! { rel_decl.rel_name.span() =>
-            $to.#rel_name = $from.#rel_name;
-         }
-      })
-      .collect::<Vec<_>>();
-   // let  theory
-   let export_code = if local_scope {
-      quote! {
-         #[macro_export]
-      }
-   } else {
-      quote! {}
-   };
-   quote! {
-      #export_code
-      macro_rules! #db_name {
-         ($name:ident, { $($x:tt)* }) => {
-             #kont_macro!($name, {
-                 #theory_code
-                 #(#rel_decls)*
-             }, {
-                $($x)*
-             }, slog)
-         };
-         ($name:ident, par, { $($x:tt)* }) => {
-            #kont_macro!($name, {
-                #theory_code
-                #(#rel_decls_par)*
-            }, {
-                $($x)*
-            }, slog_par)
-        };
-     }
-     #export_code
-     macro_rules! #pipe_ident {
-        ($from:ident, $to:ident) => {
-            #(#rel_name_assigns)*
-        };
-     }
-   }
-   .into()
 }

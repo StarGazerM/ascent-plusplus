@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
    use slog::*;
-   use slog_theory::eq_theory::eq_theory as theory_rules;
+   // use slog_theory::eq_theory::eq_theory as theory_rules;
    prelude!();
 
    // #[test]

@@ -1,8 +1,7 @@
-pub use paste::paste;
 
 pub mod eq_theory {
-   use ascent::ascent_source;
-   ascent_source! {
+   use slog::slog_source;
+   slog_source! {
       eq_theory (unification_rel):
       unify_eclass(parent_a, parent_b) <--
          unify_eclass(child_a, child_b),
@@ -33,12 +32,9 @@ pub mod eq_theory {
    //       ;
    // }
 
-   #[macro_export]
-   macro_rules! canonicalize_eclass {
-      ($h1:tt, $input: tt) => {
-         paste! {
-            total!($h1).combined.get_dominant_elem($input).unwrap_or(delta!($h1).combined.get_dominant_elem($input).unwrap_or($input))
-         }
-      };
+   use ascent_byods_rels::eqrel_ind::EqRelIndCommon;
+
+   pub fn canonicalize_eclass<'a>(full: &'a EqRelIndCommon<usize>, delta: &'a EqRelIndCommon<usize>, x: &'a usize) -> &'a usize {
+      full.combined.get_dominant_elem(x).unwrap_or(delta.combined.get_dominant_elem(x).unwrap_or(x))
    }
 }
