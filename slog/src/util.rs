@@ -25,6 +25,11 @@ pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_
       .iter()
       .map(|rel_decl| {
          let rel_name = rel_decl.rel_name.clone();
+         let ds_tokens = if let Some(ds) = &rel_decl.ds {
+            quote! { :#ds }
+         } else {
+            quote! {}
+         };
          let arg_types = rel_decl
             .arg_types
             .iter()
@@ -38,7 +43,7 @@ pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_
             })
             .collect::<Vec<_>>();
          quote! {
-            (define #rel_name #(#arg_types)*)
+            (define #rel_name #ds_tokens #(#arg_types)*)
          }
       })
       .collect::<Vec<_>>();

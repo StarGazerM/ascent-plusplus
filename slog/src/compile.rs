@@ -70,7 +70,13 @@ fn compile_slog_relation_decl(decl: &SlogRelationDecl, theory: &SlogTheory) -> R
          quote! { #ty }
       },
    });
+   let ds_tokens = if let Some(ds) = &decl.ds {
+      quote! { #[ds(#ds)] }
+   } else {
+      quote! {}
+   };
    Ok(quote_spanned! { decl.rel_name.span() =>
+      #ds_tokens
       relation #rel_name(#(#arg_types_tokens),*, usize);
       // add why provenance for relations
       #prov_track_code
@@ -380,7 +386,7 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
    };
    let num_theories = program.theory.names.len();
    if num_theories == 0 {
-      Ok(quote! {
+      let code = quote! {
          #slog_mode! {
             #![allow_non_stratified_agg]
             #meta
@@ -394,7 +400,9 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
             #(#decl_lines)*
             #(#query_lines)*
          }
-      })
+      };
+      eprintln!("code {}", code.to_string());
+      Ok(code)
    } else {
       let mut theory_rel_decls = vec![];
       let mut theorized_code = quote! {};
@@ -440,7 +448,7 @@ pub fn compile_slog_program(program: &SlogProgram, is_parallel: bool) -> Result<
       }
       // respan to call site
       let theorized_code = respan_to_call_site(theorized_code);
-      // eprintln!("theorized_code {}", theorized_code.to_string());
+      eprintln!("theorized_code {}", theorized_code.to_string());
       Ok(theorized_code)
    }
 }

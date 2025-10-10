@@ -190,3 +190,24 @@ fn tc_reordering() {
    prog.run();
    println!("{:?}", prog.tc);
 }
+
+#[test]
+fn test_ds() {
+   slog! {
+      (struct DsTest)
+      (define tc:ascent_byods_rels::eqrel usize)
+      (define tc2 usize usize)
+      (define edge usize usize)
+      
+      (edge 1 2)
+      (edge 2 3)
+      (edge 3 4)
+      
+      [(= y (tc x)) <-- (edge x y)]
+      [(tc2 x y) <-- (= x (tc y))]
+   }
+
+   let mut prog = DsTest::default();
+   prog.run();
+   println!("{:?}", prog.tc2);
+}

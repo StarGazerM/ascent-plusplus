@@ -4,7 +4,7 @@
 
 use itertools::Either;
 use proc_macro2::TokenStream;
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{quote_spanned, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::{braced, bracketed, parenthesized, Expr, Ident, Path, Token, Type};
 
@@ -296,6 +296,7 @@ impl Parse for SlogType {
 pub struct SlogRelationDecl {
    pub _relation: kw_slog::define,
    pub rel_name: Ident,
+   pub ds: Option<Path>,
    pub arg_types: Vec<SlogType>,
 }
 
@@ -306,11 +307,17 @@ impl Parse for SlogRelationDecl {
       // let id = content.parse::<Ident>()?;
       let _relation = content.parse::<kw_slog::define>()?;
       let rel_name = content.parse::<Ident>()?;
+      let ds = if content.peek(Token![:]) {
+         let _ = content.parse::<Token![:]>()?;
+         Some(content.parse::<Path>()?)
+      } else {
+         None
+      };
       let mut arg_types = Vec::new();
       while !content.is_empty() {
          arg_types.push(content.parse::<SlogType>()?);
       }
-      Ok(SlogRelationDecl { _relation, rel_name, arg_types })
+      Ok(SlogRelationDecl { _relation, rel_name, ds, arg_types })
    }
 }
 

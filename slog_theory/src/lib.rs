@@ -38,3 +38,9 @@ pub mod eq_theory {
       full.combined.get_dominant_elem(x).unwrap_or(delta.combined.get_dominant_elem(x).unwrap_or(x))
    }
 }
+
+pub mod arithm;
+pub mod test;
+pub mod util;
+mod test_compile;
+pub mod invertible;
