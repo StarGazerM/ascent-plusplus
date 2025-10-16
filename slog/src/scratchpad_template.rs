@@ -10,7 +10,5 @@ use ascent::lattice::set::Set;
 use ascent::Dual;
 use slog_utils::calc_id;
 use slog_utils::collect;
-use slog_theory::canonicalize_eclass;
-use slog_theory::eq_theory::eq_theory as theory_rules;
 
 todo!(());

@@ -4,9 +4,9 @@
 
 use itertools::Either;
 use proc_macro2::TokenStream;
-use quote::{quote_spanned, ToTokens};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
-use syn::{braced, bracketed, parenthesized, Expr, Ident, Path, Token, Type};
+use syn::{Expr, Ident, Path, Token, Type, braced, bracketed, parenthesized};
 
 // keywords
 pub mod kw_slog {
@@ -31,7 +31,6 @@ pub mod kw_slog {
    syn::custom_keyword!(是矣);
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ParenType {
    Regular,
@@ -55,12 +54,13 @@ impl Parse for SlogSExprClause {
          let _bang = input.parse::<Token![!]>()?;
          let _paren = parenthesized!(content in input);
          (content, ParenType::BangParen, None)
-      } else if input.peek(Token![?]) {
-         let content;
-         let _question = input.parse::<Token![?]>()?;
-         let _paren = parenthesized!(content in input);
-         (content, ParenType::QuestionParen, None)
-      } else if input.peek(syn::token::Paren) {
+      } else if input.peek(syn::token::Paren) || input.peek(Token![?]) {
+         let parent_type = if input.peek(Token![?]) {
+            let _question = input.parse::<Token![?]>()?;
+            ParenType::QuestionParen
+         } else {
+            ParenType::Regular
+         };
          let content;
          let _paren = parenthesized!(content in input);
          if content.peek(Token![=]) {
@@ -68,9 +68,9 @@ impl Parse for SlogSExprClause {
             let id_var = content.parse::<Ident>()?;
             let content_inner;
             let _paren2 = parenthesized!(content_inner in content);
-            (content_inner, ParenType::Regular, Some(id_var))
+            (content_inner, parent_type, Some(id_var))
          } else {
-            (content, ParenType::Regular, None)
+            (content, parent_type, None)
          }
       } else if input.peek(syn::token::Brace) {
          let content;
@@ -203,6 +203,7 @@ impl Parse for SlogRuleBodyItem {
 pub enum SlogRuleHeadItem {
    SlogSExprClause(SlogSExprClause),
    UnionClause(SlogUnionClause),
+   AscentClause(TokenStream),
 }
 
 impl Parse for SlogRuleHeadItem {
@@ -219,6 +220,11 @@ impl Parse for SlogRuleHeadItem {
             let clause = input.parse::<SlogSExprClause>()?;
             Ok(SlogRuleHeadItem::SlogSExprClause(clause))
          }
+      } else if input.peek(Token![,]) {
+         let _ = input.parse::<Token![,]>()?;
+         let content;
+         let _ = parenthesized!(content in input);
+         Ok(SlogRuleHeadItem::AscentClause(content.parse()?))
       } else {
          Err(input.error(format!("head : expected slog s-expr clause or explicit id clause:\n{}", input.to_string())))
       }
@@ -230,6 +236,7 @@ pub struct SlogRule {
    pub heads: Vec<SlogRuleHeadItem>,
    pub body: Vec<SlogRuleBodyItem>,
    pub delta_first: Option<kw_slog::Δ>,
+   pub theory_unification: bool,
 }
 
 impl Parse for SlogRule {
@@ -248,7 +255,8 @@ impl Parse for SlogRule {
          while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             body.push(content.parse::<SlogRuleBodyItem>()?);
          }
-         Ok(SlogRule { heads, body, delta_first })
+         // TODO: come up with better syntax to let user manually control theory unification
+         Ok(SlogRule { heads, body, delta_first, theory_unification: true })
       } else {
          // right arrow, reverse the order of the body and heads
          let mut body = Vec::new();
@@ -262,7 +270,7 @@ impl Parse for SlogRule {
          while !content.is_empty() && !content.peek(Token![<-]) && !content.peek(Token![-]) {
             heads.push(content.parse::<SlogRuleHeadItem>()?);
          }
-         Ok(SlogRule { heads, body, delta_first })
+         Ok(SlogRule { heads, body, delta_first, theory_unification: true })
       }
    }
 }
@@ -298,6 +306,7 @@ pub struct SlogRelationDecl {
    pub rel_name: Ident,
    pub ds: Option<Path>,
    pub arg_types: Vec<SlogType>,
+   pub id_type: syn::Type,
 }
 
 impl Parse for SlogRelationDecl {
@@ -313,11 +322,18 @@ impl Parse for SlogRelationDecl {
       } else {
          None
       };
+      let id_type = if content.peek(Token![#]) {
+         let _ = content.parse::<Token![#]>()?;
+         content.parse::<syn::Type>()?
+      } else {
+         // default to usize
+         syn::parse2(quote! { usize })?
+      };
       let mut arg_types = Vec::new();
       while !content.is_empty() {
          arg_types.push(content.parse::<SlogType>()?);
       }
-      Ok(SlogRelationDecl { _relation, rel_name, ds, arg_types })
+      Ok(SlogRelationDecl { _relation, rel_name, ds, arg_types, id_type })
    }
 }
 
@@ -362,6 +378,7 @@ impl Parse for SlogProgramLine {
                heads: vec![head],
                body,
                delta_first: Some(kw_slog::Δ(_rewrite.span)),
+               theory_unification: true,
             }))
          } else {
             // parse the fact
@@ -403,7 +420,8 @@ impl Parse for SlogTheoryDecl {
       let ty = content.parse::<syn::Type>()?;
       let unify_rel = content.parse::<Ident>()?;
       let ds = content.parse::<Path>()?;
-      let provenance = if content.peek(kw_slog::provenance) { Some(content.parse::<kw_slog::provenance>()?) } else { None };
+      let provenance =
+         if content.peek(kw_slog::provenance) { Some(content.parse::<kw_slog::provenance>()?) } else { None };
       let mut opt_args = Vec::new();
       while !content.is_empty() {
          opt_args.push(content.parse::<Expr>()?);
@@ -427,7 +445,6 @@ impl ToTokens for SlogTheoryDecl {
    }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct SlogTheory {
    pub _theory: kw_slog::theory,
@@ -447,7 +464,6 @@ impl ToTokens for SlogTheory {
 }
 
 impl SlogTheory {
-
    pub fn get_unify_rel_by_name(&self, th_name: &Ident) -> Option<Ident> {
       for u in self.uses.iter() {
          if u.name == *th_name {
@@ -546,7 +562,6 @@ impl Parse for SlogProgram {
       Ok(SlogProgram { meta, theory, lines })
    }
 }
-
 
 pub struct ShareDbInput {
    pub db_name: Ident,

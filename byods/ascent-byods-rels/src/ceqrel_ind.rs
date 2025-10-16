@@ -1,5 +1,5 @@
 use std::hash::{BuildHasherDefault, Hash};
-use std::iter::{FlatMap, Map, Repeat, Zip};
+// use std::iter::{FlatMap, Map, Repeat, Zip};
 use std::marker::PhantomData;
 use std::mem::transmute;
 use std::sync::Mutex;
@@ -11,7 +11,7 @@ use ascent::internal::{
 use ascent::rayon;
 use ascent::rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use hashbrown::HashSet;
-use hashbrown::hash_set::Iter as HashSetIter;
+// use hashbrown::hash_set::Iter as HashSetIter;
 use rustc_hash::FxHasher;
 
 use crate::iterator_from_dyn::IteratorFromDyn;
@@ -126,9 +126,9 @@ impl<T: Clone + Hash + Eq> CRelFullIndexWrite for EqRelInd0_1CWrite<'_, T> {
 impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelInd0_1<'a, T> {
    type Key = <CEqRelIndCommon<T> as RelIndexRead<'a>>::Key;
    type Value = <CEqRelIndCommon<T> as RelIndexRead<'a>>::Value;
-   type IteratorType = <CEqRelIndCommon<T> as RelIndexRead<'a>>::IteratorType;
+   // type IteratorType = <CEqRelIndCommon<T> as RelIndexRead<'a>>::IteratorType;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> { self.0.index_get(key) }
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> { self.0.index_get(key) }
 
    fn len_estimate(&self) -> usize { self.0.len_estimate() }
 }
@@ -136,25 +136,28 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelInd0_1<'a, T> {
 impl<'a, T: Clone + Hash + Eq + Sync> CRelIndexRead<'a> for EqRelInd0_1<'a, T> {
    type Key = <CEqRelIndCommon<T> as CRelIndexRead<'a>>::Key;
    type Value = <CEqRelIndCommon<T> as CRelIndexRead<'a>>::Value;
-   type IteratorType = <CEqRelIndCommon<T> as CRelIndexRead<'a>>::IteratorType;
+   // type IteratorType = <CEqRelIndCommon<T> as CRelIndexRead<'a>>::IteratorType;
 
-   fn c_index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> { self.0.c_index_get(key) }
+   fn c_index_get(&'a self, key: &Self::Key) -> Option<impl ParallelIterator<Item = Self::Value> + Clone + 'a> { self.0.c_index_get(key) }
 }
 
 impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelInd0_1<'a, T> {
    type Key = <CEqRelIndCommon<T> as RelIndexReadAll<'a>>::Key;
    type Value = <CEqRelIndCommon<T> as RelIndexReadAll<'a>>::Value;
-   type ValueIteratorType = <CEqRelIndCommon<T> as RelIndexReadAll<'a>>::ValueIteratorType;
-   type AllIteratorType = <CEqRelIndCommon<T> as RelIndexReadAll<'a>>::AllIteratorType;
-   fn iter_all(&'a self) -> Self::AllIteratorType { self.0.iter_all() }
+   // type ValueIteratorType = <CEqRelIndCommon<T> as RelIndexReadAll<'a>>::ValueIteratorType;
+   // type AllIteratorType = <CEqRelIndCommon<T> as RelIndexReadAll<'a>>::AllIteratorType;
+   fn iter_all(&'a self) -> impl Iterator<
+      Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.iter_all().map(|(k, v_iter)| (k, v_iter))
+   }
 }
 
 impl<'a, T: Clone + Hash + Eq + Sync> CRelIndexReadAll<'a> for EqRelInd0_1<'a, T> {
    type Key = <CEqRelIndCommon<T> as CRelIndexReadAll<'a>>::Key;
    type Value = <CEqRelIndCommon<T> as CRelIndexReadAll<'a>>::Value;
-   type ValueIteratorType = <CEqRelIndCommon<T> as CRelIndexReadAll<'a>>::ValueIteratorType;
-   type AllIteratorType = <CEqRelIndCommon<T> as CRelIndexReadAll<'a>>::AllIteratorType;
-   fn c_iter_all(&'a self) -> Self::AllIteratorType { self.0.c_iter_all() }
+   // type ValueIteratorType = <CEqRelIndCommon<T> as CRelIndexReadAll<'a>>::ValueIteratorType;
+   // type AllIteratorType = <CEqRelIndCommon<T> as CRelIndexReadAll<'a>>::AllIteratorType;
+   fn c_iter_all(&'a self) -> impl ParallelIterator<Item = (Self::Key, impl ParallelIterator<Item = Self::Value> + 'a)> + 'a { self.0.c_iter_all() }
 }
 
 impl<'a, T: Clone + Hash + Eq> RelFullIndexRead<'a> for EqRelInd0_1<'a, T> {
@@ -189,9 +192,9 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelInd0<'a, T> {
    type Key = (T,);
    type Value = (&'a T,);
 
-   type IteratorType = IteratorFromDyn<'a, (&'a T,)>;
+   // type IteratorType = IteratorFromDyn<'a, (&'a T,)>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let _ = self.0.set_of_added(&key.0)?;
       let key = key.clone();
       let producer = move || self.0.set_of_added(&key.0).unwrap().map(|x| (x,));
@@ -202,15 +205,15 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelInd0<'a, T> {
    fn len_estimate(&self) -> usize { self.0.unwrap_frozen().combined.elem_ids.len() }
 }
 
-impl<'a, T: Clone + Hash + Eq + Sync> CRelIndexRead<'a> for EqRelInd0<'a, T> {
+impl<'a, T: Clone + Hash + Eq + Sync + Send> CRelIndexRead<'a> for EqRelInd0<'a, T> {
    type Key = (T,);
    type Value = (&'a T,);
 
-   type IteratorType = rayon::iter::Map<SetOfAddedParIter<'a, T>, fn(&T) -> (&T,)>;
+   // type IteratorType = rayon::iter::Map<SetOfAddedParIter<'a, T>, fn(&T) -> (&T,)>;
 
-   fn c_index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn c_index_get(&'a self, key: &Self::Key) -> Option<impl ParallelIterator<Item = Self::Value> + Clone + 'a> {
       let set = self.0.c_set_of_added(&key.0)?;
-      let res: Self::IteratorType = set.map(|x| (x,));
+      let res = set.map(|x| (x,));
       Some(res)
    }
 }
@@ -219,31 +222,30 @@ impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelInd0<'a, T> {
    type Key = &'a (T,);
    type Value = (&'a T,);
 
-   type ValueIteratorType = Map<HashSetIter<'a, T>, for<'aa> fn(&'aa T) -> (&'aa T,)>;
+   // type ValueIteratorType = Map<HashSetIter<'a, T>, for<'aa> fn(&'aa T) -> (&'aa T,)>;
 
-   type AllIteratorType = FlatMap<
-      std::slice::Iter<'a, HashSet<T, BuildHasherDefault<FxHasher>>>,
-      Map<
-         Zip<HashSetIter<'a, T>, Repeat<HashSetIter<'a, T>>>,
-         for<'aa> fn(
-            (&'aa T, HashSetIter<'aa, T>),
-         ) -> (&'aa (T,), Map<HashSetIter<'aa, T>, for<'bb> fn(&'bb T) -> (&'bb T,)>),
-      >,
-      for<'aa> fn(
-         &'aa HashSet<T, BuildHasherDefault<FxHasher>>,
-      ) -> Map<
-         Zip<HashSetIter<'aa, T>, Repeat<HashSetIter<'aa, T>>>,
-         for<'cc> fn(
-            (&'cc T, HashSetIter<'cc, T>),
-         ) -> (&'cc (T,), Map<HashSetIter<'cc, T>, for<'dd> fn(&'dd T) -> (&'dd T,)>),
-      >,
-   >;
+   // type AllIteratorType = FlatMap<
+   //    std::slice::Iter<'a, HashSet<T, BuildHasherDefault<FxHasher>>>,
+   //    Map<
+   //       Zip<HashSetIter<'a, T>, Repeat<HashSetIter<'a, T>>>,
+   //       for<'aa> fn(
+   //          (&'aa T, HashSetIter<'aa, T>),
+   //       ) -> (&'aa (T,), Map<HashSetIter<'aa, T>, for<'bb> fn(&'bb T) -> (&'bb T,)>),
+   //    >,
+   //    for<'aa> fn(
+   //       &'aa HashSet<T, BuildHasherDefault<FxHasher>>,
+   //    ) -> Map<
+   //       Zip<HashSetIter<'aa, T>, Repeat<HashSetIter<'aa, T>>>,
+   //       for<'cc> fn(
+   //          (&'cc T, HashSetIter<'cc, T>),
+   //       ) -> (&'cc (T,), Map<HashSetIter<'cc, T>, for<'dd> fn(&'dd T) -> (&'dd T,)>),
+   //    >,
+   // >;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res: Self::AllIteratorType = self.0.unwrap_frozen().combined.sets.iter().flat_map(|s| {
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.unwrap_frozen().combined.sets.iter().flat_map(|s| {
          s.iter().zip(std::iter::repeat(s.iter())).map(|(x, s)| (ref_to_singleton_tuple_ref(x), s.map(|x| (x,))))
-      });
-      res
+      })
    }
 }
 
@@ -274,11 +276,11 @@ impl<'a, T: Clone + Hash + Eq + Sync + Send> CRelIndexReadAll<'a> for EqRelInd0<
    type Key = &'a (T,);
    type Value = (&'a T,);
 
-   type AllIteratorType = EqRelInd0CRelIndexReadAllIter<'a, T>;
+   // type AllIteratorType = EqRelInd0CRelIndexReadAllIter<'a, T>;
 
-   type ValueIteratorType = rayon::iter::Map<hashbrown::hash_set::rayon::ParIter<'a, T>, fn(&T) -> (&T,)>;
+   // type ValueIteratorType = rayon::iter::Map<hashbrown::hash_set::rayon::ParIter<'a, T>, fn(&T) -> (&T,)>;
 
-   fn c_iter_all(&'a self) -> Self::AllIteratorType { EqRelInd0CRelIndexReadAllIter(self.0.unwrap_frozen()) }
+   fn c_iter_all(&'a self) -> impl ParallelIterator<Item = (Self::Key, impl ParallelIterator<Item = Self::Value> + 'a)> + 'a { EqRelInd0CRelIndexReadAllIter(self.0.unwrap_frozen()) }
 }
 
 impl<T: Clone + Hash + Eq> RelIndexWrite for EqRelInd0<'_, T> {
@@ -423,9 +425,9 @@ impl<'a, T: Clone + Hash + Eq + 'a> RelIndexRead<'a> for CEqRelIndCommon<T> {
    type Key = &'a (T, T);
    type Value = ();
 
-   type IteratorType = std::iter::Once<()>;
+   // type IteratorType = std::iter::Once<()>;
 
-   fn index_get(&'a self, (x, y): &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, (x, y): &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let self_ = self.unwrap_frozen();
       if self_.combined.contains(x, y) && !self_.old.contains(x, y) { Some(std::iter::once(())) } else { None }
    }
@@ -443,9 +445,9 @@ impl<'a, T: Clone + Hash + Eq + Sync + 'a> CRelIndexRead<'a> for CEqRelIndCommon
    type Key = &'a (T, T);
    type Value = ();
 
-   type IteratorType = ascent::rayon::iter::Once<()>;
+   // type IteratorType = ascent::rayon::iter::Once<()>;
 
-   fn c_index_get(&'a self, (x, y): &Self::Key) -> Option<Self::IteratorType> {
+   fn c_index_get(&'a self, (x, y): &Self::Key) -> Option<impl ParallelIterator<Item = Self::Value> + Clone + 'a> {
       let self_ = self.unwrap_frozen();
       if self_.combined.contains(x, y) && !self_.old.contains(x, y) {
          Some(ascent::rayon::iter::once(()))
@@ -459,27 +461,26 @@ impl<'a, T: Clone + Hash + Eq + 'a> RelIndexReadAll<'a> for CEqRelIndCommon<T> {
    type Key = (&'a T, &'a T);
    type Value = ();
 
-   type ValueIteratorType = std::iter::Once<()>;
+   // type ValueIteratorType = std::iter::Once<()>;
 
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType { Box::new(self.iter_all_added().map(|x| (x, std::iter::once(())))) }
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a { self.iter_all_added().map(|x| (x, std::iter::once(())))}
 }
 
 impl<'a, T: Clone + Hash + Eq + Sync + 'a> CRelIndexReadAll<'a> for CEqRelIndCommon<T> {
    type Key = (&'a T, &'a T);
    type Value = ();
 
-   type ValueIteratorType = ascent::rayon::iter::Once<()>;
+   // type ValueIteratorType = ascent::rayon::iter::Once<()>;
 
-   type AllIteratorType = ascent::rayon::iter::Map<
-      AllAddedParIter<'a, T>,
-      for<'aa, 'bb> fn((&'aa T, &'bb T)) -> ((&'aa T, &'bb T), ascent::rayon::iter::Once<()>),
-   >;
+   // type AllIteratorType = ascent::rayon::iter::Map<
+   //    AllAddedParIter<'a, T>,
+   //    for<'aa, 'bb> fn((&'aa T, &'bb T)) -> ((&'aa T, &'bb T), ascent::rayon::iter::Once<()>),
+   // >;
 
-   fn c_iter_all(&'a self) -> Self::AllIteratorType {
-      let res: Self::AllIteratorType = self.c_iter_all_added().map(|x| (x, ascent::rayon::iter::once(())));
-      res
+   fn c_iter_all(&'a self) -> impl ParallelIterator<Item = (Self::Key, impl ParallelIterator<Item = Self::Value> + 'a)> + 'a {
+      self.c_iter_all_added().map(|x| (x, ascent::rayon::iter::once(())))
    }
 }
 
@@ -534,9 +535,9 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelIndNone<'a, T> {
    type Key = ();
    type Value = (&'a T, &'a T);
 
-   type IteratorType = IteratorFromDyn<'a, (&'a T, &'a T)>;
+   // type IteratorType = IteratorFromDyn<'a, (&'a T, &'a T)>;
 
-   fn index_get(&'a self, _key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, _key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       Some(IteratorFromDyn::new(|| self.0.iter_all_added()))
    }
 
@@ -547,9 +548,9 @@ impl<'a, T: Clone + Hash + Eq + Sync> CRelIndexRead<'a> for EqRelIndNone<'a, T> 
    type Key = ();
    type Value = (&'a T, &'a T);
 
-   type IteratorType = AllAddedParIter<'a, T>;
+   // type IteratorType = AllAddedParIter<'a, T>;
 
-   fn c_index_get(&'a self, _key: &Self::Key) -> Option<Self::IteratorType> { Some(self.0.c_iter_all_added()) }
+   fn c_index_get(&'a self, _key: &Self::Key) -> Option<impl ParallelIterator<Item = Self::Value> + Clone + 'a> { Some(self.0.c_iter_all_added()) }
 }
 
 impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelIndNone<'a, T> {
@@ -557,22 +558,22 @@ impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelIndNone<'a, T> {
 
    type Value = (&'a T, &'a T);
 
-   type ValueIteratorType = IteratorFromDyn<'a, (&'a T, &'a T)>;
+   // type ValueIteratorType = IteratorFromDyn<'a, (&'a T, &'a T)>;
 
-   type AllIteratorType = std::option::IntoIter<(Self::Key, Self::ValueIteratorType)>;
+   // type AllIteratorType = std::option::IntoIter<(Self::Key, Self::ValueIteratorType)>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType { self.index_get(&()).map(|iter| ((), iter)).into_iter() }
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a { self.index_get(&()).map(|iter| ((), iter)).into_iter() }
 }
 
 impl<'a, T: Clone + Hash + Eq + Sync> CRelIndexReadAll<'a> for EqRelIndNone<'a, T> {
    type Key = ();
    type Value = (&'a T, &'a T);
 
-   type ValueIteratorType = AllAddedParIter<'a, T>;
+   // type ValueIteratorType = AllAddedParIter<'a, T>;
 
-   type AllIteratorType = ascent::rayon::iter::Once<(Self::Key, Self::ValueIteratorType)>;
+   // type AllIteratorType = ascent::rayon::iter::Once<(Self::Key, Self::ValueIteratorType)>;
 
-   fn c_iter_all(&'a self) -> Self::AllIteratorType { ascent::rayon::iter::once(((), self.0.c_iter_all_added())) }
+   fn c_iter_all(&'a self) -> impl ParallelIterator<Item = (Self::Key, impl ParallelIterator<Item = Self::Value> + 'a)> + 'a { ascent::rayon::iter::once(((), self.0.c_iter_all_added())) }
 }
 
 impl<T: Clone + Hash + Eq> RelIndexWrite for EqRelIndNone<'_, T> {

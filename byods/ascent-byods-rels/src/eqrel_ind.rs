@@ -1,5 +1,5 @@
-use std::hash::{BuildHasherDefault, Hash};
-use std::iter::{FlatMap, Map, Repeat, Zip};
+use std::hash::Hash;
+// use std::iter::{FlatMap, Map, Repeat, Zip};
 use std::marker::PhantomData;
 use std::mem::transmute;
 use std::rc::Rc;
@@ -7,11 +7,11 @@ use std::rc::Rc;
 use ascent::internal::{
    RelFullIndexRead, RelFullIndexWrite, RelIndexMerge, RelIndexRead, RelIndexReadAll, RelIndexWrite, ToRelIndex,
 };
-use hashbrown::HashSet;
-use hashbrown::hash_set::Iter as HashSetIter;
+// use hashbrown::HashSet;
+// use hashbrown::hash_set::Iter as HashSetIter;
 #[cfg(test)]
 use itertools::Itertools;
-use rustc_hash::FxHasher;
+// use rustc_hash::FxHasher;
 
 use crate::iterator_from_dyn::IteratorFromDyn;
 use crate::union_find::EqRel;
@@ -20,6 +20,7 @@ pub struct EqRelInd0<'a, T: Clone + Hash + Eq>(pub(crate) &'a EqRelIndCommon<T>)
 
 #[test]
 fn test_eq_rel_ind_0_iter_all() {
+   use hashbrown::HashSet;
    let mut eq_rel_old = EqRel::default();
    for x in 1..=10 {
       eq_rel_old.add(1, x);
@@ -120,9 +121,9 @@ impl<T: Clone + Hash + Eq> RelFullIndexWrite for EqRelInd0_1Write<'_, T> {
 impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelInd0_1<'a, T> {
    type Key = <EqRelIndCommon<T> as RelIndexRead<'a>>::Key;
    type Value = <EqRelIndCommon<T> as RelIndexRead<'a>>::Value;
-   type IteratorType = <EqRelIndCommon<T> as RelIndexRead<'a>>::IteratorType;
+   // type IteratorType = <EqRelIndCommon<T> as RelIndexRead<'a>>::IteratorType;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> { self.0.index_get(key) }
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> { self.0.index_get(key) }
 
    fn len_estimate(&self) -> usize { self.0.len_estimate() }
 }
@@ -130,9 +131,9 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelInd0_1<'a, T> {
 impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelInd0_1<'a, T> {
    type Key = <EqRelIndCommon<T> as RelIndexReadAll<'a>>::Key;
    type Value = <EqRelIndCommon<T> as RelIndexReadAll<'a>>::Value;
-   type ValueIteratorType = <EqRelIndCommon<T> as RelIndexReadAll<'a>>::ValueIteratorType;
-   type AllIteratorType = <EqRelIndCommon<T> as RelIndexReadAll<'a>>::AllIteratorType;
-   fn iter_all(&'a self) -> Self::AllIteratorType { self.0.iter_all() }
+   // type ValueIteratorType = <EqRelIndCommon<T> as RelIndexReadAll<'a>>::ValueIteratorType;
+   // type AllIteratorType = <EqRelIndCommon<T> as RelIndexReadAll<'a>>::AllIteratorType;
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a { self.0.iter_all() }
 }
 
 impl<'a, T: Clone + Hash + Eq> RelFullIndexRead<'a> for EqRelInd0_1<'a, T> {
@@ -158,9 +159,9 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelInd0<'a, T> {
    type Key = (T,);
    type Value = (&'a T,);
 
-   type IteratorType = IteratorFromDyn<'a, (&'a T,)>;
+   // type IteratorType = IteratorFromDyn<'a, (&'a T,)>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let _ = self.0.set_of_added(&key.0)?;
       let key = key.clone();
       let producer = move || self.0.set_of_added(&key.0).unwrap().map(|x| (x,));
@@ -175,31 +176,30 @@ impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelInd0<'a, T> {
    type Key = &'a (T,);
    type Value = (&'a T,);
 
-   type ValueIteratorType = Map<HashSetIter<'a, T>, for<'aa> fn(&'aa T) -> (&'aa T,)>;
+   // type ValueIteratorType = Map<HashSetIter<'a, T>, for<'aa> fn(&'aa T) -> (&'aa T,)>;
 
-   type AllIteratorType = FlatMap<
-      std::slice::Iter<'a, HashSet<T, BuildHasherDefault<FxHasher>>>,
-      Map<
-         Zip<HashSetIter<'a, T>, Repeat<HashSetIter<'a, T>>>,
-         for<'aa> fn(
-            (&'aa T, HashSetIter<'aa, T>),
-         ) -> (&'aa (T,), Map<HashSetIter<'aa, T>, for<'bb> fn(&'bb T) -> (&'bb T,)>),
-      >,
-      for<'aa> fn(
-         &'aa HashSet<T, BuildHasherDefault<FxHasher>>,
-      ) -> Map<
-         Zip<HashSetIter<'aa, T>, Repeat<HashSetIter<'aa, T>>>,
-         for<'cc> fn(
-            (&'cc T, HashSetIter<'cc, T>),
-         ) -> (&'cc (T,), Map<HashSetIter<'cc, T>, for<'dd> fn(&'dd T) -> (&'dd T,)>),
-      >,
-   >;
+   // type AllIteratorType = FlatMap<
+   //    std::slice::Iter<'a, HashSet<T, BuildHasherDefault<FxHasher>>>,
+   //    Map<
+   //       Zip<HashSetIter<'a, T>, Repeat<HashSetIter<'a, T>>>,
+   //       for<'aa> fn(
+   //          (&'aa T, HashSetIter<'aa, T>),
+   //       ) -> (&'aa (T,), Map<HashSetIter<'aa, T>, for<'bb> fn(&'bb T) -> (&'bb T,)>),
+   //    >,
+   //    for<'aa> fn(
+   //       &'aa HashSet<T, BuildHasherDefault<FxHasher>>,
+   //    ) -> Map<
+   //       Zip<HashSetIter<'aa, T>, Repeat<HashSetIter<'aa, T>>>,
+   //       for<'cc> fn(
+   //          (&'cc T, HashSetIter<'cc, T>),
+   //       ) -> (&'cc (T,), Map<HashSetIter<'cc, T>, for<'dd> fn(&'dd T) -> (&'dd T,)>),
+   //    >,
+   // >;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res: Self::AllIteratorType = self.0.combined.sets.iter().flat_map(|s| {
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.combined.sets.iter().flat_map(|s| {
          s.iter().zip(std::iter::repeat(s.iter())).map(|(x, s)| (ref_to_singleton_tuple_ref(x), s.map(|x| (x,))))
-      });
-      res
+      })
    }
 }
 
@@ -253,9 +253,9 @@ impl<'a, T: Clone + Hash + Eq + 'a> RelIndexRead<'a> for EqRelIndCommon<T> {
    type Key = (T, T);
    type Value = ();
 
-   type IteratorType = std::iter::Once<()>;
+   // type IteratorType = std::iter::Once<()>;
 
-   fn index_get(&'a self, (x, y): &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, (x, y): &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       if self.combined.contains(x, y) && !self.old.contains(x, y) { Some(std::iter::once(())) } else { None }
    }
 
@@ -271,11 +271,13 @@ impl<'a, T: Clone + Hash + Eq + 'a> RelIndexReadAll<'a> for EqRelIndCommon<T> {
    type Key = (&'a T, &'a T);
    type Value = ();
 
-   type ValueIteratorType = std::iter::Once<()>;
+   // type ValueIteratorType = std::iter::Once<()>;
 
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType { Box::new(self.iter_all_added().map(|x| (x, std::iter::once(())))) }
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.iter_all_added().map(|x| (x, std::iter::once(())))
+   }
 }
 
 impl<'a, T: Clone + Hash + Eq> RelFullIndexRead<'a> for EqRelIndCommon<T> {
@@ -314,9 +316,9 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelIndNone<'a, T> {
 
    type Value = (&'a T, &'a T);
 
-   type IteratorType = IteratorFromDyn<'a, (&'a T, &'a T)>;
+   // type IteratorType = IteratorFromDyn<'a, (&'a T, &'a T)>;
 
-   fn index_get(&'a self, _key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, _key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       Some(IteratorFromDyn::new(|| self.0.iter_all_added()))
    }
 
@@ -328,11 +330,13 @@ impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelIndNone<'a, T> {
 
    type Value = (&'a T, &'a T);
 
-   type ValueIteratorType = IteratorFromDyn<'a, (&'a T, &'a T)>;
+   // type ValueIteratorType = IteratorFromDyn<'a, (&'a T, &'a T)>;
 
-   type AllIteratorType = std::option::IntoIter<(Self::Key, Self::ValueIteratorType)>;
+   // type AllIteratorType = std::option::IntoIter<(Self::Key, Self::ValueIteratorType)>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType { self.index_get(&()).map(|iter| ((), iter)).into_iter() }
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.index_get(&()).map(|iter| ((), iter)).into_iter()
+   }
 }
 
 impl<T: Clone + Hash + Eq> RelIndexWrite for EqRelIndNone<'_, T> {

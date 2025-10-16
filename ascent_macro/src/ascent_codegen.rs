@@ -1266,8 +1266,9 @@ fn head_update_code(rule: &MirRule, scc: &MirScc, mir: &AscentMir) -> proc_macro
                if let Some(mut __existing_ind) = #head_lat_full_index_var_name_new.index_get(&__lattice_key)
                   .or_else(|| #head_lat_full_index_var_name_delta.index_get(&__lattice_key))
                   .or_else(|| #head_lat_full_index_var_name_full.index_get(&__lattice_key))
+                  .and_then(|mut iter| iter.next().copied()) // freeing the iterator
                {
-                  let __existing_ind = *__existing_ind.next().unwrap();
+                  // let __existing_ind = *__existing_ind.next().unwrap();
                   // TODO possible excessive cloning here?
                   let __lat_changed = ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].#tuple_lat_index, __new_row.#tuple_lat_index.clone());
                   if __lat_changed {

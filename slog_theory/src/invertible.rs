@@ -26,8 +26,8 @@ pub struct InvertibleInd0(pub Invertible);
 impl<'a> RelIndexRead<'a> for InvertibleInd0 {
    type Key = (InvertibleFn, i32);
    type Value = (i32,);
-   type IteratorType = std::iter::Once<Self::Value>;
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   // type IteratorType = std::iter::Once<Self::Value>;
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let (f, op1) = key;
       Some(std::iter::once((f.0(*op1),)))
    }
@@ -42,8 +42,8 @@ pub struct InvertibleInd1(pub Invertible);
 impl<'a> RelIndexRead<'a> for InvertibleInd1 {
    type Key = (InvertibleFn, i32);
    type Value = (i32,);
-   type IteratorType = std::iter::Once<Self::Value>;
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   // type IteratorType = std::iter::Once<Self::Value>;
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let (f, op2) = key;
       Some(std::iter::once((f.1(*op2),)))
    }

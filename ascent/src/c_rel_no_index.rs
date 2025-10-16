@@ -41,15 +41,15 @@ impl<'a, V: 'a> RelIndexRead<'a> for CRelNoIndex<V> {
    type Key = ();
    type Value = &'a V;
 
-   type IteratorType = std::iter::FlatMap<
-      std::slice::Iter<'a, RwLock<Vec<V>>>,
-      std::slice::Iter<'a, V>,
-      fn(&RwLock<Vec<V>>) -> std::slice::Iter<V>,
-   >;
+   // type IteratorType = std::iter::FlatMap<
+   //    std::slice::Iter<'a, RwLock<Vec<V>>>,
+   //    std::slice::Iter<'a, V>,
+   //    fn(&RwLock<Vec<V>>) -> std::slice::Iter<V>,
+   // >;
 
-   fn index_get(&'a self, _key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, _key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       assert!(self.frozen);
-      let res: Self::IteratorType = self.vec.iter().flat_map(|v| {
+      let res = self.vec.iter().flat_map(|v| {
          let data = unsafe { &*v.data_ptr() };
          data.iter()
       });
@@ -66,12 +66,12 @@ impl<'a, V: 'a + Sync + Send> CRelIndexRead<'a> for CRelNoIndex<V> {
    type Key = ();
    type Value = &'a V;
 
-   type IteratorType =
-      rayon::iter::FlatMap<rayon::slice::Iter<'a, RwLock<Vec<V>>>, fn(&RwLock<Vec<V>>) -> rayon::slice::Iter<V>>;
+   // type IteratorType =
+   //    rayon::iter::FlatMap<rayon::slice::Iter<'a, RwLock<Vec<V>>>, fn(&RwLock<Vec<V>>) -> rayon::slice::Iter<V>>;
 
-   fn c_index_get(&'a self, _key: &Self::Key) -> Option<Self::IteratorType> {
+   fn c_index_get(&'a self, _key: &Self::Key) -> Option<impl ParallelIterator<Item = Self::Value> + Clone + 'a> {
       assert!(self.frozen);
-      let res: Self::IteratorType = self.vec.par_iter().flat_map(|v| {
+      let res = self.vec.par_iter().flat_map(|v| {
          let data = unsafe { &*v.data_ptr() };
          data.par_iter()
       });
@@ -129,20 +129,17 @@ impl<'a, V: 'a> RelIndexReadAll<'a> for CRelNoIndex<V> {
    type Key = &'a ();
    type Value = &'a V;
 
-   type ValueIteratorType = <Self as RelIndexRead<'a>>::IteratorType;
-
-   type AllIteratorType = std::iter::Once<(&'a (), Self::ValueIteratorType)>;
-
-   fn iter_all(&'a self) -> Self::AllIteratorType { std::iter::once((&(), self.index_get(&()).unwrap())) }
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a { std::iter::once((&(), self.index_get(&()).unwrap())) }
 }
 
 impl<'a, V: 'a + Sync + Send> CRelIndexReadAll<'a> for CRelNoIndex<V> {
    type Key = &'a ();
    type Value = &'a V;
 
-   type ValueIteratorType = <Self as CRelIndexRead<'a>>::IteratorType;
+   // type ValueIteratorType = <Self as CRelIndexRead<'a>>::IteratorType;
+   // type AllIteratorType = rayon::iter::Once<(&'a (), Self::ValueIteratorType)>;
 
-   type AllIteratorType = rayon::iter::Once<(&'a (), Self::ValueIteratorType)>;
-
-   fn c_iter_all(&'a self) -> Self::AllIteratorType { rayon::iter::once((&(), self.c_index_get(&()).unwrap())) }
+   fn c_iter_all(&'a self) -> impl ParallelIterator<Item = (Self::Key, impl ParallelIterator<Item = Self::Value> + 'a)> + 'a {
+      rayon::iter::once((&(), self.c_index_get(&()).unwrap()))
+   }
 }

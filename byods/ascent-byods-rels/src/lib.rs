@@ -35,8 +35,12 @@ pub mod trrel_union_find;
 #[doc(hidden)]
 pub mod trrel_union_find_binary_ind;
 
+#[doc(hidden)]
+pub mod eqrel_canonical_ind;
+
 pub mod uf;
 pub mod trrel;
 pub mod eqrel;
+pub mod eqrel_canonical;
 pub mod trrel_uf;
 pub mod adaptor;

@@ -69,6 +69,18 @@ impl<T: Clone + Hash + Eq> EqRel<T> {
       self.elem_ids.get(elem).map(|id| self.get_dominant_id(*id))
    }
 
+
+   pub fn dominant_ids(&self) -> impl Iterator<Item = usize> + '_ {
+      self.elem_ids.iter().filter_map(move |(_, &id)|
+       if self.set_subsumptions.contains_key(&id) { None } else { Some(id) }
+      )
+   }
+
+   pub fn dominant_elements(&self) -> impl Iterator<Item = &T> + '_ {
+      self.dominant_ids()
+          .filter_map(|id| self.sets.get(id)?.iter().next())
+  }
+
    fn get_dominant_id_update(&mut self, id: usize) -> usize {
       match self.set_subsumptions.get(&id) {
          Some(&parent_id) => {

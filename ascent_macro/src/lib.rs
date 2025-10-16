@@ -93,22 +93,6 @@ pub fn ascent_run_par(input: TokenStream) -> TokenStream {
 
 /// This macro allows writing Ascent code that can later be included in an actual Ascent program.
 ///
-/// In an Ascent program, you can include the contents of an `ascent_source` using the `include_source!(path);`
-/// syntax. It will look like the following:
-/// ```
-/// # #[macro_use] extern crate ascent;
-/// let capatures = ...; // ...
-/// mod my_ascent_sources {
-///   ascent_source! { secret_sauce (capatures, ...):
-///     // secret Ascent code ...
-///   }
-/// }
-/// // somewhere else, we define an actual Ascent program:
-/// ascent! {
-///   include_source!(my_ascent_sources::secret_sauce, capatures, ...);
-///   // More Ascent code ...
-/// }
-/// ```
 /// ascent_source will compile the included source code to a deferred macro definition, where code after `:`
 /// will become the body of compiled macro.
 /// To avoid hygiene issues, we provide additional arguments to the `ascent_source` macro before `:`.
@@ -150,18 +134,6 @@ pub fn ascent_run_par(input: TokenStream) -> TokenStream {
 /// ascent_par! {
 ///    struct ParallelTc;
 ///    include_source!(base::tc);
-/// }
-/// ```
-/// # Example for binding macro variables
-/// ```
-/// mod foo_mod {
-/// ascent_source! { foo_gen (z):
-///    foo(x, y) <-- foo(y, x), let _ = $z;
-/// }
-/// }
-/// ascent_run! {
-///    relation foo(i32, i32);
-///    include_source!(foo_mod::foo_gen, z);
 /// }
 /// ```
 #[proc_macro]

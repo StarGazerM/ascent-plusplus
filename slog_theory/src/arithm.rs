@@ -63,8 +63,8 @@ pub struct EquationInd0(pub Equation);
 impl<'a> RelIndexRead<'a> for EquationInd0 {
    type Key = (ArithmFn, i32);
    type Value = (i32,);
-   type IteratorType = std::iter::Once<Self::Value>;
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   // type IteratorType = std::iter::Once<Self::Value>;
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let (f, op1) = key;
       let st = Storage::new();
       let mut solver = Solver::new(&st, Z3Binary::new("z3").unwrap()).expect("Failed to create Z3 solver");
@@ -91,8 +91,8 @@ pub struct EquationInd1(pub Equation);
 impl<'a> RelIndexRead<'a> for EquationInd1 {
    type Key = (ArithmFn, i32);
    type Value = (i32,);
-   type IteratorType = std::iter::Once<Self::Value>;
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   // type IteratorType = std::iter::Once<Self::Value>;
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let (f, op2) = key;
       let st = Storage::new();
       let mut solver = Solver::new(&st, Z3Binary::new("z3").unwrap()).expect("Failed to create Z3 solver");

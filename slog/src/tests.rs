@@ -58,7 +58,7 @@ fn test_slog_order_compile() {
       (struct Foobar)
       (define foo usize usize)
       (define bar usize usize)
-      (define foobar sexpr sexpr)
+      (define foobar usize usize)
 
       // query foo before foobar
       [(bar x y) <-- (foobar ?(foo x y) _) (bar x y)]
@@ -74,8 +74,8 @@ fn test_slog_fact_compile() {
       (struct Foobar)
       (define number i32)
       (define var &'static str)
-      (define add eclass eclass)
-      (define mul eclass eclass)
+      (define add usize usize)
+      (define mul usize usize)
 
       // 2 * (x * 3)
       (mul (number 2) (mul (var "x") (number 3)))
@@ -92,7 +92,7 @@ fn test_generative_facts_compile() {
       (struct Foobar)
       (define foo usize usize)
       (define bar usize usize)
-      (define foobar sexpr sexpr)
+      (define foobar usize usize)
 
       (foo 1 2)
       (bar 3 4)
@@ -162,7 +162,7 @@ fn test_id_unification_compile() {
       (struct Foobar)
       (define foo usize usize)
       (define bar usize usize)
-      (define foobar sexpr sexpr)
+      (define foobar usize usize)
 
       [(foobar idf (bar x y)) <-- (= idf (foo x y)) (bar x y)]
    };
@@ -176,7 +176,7 @@ fn test_structured_clause_compile() {
       (struct Foobar)
       (define foo usize usize)
       (define bar usize usize)
-      (define foobar sexpr sexpr)
+      (define foobar usize usize)
 
       [(foobar (foo x y) (bar a b)) <-- (foo x y) (bar a b)]
    };
@@ -190,7 +190,7 @@ fn test_question_mark_compile() {
       (struct Foobar)
       (define foo usize usize)
       (define bar usize usize)
-      (define foobar sexpr sexpr)
+      (define foobar usize usize)
 
       [(foo ?(bar x z) z) <-- (foo x y)]
    };
@@ -202,9 +202,9 @@ fn test_bang_compile() {
    let tokens = quote! {
       (struct PathLength)
       (define empty usize)
-      (define path usize sexpr)
-      (define length sexpr usize)
-      (define do_length sexpr)
+      (define path usize usize)
+      (define length usize usize)
+      (define do_length usize)
 
       (path 1 (path 2 (path 3 ?(nil 0))))
 

@@ -4,6 +4,7 @@ use std::hash::{BuildHasherDefault, Hash};
 use ascent_base::util::update;
 use dashmap::{DashMap, SharedValue};
 use instant::Instant;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::FxHasher;
 
 use crate::c_rel_index::{DashMapViewParIter, shards_count};
@@ -95,9 +96,9 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + Clone + Hash + Eq> RelIndexRead<'a> 
    type Key = K;
    type Value = &'a V;
 
-   type IteratorType = std::collections::hash_set::Iter<'a, V>;
+   // type IteratorType = std::collections::hash_set::Iter<'a, V>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let vals = &self.unwrap_frozen().get(key)?;
       let res = vals.iter();
       Some(res)
@@ -108,13 +109,13 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + Clone + Hash + Eq> RelIndexRead<'a> 
    fn is_empty(&'a self) -> bool { self.unwrap_frozen().len() == 0 }
 }
 
-impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + Clone + Hash + Eq + Sync> CRelIndexRead<'a> for CLatIndex<K, V> {
+impl<'a, K: 'a + Clone + Hash + Eq + Send, V: 'a + Clone + Hash + Eq + Sync> CRelIndexRead<'a> for CLatIndex<K, V> {
    type Key = K;
    type Value = &'a V;
 
-   type IteratorType = rayon::collections::hash_set::Iter<'a, V>;
+   // type IteratorType = rayon::collections::hash_set::Iter<'a, V>;
 
-   fn c_index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn c_index_get(&'a self, key: &Self::Key) -> Option<impl ParallelIterator<Item = Self::Value> + Clone + 'a> {
       use rayon::prelude::*;
       let vals = &self.unwrap_frozen().get(key)?;
       let res = vals.par_iter();
@@ -187,13 +188,11 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + Clone + Hash + Eq> RelIndexReadAll<'
    type Key = &'a K;
    type Value = V;
 
-   type ValueIteratorType = std::iter::Cloned<std::collections::hash_set::Iter<'a, V>>;
-   type AllIteratorType = Box<dyn Iterator<Item = (&'a K, Self::ValueIteratorType)> + 'a>;
+   // type ValueIteratorType = std::iter::Cloned<std::collections::hash_set::Iter<'a, V>>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (&'a K, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      // let res = DashMapViewParIter::new(self.unwrap_frozen()).map(|(k, v)| (k, v.iter().cloned()));
-      let res = self.unwrap_frozen().iter().map(|(k, v)| (k, v.iter().cloned()));
-      Box::new(res) as _
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.unwrap_frozen().iter().map(|(k, v)| (k, v.iter().cloned()))
    }
 }
 
@@ -203,17 +202,14 @@ impl<'a, K: 'a + Clone + Hash + Eq + Sync + Send, V: 'a + Clone + Hash + Eq + Sy
    type Key = &'a K;
    type Value = &'a V;
 
-   type ValueIteratorType = rayon::collections::hash_set::Iter<'a, V>;
+   // type ValueIteratorType = rayon::collections::hash_set::Iter<'a, V>;
+   // type AllIteratorType = rayon::iter::Map<
+   //    DashMapViewParIter<'a, K, SetType<V>, BuildHasherDefault<FxHasher>>,
+   //    for<'aa, 'bb> fn((&'aa K, &'bb SetType<V>)) -> (&'aa K, rayon::collections::hash_set::Iter<'bb, V>),
+   // >;
 
-   type AllIteratorType = rayon::iter::Map<
-      DashMapViewParIter<'a, K, SetType<V>, BuildHasherDefault<FxHasher>>,
-      for<'aa, 'bb> fn((&'aa K, &'bb SetType<V>)) -> (&'aa K, rayon::collections::hash_set::Iter<'bb, V>),
-   >;
-
-   fn c_iter_all(&'a self) -> Self::AllIteratorType {
-      use rayon::prelude::*;
-      let res: Self::AllIteratorType = DashMapViewParIter::new(self.unwrap_frozen()).map(|(k, v)| (k, v.par_iter()));
-      res
+   fn c_iter_all(&'a self) -> impl ParallelIterator<Item = (Self::Key, impl ParallelIterator<Item = Self::Value> + 'a)> + 'a {
+      DashMapViewParIter::new(self.unwrap_frozen()).map(|(k, v)| (k, v.par_iter()))
    }
 }
 

@@ -1,9 +1,9 @@
 use proc_macro2::{Group, Span, TokenStream, TokenTree};
 use rand::Rng;
-use syn::{braced, parenthesized, parse::{Parse, ParseBuffer, ParseStream}, parse2, punctuated::Punctuated, Ident, Result, Token};
+use syn::{parse2, Ident, Result};
 use quote::{quote, quote_spanned};
 
-use crate::{compile::compile, syntax::{kw_slog, ShareDbInput, SlogGenInput, SlogSourceInput, SlogType}};
+use crate::{compile::compile, syntax::{ShareDbInput, SlogGenInput, SlogSourceInput, SlogType}};
 
 // create a new ident with the given name + a random suffix
 pub fn new_ident(name: &str) -> Ident {

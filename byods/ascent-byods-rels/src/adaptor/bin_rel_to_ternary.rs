@@ -1,5 +1,5 @@
 use std::hash::{BuildHasher as _, BuildHasherDefault, Hash};
-use std::iter::{Map, once};
+use std::iter::once;
 use std::marker::PhantomData;
 
 use ascent::internal::{
@@ -106,11 +106,11 @@ where
    type Key = (&'a T0,);
    type Value = (&'a T1, &'a T2);
 
-   type ValueIteratorType = Box<dyn Iterator<Item = Self::Value> + 'a>;
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type ValueIteratorType = Box<dyn Iterator<Item = Self::Value> + 'a>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      Box::new(self.0.map.iter().map(|(k, v)| ((k,), Box::new(v.iter_all()) as _)))
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.map.iter().map(|(k, v)| ((k,), v.iter_all()))
    }
 }
 
@@ -124,9 +124,9 @@ where
    type Key = (T0,);
    type Value = (&'a T1, &'a T2);
 
-   type IteratorType = IteratorFromDyn<'a, Self::Value>;
+   // type IteratorType = IteratorFromDyn<'a, Self::Value>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let trrel = self.0.map.get(&key.0)?;
       Some(IteratorFromDyn::new(|| trrel.iter_all()))
    }
@@ -157,17 +157,16 @@ where
 
    type Value = (&'a T2,);
 
-   type ValueIteratorType = Map<TBinRel::Ind0AllIterValsIter<'a>, fn(&T2) -> (&T2,)>;
+   // type ValueIteratorType = Map<TBinRel::Ind0AllIterValsIter<'a>, fn(&T2) -> (&T2,)>;
 
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      Box::new(self.0.map.iter().flat_map(|(x0, v)| {
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.map.iter().flat_map(|(x0, v)| {
          v.ind0_iter_all().map(move |(x1, x2s)| {
-            let iter: Self::ValueIteratorType = x2s.map(|x2| (x2,));
-            ((x0, x1), iter)
+            ((x0, x1), x2s.map(|x2| (x2,)))
          })
-      }))
+      })
    }
 }
 
@@ -182,11 +181,11 @@ where
 
    type Value = (&'a T2,);
 
-   type IteratorType = Map<TBinRel::Ind0ValsIter<'a>, fn(&T2) -> (&T2,)>;
+   // type IteratorType = Map<TBinRel::Ind0ValsIter<'a>, fn(&T2) -> (&T2,)>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let trrel = self.0.map.get(&key.0)?;
-      let res: Self::IteratorType = trrel.ind0_index_get(&key.1)?.map(|x| (x,));
+      let res = trrel.ind0_index_get(&key.1)?.map(|x| (x,));
       Some(res)
    }
 
@@ -217,17 +216,17 @@ where
 
    type Value = (&'a T1,);
 
-   type ValueIteratorType = Map<TBinRel::Ind1AllIterValsIter<'a>, fn(&T1) -> (&T1,)>;
+   // type ValueIteratorType = Map<TBinRel::Ind1AllIterValsIter<'a>, fn(&T1) -> (&T1,)>;
 
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      Box::new(self.0.map.iter().flat_map(|(x0, v)| {
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.map.iter().flat_map(|(x0, v)| {
          v.ind1_iter_all().map(move |(x2, x1s)| {
-            let iter: Self::ValueIteratorType = x1s.map(|x2| (x2,));
+            let iter = x1s.map(|x2| (x2,));
             ((x0, x2), iter)
          })
-      }))
+      })
    }
 }
 
@@ -242,11 +241,11 @@ where
 
    type Value = (&'a T1,);
 
-   type IteratorType = Map<TBinRel::Ind1ValsIter<'a>, fn(&T1) -> (&T1,)>;
+   // type IteratorType = Map<TBinRel::Ind1ValsIter<'a>, fn(&T1) -> (&T1,)>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let trrel = self.0.map.get(&key.0)?;
-      let res: Self::IteratorType = trrel.ind1_index_get(&key.1)?.map(|x| (x,));
+      let res = trrel.ind1_index_get(&key.1)?.map(|x| (x,));
       Some(res)
    }
 
@@ -276,10 +275,10 @@ where
    type Key = (&'a T1,);
    type Value = (&'a T0, &'a T2);
 
-   type ValueIteratorType = <Self as RelIndexRead<'a>>::IteratorType;
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type ValueIteratorType = <Self as RelIndexRead<'a>>::IteratorType;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
       Box::new(self.0.reverse_map1.as_ref().unwrap().keys().map(|x1| ((x1,), self.get(x1).unwrap())))
    }
 }
@@ -291,7 +290,7 @@ where
    T2: Clone + Hash + Eq,
    TBinRel: ByodsBinRel<T0 = T1, T1 = T2>,
 {
-   fn get(&'a self, x1: &T1) -> Option<<Self as RelIndexRead<'a>>::IteratorType> {
+   fn get(&'a self, x1: &T1) -> Option<impl Iterator<Item = (&'a T0, &'a T2)> + Clone + 'a> {
       let (x1, x0s) = self.0.reverse_map1.as_ref().unwrap().get_key_value(x1)?;
       let res = move || {
          x0s.iter()
@@ -313,9 +312,9 @@ where
 
    type Value = (&'a T0, &'a T2);
 
-   type IteratorType = IteratorFromDyn<'a, Self::Value>;
+   // type IteratorType = IteratorFromDyn<'a, Self::Value>;
 
-   fn index_get(&'a self, (x1,): &Self::Key) -> Option<Self::IteratorType> { self.get(x1) }
+   fn index_get(&'a self, (x1,): &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> { self.get(x1) }
 
    fn len_estimate(&self) -> usize { self.0.reverse_map1.as_ref().unwrap().len() }
    fn is_empty(&'a self) -> bool { self.0.reverse_map1.as_ref().unwrap().is_empty() }
@@ -338,11 +337,11 @@ where
    type Key = (&'a T2,);
    type Value = (&'a T0, &'a T1);
 
-   type ValueIteratorType = <Self as RelIndexRead<'a>>::IteratorType;
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type ValueIteratorType = <Self as RelIndexRead<'a>>::IteratorType;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      Box::new(self.0.reverse_map2.as_ref().unwrap().keys().map(|x2| ((x2,), self.get(x2).unwrap())))
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.reverse_map2.as_ref().unwrap().keys().map(|x2| ((x2,), self.get(x2).unwrap()))
    }
 }
 
@@ -353,7 +352,7 @@ where
    T2: Clone + Hash + Eq,
    TBinRel: ByodsBinRel<T0 = T1, T1 = T2>,
 {
-   fn get(&'a self, x2: &T2) -> Option<<Self as RelIndexRead<'a>>::IteratorType> {
+   fn get(&'a self, x2: &T2) -> Option<impl Iterator<Item = (&'a T0, &'a T1)> + Clone + 'a> {
       let (x2, x0s) = self.0.reverse_map2.as_ref().unwrap().get_key_value(x2)?;
       let res = move || {
          x0s.iter()
@@ -374,9 +373,9 @@ where
    type Key = (T2,);
    type Value = (&'a T0, &'a T1);
 
-   type IteratorType = IteratorFromDyn<'a, Self::Value>;
+   // type IteratorType = IteratorFromDyn<'a, Self::Value>;
 
-   fn index_get(&'a self, (x2,): &Self::Key) -> Option<Self::IteratorType> { self.get(x2) }
+   fn index_get(&'a self, (x2,): &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> { self.get(x2) }
 
    fn len_estimate(&self) -> usize { self.0.reverse_map2.as_ref().unwrap().len() }
    fn is_empty(&'a self) -> bool { self.0.reverse_map2.as_ref().unwrap().is_empty() }
@@ -399,21 +398,15 @@ where
    type Key = (&'a T1, &'a T2);
    type Value = (&'a T0,);
 
-   type ValueIteratorType = Box<dyn Iterator<Item = Self::Value> + 'a>;
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type ValueIteratorType = Box<dyn Iterator<Item = Self::Value> + 'a>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      Box::new(self.0.reverse_map1.as_ref().unwrap().iter().flat_map(move |(x1, x0s_for_x1)| {
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.reverse_map1.as_ref().unwrap().iter().flat_map(move |(x1, x0s_for_x1)| {
          self.0.reverse_map2.as_ref().unwrap().iter().map(move |(x2, x0s_for_x2)| {
-            let x0s: Self::ValueIteratorType = Box::new(
-               x0s_for_x1
-                  .intersection(x0s_for_x2)
-                  .filter(|&x0| self.0.map.get(x0).unwrap().contains(x1, x2))
-                  .map(|x0| (x0,)),
-            );
-            ((x1, x2), x0s)
+            ((x1, x2), x0s_for_x1.intersection(x0s_for_x2).filter(|&x0| self.0.map.get(x0).unwrap().contains(x1, x2)).map(|x0| (x0,)))
          })
-      }))
+      })
    }
 }
 
@@ -428,8 +421,8 @@ where
 
    type Value = (&'a T0,);
 
-   type IteratorType = IteratorFromDyn<'a, Self::Value>;
-   fn index_get(&'a self, (x1, x2): &Self::Key) -> Option<Self::IteratorType> {
+   // type IteratorType = IteratorFromDyn<'a, Self::Value>;
+   fn index_get(&'a self, (x1, x2): &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let (x1, x1_map) = self.0.reverse_map1.as_ref().unwrap().get_key_value(x1)?;
       let (x2, x2_map) = self.0.reverse_map2.as_ref().unwrap().get_key_value(x2)?;
 
@@ -462,10 +455,12 @@ where
    type Key = ();
    type Value = (&'a T0, &'a T1, &'a T2);
 
-   type ValueIteratorType = <Self as RelIndexRead<'a>>::IteratorType;
-   type AllIteratorType = std::option::IntoIter<(Self::Key, Self::ValueIteratorType)>;
+   // type ValueIteratorType = <Self as RelIndexRead<'a>>::IteratorType;
+   // type AllIteratorType = std::option::IntoIter<(Self::Key, Self::ValueIteratorType)>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType { self.index_get(&()).map(|x| ((), x)).into_iter() }
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.index_get(&()).map(|x| ((), x)).into_iter()
+   }
 }
 
 impl<'a, T0, T1, T2, TBinRel> RelIndexRead<'a> for BinRelToTernaryIndNone<'a, T0, T1, T2, TBinRel>
@@ -478,9 +473,9 @@ where
    type Key = ();
    type Value = (&'a T0, &'a T1, &'a T2);
 
-   type IteratorType = IteratorFromDyn<'a, Self::Value>;
+   // type IteratorType = IteratorFromDyn<'a, Self::Value>;
 
-   fn index_get(&'a self, (): &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, (): &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let res = || self.0.map.iter().flat_map(|(x0, rel)| rel.iter_all().map(move |(x1, x2)| (x0, x1, x2)));
       Some(IteratorFromDyn::new(res))
    }
@@ -523,13 +518,11 @@ where
    type Key = (&'a T0, &'a T1, &'a T2);
    type Value = ();
 
-   type ValueIteratorType = std::iter::Once<()>;
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
+   // type ValueIteratorType = std::iter::Once<()>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let iter = self.0.map.iter().flat_map(|(x0, rel)| rel.iter_all().map(move |(x1, x2)| (x0, x1, x2)));
-
-      Box::new(iter.map(|t| (t, once(()))))
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.map.iter().flat_map(|(x0, rel)| rel.iter_all().map(move |(x1, x2)| (x0, x1, x2))).map(|t| (t, once(())))
    }
 }
 
@@ -543,9 +536,9 @@ where
    type Key = (T0, T1, T2);
    type Value = ();
 
-   type IteratorType = std::iter::Once<Self::Value>;
+   // type IteratorType = std::iter::Once<Self::Value>;
 
-   fn index_get(&'a self, (x0, x1, x2): &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, (x0, x1, x2): &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       if self.0.map.get(x0)?.contains(x1, x2) { Some(once(())) } else { None }
    }
 

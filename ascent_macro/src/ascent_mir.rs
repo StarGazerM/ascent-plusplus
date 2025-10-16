@@ -11,7 +11,7 @@ use syn::{Expr, Type};
 use crate::ascent_hir::{
    extend_grounded_vars, get_indices_given_grounded_variables, AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrMaggClause, IrRelation, IrRule, RelationMetadata
 };
-use crate::ascent_mir::MirRelationVersion::*;
+// use crate::ascent_mir::MirRelationVersion::*;
 use crate::ascent_syntax::{CondClause, GeneratorNode, JoinStrategy, RelationIdentity, Signatures};
 use crate::syn_utils::{expr_get_vars, pattern_get_vars};
 use crate::utils::{expr_to_ident, intersects, pat_to_ident, tuple_type};
@@ -714,7 +714,7 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
          for v in &mut res {
             v.push(MirRelationVersion::TotalDelta);
          }
-         let mut new_combination = vec![MirRelationVersion::Total; count];
+         let mut new_combination = vec![MirRelationVersion::TotalDelta; count];
          new_combination[count - 1] = MirRelationVersion::Delta;
          res.push(new_combination);
          res
@@ -722,31 +722,32 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
    }
 
    // TODO is it worth it?
-   fn versions(dynamic_cls: &[usize], simple_join_start_index: Option<usize>) -> Vec<Vec<MirRelationVersion>> {
-      fn remove_total_delta_at_index(ind: usize, res: &mut Vec<Vec<MirRelationVersion>>) {
-         let mut i = 0;
-         while i < res.len() {
-            if res[i].get(ind) == Some(&TotalDelta) {
-               res.insert(i + 1, res[i].clone());
-               res[i][ind] = Total;
-               res[i + 1][ind] = Delta;
-            }
-            i += 1;
-         }
-      }
+   fn versions(dynamic_cls: &[usize], _simple_join_start_index: Option<usize>) -> Vec<Vec<MirRelationVersion>> {
+      // fn remove_total_delta_at_index(ind: usize, res: &mut Vec<Vec<MirRelationVersion>>) {
+      //    let mut i = 0;
+      //    while i < res.len() {
+      //       if res[i].get(ind) == Some(&TotalDelta) {
+      //          res.insert(i + 1, res[i].clone());
+      //          res[i][ind] = Total;
+      //          res[i + 1][ind] = Delta;
+      //       }
+      //       i += 1;
+      //    }
+      // }
 
       let count = dynamic_cls.len();
-      let mut res = versions_base(count);
-      let no_total_delta_at_beginning = false;
-      if no_total_delta_at_beginning {
-         if let Some(ind) = simple_join_start_index {
-            remove_total_delta_at_index(ind, &mut res);
-            remove_total_delta_at_index(ind + 1, &mut res);
-         } else if dynamic_cls.get(0) == Some(&0) {
-            remove_total_delta_at_index(0, &mut res);
-         }
-      }
-      res
+      // let mut res = versions_base(count);
+      // let no_total_delta_at_beginning = false;
+      // if no_total_delta_at_beginning {
+      //    if let Some(ind) = simple_join_start_index {
+      //       remove_total_delta_at_index(ind, &mut res);
+      //       remove_total_delta_at_index(ind + 1, &mut res);
+      //    } else if dynamic_cls.get(0) == Some(&0) {
+      //       remove_total_delta_at_index(0, &mut res);
+      //    }
+      // }
+      // res
+      versions_base(count)
    }
 
    fn hir_body_item_to_mir_body_item(hir_bitem: &IrBodyItem, version: Option<MirRelationVersion>) -> MirBodyItem {

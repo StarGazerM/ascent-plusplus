@@ -62,10 +62,10 @@ where T: RelIndexRead<'a>
 {
    type Key = T::Key;
    type Value = T::Value;
-   type IteratorType = T::IteratorType;
+   // type IteratorType = T::IteratorType;
 
    #[inline(always)]
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> { (**self).index_get(key) }
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> { (**self).index_get(key) }
 
    #[inline(always)]
    fn len_estimate(&self) -> usize { (**self).len_estimate() }
@@ -79,11 +79,9 @@ where T: RelIndexReadAll<'a>
 {
    type Key = T::Key;
    type Value = T::Value;
-   type ValueIteratorType = T::ValueIteratorType;
-   type AllIteratorType = T::AllIteratorType;
 
    #[inline(always)]
-   fn iter_all(&'a self) -> Self::AllIteratorType { (**self).iter_all() }
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a { (**self).iter_all() }
 }
 
 impl<'a, T> RelFullIndexRead<'a> for &'a T
@@ -96,17 +94,19 @@ where T: RelFullIndexRead<'a>
 
 #[cfg(feature = "par")]
 mod par {
-   use crate::internal::{CRelIndexRead, CRelIndexReadAll};
+   use rayon::iter::ParallelIterator;
+
+use crate::internal::{CRelIndexRead, CRelIndexReadAll};
 
    impl<'a, T> CRelIndexRead<'a> for &'a T
    where T: CRelIndexRead<'a>
    {
       type Key = T::Key;
       type Value = T::Value;
-      type IteratorType = T::IteratorType;
+      // type IteratorType = T::IteratorType;
 
       #[inline(always)]
-      fn c_index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> { (**self).c_index_get(key) }
+      fn c_index_get(&'a self, key: &Self::Key) -> Option<impl ParallelIterator<Item = Self::Value> + Clone + 'a> { (**self).c_index_get(key) }
    }
 
    impl<'a, T> CRelIndexReadAll<'a> for &'a T
@@ -114,10 +114,10 @@ mod par {
    {
       type Key = T::Key;
       type Value = T::Value;
-      type ValueIteratorType = T::ValueIteratorType;
-      type AllIteratorType = T::AllIteratorType;
+      // type ValueIteratorType = T::ValueIteratorType;
+      // type AllIteratorType = T::AllIteratorType;
 
       #[inline(always)]
-      fn c_iter_all(&'a self) -> Self::AllIteratorType { (**self).c_iter_all() }
+      fn c_iter_all(&'a self) -> impl ParallelIterator<Item = (Self::Key, impl ParallelIterator<Item = Self::Value> + 'a)> + 'a { (**self).c_iter_all() }
    }
 }
