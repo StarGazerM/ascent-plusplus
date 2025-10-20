@@ -1,3 +1,5 @@
 mod test;
-mod egg;
 mod scratchpad;
+
+// #[macro_use]
+// extern crate eager;

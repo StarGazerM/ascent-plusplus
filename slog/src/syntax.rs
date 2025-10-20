@@ -568,6 +568,7 @@ pub struct ShareDbInput {
    pub theory: SlogTheory,
    pub content: Vec<SlogRelationDecl>,
    pub kont_macro: Path,
+   pub shared_idb: Option<TokenStream>,
 }
 
 impl syn::parse::Parse for ShareDbInput {
@@ -590,8 +591,17 @@ impl syn::parse::Parse for ShareDbInput {
          decls.push(content.parse::<SlogRelationDecl>()?);
       }
       let _ = input.parse::<syn::Token![,]>()?;
+      let shared_idb = if input.peek(syn::token::Brace) {
+         let content;
+         let _ = braced!(content in input);
+         let idb = content.parse::<TokenStream>()?;
+         let _ = input.parse::<Token![,]>()?;
+         Some(idb)
+      } else {
+         None
+      };
       let kont_macro = input.parse::<Path>()?;
-      Ok(ShareDbInput { db_name, theory, content: decls, kont_macro })
+      Ok(ShareDbInput { db_name, theory, content: decls, kont_macro, shared_idb })
    }
 }
 

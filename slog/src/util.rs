@@ -13,7 +13,7 @@ pub fn new_ident(name: &str) -> Ident {
 
 
 pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_macro::TokenStream {
-   let ShareDbInput { db_name, theory, content, kont_macro } = parse2(input.into()).unwrap();
+   let ShareDbInput { db_name, theory, content, kont_macro, shared_idb } = parse2(input.into()).unwrap();
    let theory_code = if theory.uses.is_empty() {
       quote! {}
    } else {
@@ -83,6 +83,7 @@ pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_
                  #theory_code
                  #(#rel_decls)*
              }, {
+                #shared_idb
                 $($x)*
              }, slog)
          };
@@ -91,6 +92,7 @@ pub fn share_db_impl(input: proc_macro::TokenStream, local_scope: bool) -> proc_
                 #theory_code
                 #(#rel_decls_par)*
             }, {
+                #shared_idb
                 $($x)*
             }, slog_par)
         };

@@ -136,7 +136,7 @@ fn compile_slog_clause_unstructured_head(
          let ty: syn::Type = syn::parse2(quote! { usize }).unwrap();
          vec![SlogType::Rust(ty.clone()), SlogType::Rust(ty.clone())]
       } else if let Some(th) = theory.get_theory_decl_by_rel_name(&rel_name) {
-         vec![SlogType::Rust(th.ty.clone()), SlogType::Rust(th.ty.clone()), SlogType::Rust(th.ty.clone())]
+         vec![SlogType::Rust(th.ty.clone()), SlogType::Rust(th.ty.clone())]
       } else {
          return Err(syn::Error::new_spanned(
             clause.rel_name.clone(),
@@ -242,26 +242,21 @@ fn compile_slog_clause_unstructured_head(
 
    // let id_rel_name = Ident::new(&format!("{}_id", rel_name), rel_name.span());
    let rel_name_str = rel_name.to_string();
-   if let Some(_th) = theory.get_theory_decl_by_rel_name(&rel_name) {
+
+   if clause.id_var.is_some() {
+      let id_var = clause.id_var.clone().unwrap();
+      if !body_vars.contains(&id_var) {
+         new_id_decls.push(quote_spanned! { clause.id_var.clone().unwrap().span() =>
+            let #id_var = &calc_id(&(#rel_name_str, #(#args_tokens),*))
+         });
+      }
       Ok(quote_spanned! { rel_name.span() =>
-         #rel_name(#(#args_tokens),*)
+         #rel_name(#(#args_tokens),*, #id_var)
       })
    } else {
-      if clause.id_var.is_some() {
-         let id_var = clause.id_var.clone().unwrap();
-         if !body_vars.contains(&id_var) {
-            new_id_decls.push(quote_spanned! { clause.id_var.clone().unwrap().span() =>
-               let #id_var = &calc_id(&(#rel_name_str, #(#args_tokens),*))
-            });
-         }
-         Ok(quote_spanned! { rel_name.span() =>
-            #rel_name(#(#args_tokens),*, #id_var)
-         })
-      } else {
-         Ok(quote_spanned! { rel_name.span() =>
-            #rel_name(#(#args_tokens),*, calc_id(&(#rel_name_str, #(#args_tokens),*)))
-         })
-      }
+      Ok(quote_spanned! { rel_name.span() =>
+         #rel_name(#(#args_tokens),*, calc_id(&(#rel_name_str, #(#args_tokens),*)))
+      })
    }
 }
 
@@ -276,7 +271,7 @@ fn compile_slog_clause_unstructured_body(
          let ty: syn::Type = syn::parse2(quote! { usize }).unwrap();
          vec![SlogType::Rust(ty.clone()), SlogType::Rust(ty.clone())]
       } else if let Some(th) = theory.get_theory_decl_by_rel_name(&rel_name) {
-         vec![SlogType::Rust(th.ty.clone()), SlogType::Rust(th.ty.clone()), SlogType::Rust(th.ty.clone())]
+         vec![SlogType::Rust(th.ty.clone()), SlogType::Rust(th.ty.clone())]
       } else {
          return Err(syn::Error::new_spanned(
             clause.rel_name.clone(),
@@ -323,7 +318,7 @@ fn compile_slog_clause_unstructured_body(
                   if !is_bound_var(id) {
                      let inflated_id = Ident::new(&format!("inflated_{}", id), id.span());
                      clause_after_code_vec.push(quote_spanned! {id.span()=>
-                        #unify_relation(#id, #id, #inflated_id)
+                        #unify_relation(#inflated_id, #inflated_id, #id)
                      });
                      Some(quote_spanned! {id.span()=> #inflated_id})
                   } else {
@@ -357,25 +352,18 @@ fn compile_slog_clause_unstructured_body(
          format!("unstructured clause must be all logic vars or all constants {:?}", clause),
       ));
    }
-   if use_theory_unification && let Some(_th) = theory.get_theory_decl_by_rel_name(&rel_name) {
-      Ok(quote_spanned! {clause.rel_name.span()=>
-         #rel_name(#(#args_tokens),*)
-         #(,#clause_after_code_vec)*
-      })
+   let id_tag_code = if clause.id_var.is_some() && !ignore_id {
+      let id_var = clause.id_var.clone().unwrap();
+      quote_spanned! {id_var.span()=>
+         #id_var
+      }
    } else {
-      let id_tag_code = if clause.id_var.is_some() && !ignore_id {
-         let id_var = clause.id_var.clone().unwrap();
-         quote_spanned! {id_var.span()=>
-            #id_var
-         }
-      } else {
-         quote! {_}
-      };
-      Ok(quote_spanned! {clause.rel_name.span()=>
-         #rel_name(#(#args_tokens),*, #id_tag_code)
-         #(,#clause_after_code_vec)*
-      })
-   }
+      quote! {_}
+   };
+   Ok(quote_spanned! {clause.rel_name.span()=>
+      #rel_name(#(#args_tokens),*, #id_tag_code)
+      #(,#clause_after_code_vec)*
+   })
 }
 
 fn compile_slog_line(
@@ -686,7 +674,7 @@ fn desugar_question_nested_sexpr(sexpr: &SlogSExprClause) -> (Vec<SlogRuleBodyIt
          }
       } else {
          // add constant or logic var to new args
-         new_args.push(arg.clone());
+         new_args.push(arg.clone());   
       }
    }
    (
@@ -830,7 +818,7 @@ fn destruct_slog_head_nested(sexpr: &SlogSExprClause, id_var: &Ident) -> Vec<Slo
 
    let new_item = SlogRuleHeadItem::SlogSExprClause(SlogSExprClause {
       paren: sexpr.paren.clone(),
-      rel_name: sexpr.rel_name.clone(),
+      rel_name: sexpr.rel_name.clone(),   
       args: new_args,
       id_var: Some(id_var.clone()),
    });
@@ -860,7 +848,7 @@ fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
       // panic!("new_args {:?}", new_args);
       let deconstructed_sexpr = SlogSExprClause {
          paren: sexpr.paren.clone(),
-         rel_name: sexpr.rel_name.clone(),
+         rel_name: sexpr.rel_name.clone(),   
          args: new_args,
          id_var: sexpr.id_var.clone(),
       };

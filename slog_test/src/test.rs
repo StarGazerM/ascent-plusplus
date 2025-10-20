@@ -158,37 +158,28 @@ fn test_eq2() {
       (define foo usize)
       (define bar usize)
       (define foobar usize usize)
+      (define expression usize)
+      (expression ?(foo x))
+      (expression ?(bar x))
+      (expression ?(foobar x y))
       (define top usize)
-
-      (define equiv : ascent_byods_rels::eqrel_canonical
+      (define eq : ascent_byods_rels::eqrel_canonical
          usize usize)
       ,(relation bar_canonical(usize, usize);)
 
-      [,(equiv(f, f, f)) <-- (= f (foo x))]
-      [,(equiv(f, f, f)) <-- (= f (bar x))]
-      // congurence of equiv
-      [,(equiv(foobar1, foobar2, foobar1)) <--
-         (= foobar1 (foobar x y))
-         (equiv x x_eq) (equiv y y_eq)
-         (= foobar2 (foobar x_eq y_eq))]
-
       (foobar (foo 1) (bar 1))
       (foobar (bar 1) (bar 2))
-      [,(equiv(x, y, x)) <--
-         (= x (bar m)) (= y (bar ,(m + 1)))]
-      // (bar 1) = (bar 2)
-      [(foobar y_canonical y_canonical) <--
-         (foobar _ x)
-         // ,(equiv(x, x, x_canonical))
-         (= x_canonical (equiv x x))
-         // ,(let _ = println!("x: {:?}, x_canonical: {:?}", x, x_canonical))
-         (= x_canonical (bar m)) (= y (bar ,(m + 1)))
-         // ,(equiv(y, y, y_canonical))
-         (= y_canonical (equiv y y))]
-      // macterialize the eclass of foobar
-      [(top f) <-- (= f (foobar x y)), (equiv(_, _, x), equiv(_, _, y))]
 
-      [,(bar_canonical(id, id_canonical)) <-- (= id (bar x)) ,(equiv(id, id, id_canonical))]
+      [(= e (eq e e)) <-- (expression e)]
+
+      // congurence of eq
+      [(eq (foobar ?(eq x x) ?(eq y y)) f) <-- (= f (foobar x y))]
+      
+      [(eq x ?(bar ,(m + 1))) <-- (= x (bar m))]
+      // (bar 1) = (bar 2)
+
+      // macterialize the eclass of foobar
+      [(top f) <-- (= f (foobar x y)) (= x (eq _ _)) (= y (eq _ _))]
    }
    let mut prog = EqManual::default();
    prog.run();
@@ -196,7 +187,6 @@ fn test_eq2() {
    println!("bar: {:?}", prog.bar);
    println!("foobar: {:?}", prog.foobar);
    println!("top: {:?}", prog.top);
-   println!("bar_canonical: {:?}", prog.bar_canonical);
 }
 
 #[test]
@@ -206,28 +196,32 @@ fn test_infinity_eq() {
       (define var usize)
       (define num i32)
       (define plus usize usize)
+      // eqrel give us transitive closure of eq
       (define eq: ascent_byods_rels::eqrel_canonical usize usize)
       (define expression usize)
       (define res usize)
-      ,(relation eq_materialize(usize, usize);
-        relation canonical_expression(usize);)
-      [,(eq_materialize(e1, e2)) <-- (eq e1 e2)]
+      ,(relation canonical_expression(usize);)
       [,(canonical_expression(e)) <-- (expression e) (= e (eq _ _))]
-      [(= e (eq e e)) <-- (expression e)]
-      (var 1)
-
+      
+      // EDB
       (plus (plus (var 1) (num 0)) (num 0))
+      
+      // reflexive of eq
       (expression ?(num n))
       (expression ?(plus p q))
       (expression ?(var v))
+      [(= e (eq e e)) <-- (expression e)]
 
-      [(= p (eq p p)) <-- (= p (plus x y))]
-      
-      // congruence of eq
+      // congruence of eq for plus
       [(eq (plus ?(eq x x) ?(eq y y)) p1) <--
          (= p1 (plus x y))]
       
-      [(eq (plus ?(= ee (eq e e)) ?(num 0)) ee) <-- (expression e)]
+      // substitution of eq
+      [(eq (plus ?(= ee (eq e e))
+                 ?(eq n n)) ee) <--
+         (expression e)
+         (= n (num 0))]
+
       [(plus ?(eq e1 e1) ?(eq n n)) <--
          (= e (plus e1 e2))
          (= n (num 0))]
@@ -239,6 +233,10 @@ fn test_infinity_eq() {
       [(res 2) <--
          (= ev (var 1))
          (= e1 (plus (plus ev (num 0)) (num 0)))
+         (= e1 (eq e1 ev))]
+      [(res 3) <--
+         (= ev (var 1))
+         (= e1 (plus (plus ev (num 0)) (num 1)))
          (= e1 (eq e1 ev))]
    }
 
@@ -268,7 +266,7 @@ fn test_eclass() {
 
    eclass_test_query!(EClassTest, {
       (foobar (foo 1) (bar 1))
-      [(unify_eclass foo1 bar1 foo1) <-- (= foo1 (foo x)) (= bar1 (bar x)) ]
+      [(= foo1 (unify_eclass foo1 bar1)) <-- (= foo1 (foo x)) (= bar1 (bar x))]
    });
 
    eclass_test_query!(EClassTestRes, {
@@ -285,3 +283,41 @@ fn test_eclass() {
    println!("{:?}", q2.res);
 }
 
+#[test]
+fn test_macro() {
+
+   macro_rules! test_prog {
+       ({$($content:tt)*}) => {
+           ascent! {
+            struct TestProg;
+            relation res(usize);
+            $($content)*
+           }
+       };
+   }
+
+   macro_rules! dumb {
+      ($next:ident, { $($prev_res:tt)* }, {}) => {
+         $next! {
+            {$($prev_res)*}
+         }
+      };
+      ($next:ident, { $($prev_res:tt)* }, {$n: expr, $($other:tt)* }) => {
+         dumb!($next, {
+            $($prev_res)*
+            res($n);
+         }, { $($other)* });
+      };
+      ($next:ident, { $($prev_res:tt)* }, {$n: expr }) => {
+         dumb!($next, {
+            $($prev_res)*
+            res($n);
+         }, {});
+      };
+   }
+
+   dumb!(test_prog, {}, {1, 2, 3});
+   let mut prog = TestProg::default();
+   prog.run();
+   println!("res: {:?}", prog.res);
+}
