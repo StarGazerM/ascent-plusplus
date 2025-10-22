@@ -168,15 +168,18 @@ fn test_eq2() {
       ,(relation bar_canonical(usize, usize);)
 
       (foobar (foo 1) (bar 1))
+
       (foobar (bar 1) (bar 2))
+      (foobar (bar 2) (bar 2))
+      (foobar (bar 1) (bar 1))
+      [(top f) <-- (= f (foobar x y)) (eq x (bar 1))]
 
       [(= e (eq e e)) <-- (expression e)]
-
-      // congurence of eq
-      [(eq (foobar ?(eq x x) ?(eq y y)) f) <-- (= f (foobar x y))]
-      
       [(eq x ?(bar ,(m + 1))) <-- (= x (bar m))]
       // (bar 1) = (bar 2)
+
+   // congurence of eq
+   [(eq (foobar ?(eq x x) ?(eq y y)) f) <-- (= f (foobar x y))]
 
       // macterialize the eclass of foobar
       [(top f) <-- (= f (foobar x y)) (= x (eq _ _)) (= y (eq _ _))]
@@ -187,6 +190,31 @@ fn test_eq2() {
    println!("bar: {:?}", prog.bar);
    println!("foobar: {:?}", prog.foobar);
    println!("top: {:?}", prog.top);
+}
+
+
+#[test]
+fn test_infinity() {
+   slog! {
+      (struct Infinity)
+
+      (define var usize)
+      (define num i32)
+      (define plus usize usize)
+      (define expression usize)
+      (expression ?(num n))
+      (expression ?(plus p q))
+      (expression ?(var v))
+      (define eq: ascent_byods_rels::eqrel_canonical usize usize)
+
+      (var 1)
+      // x -> x + 0
+      [(eq (plus e (num 0)) e) <-- (expression e)]
+      // (var 1) + 0 = (var 1) --> xc
+      // xc = { xc, xc+ 0 }
+      // ((var 1) + 0) + 0 = xc + 0
+
+   }
 }
 
 #[test]
@@ -217,10 +245,8 @@ fn test_infinity_eq() {
          (= p1 (plus x y))]
       
       // substitution of eq
-      [(eq (plus ?(= ee (eq e e))
-                 ?(eq n n)) ee) <--
-         (expression e)
-         (= n (num 0))]
+      [(eq (plus e (num 0)) e) <--
+         (expression (= e (eq _ _)))]
 
       [(plus ?(eq e1 e1) ?(eq n n)) <--
          (= e (plus e1 e2))

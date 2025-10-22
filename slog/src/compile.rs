@@ -674,7 +674,7 @@ fn desugar_question_nested_sexpr(sexpr: &SlogSExprClause) -> (Vec<SlogRuleBodyIt
          }
       } else {
          // add constant or logic var to new args
-         new_args.push(arg.clone());   
+         new_args.push(arg.clone());
       }
    }
    (
@@ -818,7 +818,7 @@ fn destruct_slog_head_nested(sexpr: &SlogSExprClause, id_var: &Ident) -> Vec<Slo
 
    let new_item = SlogRuleHeadItem::SlogSExprClause(SlogSExprClause {
       paren: sexpr.paren.clone(),
-      rel_name: sexpr.rel_name.clone(),   
+      rel_name: sexpr.rel_name.clone(),
       args: new_args,
       id_var: Some(id_var.clone()),
    });
@@ -835,7 +835,8 @@ fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
       let mut new_args = vec![];
       for arg in &sexpr.args {
          if let SlogClauseArg::SlogClause(sexpr) = arg {
-            let new_id_var = new_ident(&sexpr.rel_name.to_string());
+            let new_id_var =
+               if let Some(id_var) = &sexpr.id_var { id_var.clone() } else { new_ident(&sexpr.rel_name.to_string()) };
             let (new_body_before, new_body_after) = deconstruct_nested_sexpr_body(sexpr, new_id_var.clone());
             before.extend(new_body_before);
             after.extend(new_body_after);
@@ -848,7 +849,7 @@ fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
       // panic!("new_args {:?}", new_args);
       let deconstructed_sexpr = SlogSExprClause {
          paren: sexpr.paren.clone(),
-         rel_name: sexpr.rel_name.clone(),   
+         rel_name: sexpr.rel_name.clone(),
          args: new_args,
          id_var: sexpr.id_var.clone(),
       };

@@ -70,7 +70,7 @@ impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelCanonicalInd0_1_2<'a
    fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
       self.0.iter_all().map(|(key, val)| {
          let (x, y) = key;
-         let x_canonical = self.0.combined.get_dominant_elem(x).unwrap_or(x);
+         let x_canonical = self.0.combined.get_dominant_elem(x).unwrap();
          ((x, y, x_canonical), val)
       })
    }
@@ -139,7 +139,7 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelCanonicalInd0<'a, T> {
       let _ = self.0.set_of_added(&key.0)?;
       let key = key.clone();
       let producer =
-         move || self.0.set_of_added(&key.0).unwrap().map(|x| (x, self.0.combined.get_dominant_elem(x).unwrap_or(x)));
+         move || self.0.set_of_added(&key.0).unwrap().map(|x| (x, self.0.combined.get_dominant_elem(x).unwrap()));
       Some(IteratorFromDyn::new(producer))
    }
 
@@ -159,10 +159,7 @@ impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelCanonicalInd0<'a, T>
    fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
       self.0.combined.sets.iter().flat_map(move |s| {
          s.iter().map(move |x| {
-            (
-               ref_to_singleton_tuple_ref(x),
-               s.iter().map(move |y| (y, self.0.combined.get_dominant_elem(y).unwrap_or(y))),
-            )
+            (ref_to_singleton_tuple_ref(x), s.iter().map(move |y| (y, self.0.combined.get_dominant_elem(y).unwrap())))
          })
       })
    }
@@ -263,8 +260,8 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for EqRelCanonicalIndNone<'a, T>
    fn index_get(&'a self, _key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       Some(IteratorFromDyn::new(|| {
          // Map (&T, &T) to (&T, &T, &T) by duplicating the first element.
-         // do we need canonicalization here?
-         self.0.iter_all_added().map(|(a, b)| (a, b, a))
+         // iter_all_added? or iter_all? maybe we can iter over dominant elements?
+         self.0.iter_all_added().map(|(a, b)| (a, b, self.0.combined.get_dominant_elem(a).unwrap()))
       }))
    }
 
@@ -378,7 +375,7 @@ impl<'a, T: Clone + Hash + Eq> RelIndexReadAll<'a> for EqRelCanonicalInd0_1<'a, 
       self.0.combined.sets.iter().flat_map(move |s| {
          s.iter().flat_map(move |x| {
             s.iter().map(move |y| {
-               let canonical = self.0.combined.get_dominant_elem(x).unwrap_or(x);
+               let canonical = self.0.combined.get_dominant_elem(x).unwrap();
                ((x, y), std::iter::once((canonical,)))
             })
          })

@@ -1,0 +1,16 @@
+(datatype Math
+   (Div Math Math)
+   (Add Math Math)
+   (Mult Math Math)
+   (Shl Math Math)
+   (Var i64)
+   (Lit i64))
+
+(let e1 (Div (Mult (Var 1) (Lit 2)) (Lit 2)))
+
+(rewrite (Mult x (Lit 2)) (Shl x (Lit 1)))
+(rewrite (Div (Mult x y) z) (Mult x (Div y z)))
+(rewrite (Div x x) (Lit 1))
+(rewrite (Mult x (Lit 1)) x)
+
+(run 100)

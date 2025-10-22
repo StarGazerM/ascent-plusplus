@@ -12,3 +12,4 @@ ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
 lazy_static = "1.4.0"
 # eager2 = "1.1.4"
 eager = "*"
+egg = "0.10.0"
