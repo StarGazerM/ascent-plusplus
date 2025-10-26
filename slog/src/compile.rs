@@ -301,6 +301,7 @@ fn compile_slog_clause_unstructured_body(
       })
    };
    let mut clause_after_code_vec = vec![];
+   let mut clause_before_code_vec = vec![];
    let args = clause.args.clone();
    let args_tokens = args
       .iter()
@@ -353,14 +354,31 @@ fn compile_slog_clause_unstructured_body(
       ));
    }
    let id_tag_code = if clause.id_var.is_some() && !ignore_id {
-      let id_var = clause.id_var.clone().unwrap();
+      let id_var = if clause.canonical_id_huh > 0 {
+         let id_var = clause.id_var.clone().unwrap();
+         let intermediate_id = Ident::new(&format!("intermediate_{}", id_var), id_var.span());
+         if clause.canonical_id_huh == 1 {
+            clause_before_code_vec.push(quote_spanned! {id_var.span()=>
+               eq(#id_var, #intermediate_id, _)
+            });
+         } else {
+            clause_after_code_vec.push(quote_spanned! {id_var.span()=>
+               eq(#id_var, #intermediate_id, _)
+            });
+         }
+         intermediate_id
+      } else {
+         clause.id_var.clone().unwrap()
+      };
       quote_spanned! {id_var.span()=>
          #id_var
       }
    } else {
       quote! {_}
    };
+
    Ok(quote_spanned! {clause.rel_name.span()=>
+      #(#clause_before_code_vec,)*
       #rel_name(#(#args_tokens),*, #id_tag_code)
       #(,#clause_after_code_vec)*
    })
@@ -684,6 +702,7 @@ fn desugar_question_nested_sexpr(sexpr: &SlogSExprClause) -> (Vec<SlogRuleBodyIt
          rel_name: sexpr.rel_name.clone(),
          args: new_args,
          id_var: sexpr.id_var.clone(),
+         canonical_id_huh: sexpr.canonical_id_huh,
       },
    )
 }
@@ -698,6 +717,7 @@ fn desugar_question_head_sexpr(sexpr: &SlogSExprClause) -> Option<(SlogRuleBodyI
             rel_name: sexpr.rel_name.clone(),
             args: sexpr.args.clone(),
             id_var: Some(new_rel_name_id.clone()),
+            canonical_id_huh: if sexpr.canonical_id_huh > 0 { 2 } else { 0 },
          }),
          new_rel_name_id,
       ))
@@ -795,6 +815,7 @@ fn destruct_slog_rule_head_item(item: &SlogRuleHeadItem) -> Vec<SlogRuleHeadItem
       rel_name: slog_expr.rel_name.clone(),
       args: new_args,
       id_var: Some(id_var.clone()),
+      canonical_id_huh: slog_expr.canonical_id_huh,
    };
    // let new_item = SlogRuleHeadItem::ExplicitIDClause(ExplicitIDClause { id_var, clause: new_sexpr });
    let new_item = SlogRuleHeadItem::SlogSExprClause(new_sexpr);
@@ -821,6 +842,7 @@ fn destruct_slog_head_nested(sexpr: &SlogSExprClause, id_var: &Ident) -> Vec<Slo
       rel_name: sexpr.rel_name.clone(),
       args: new_args,
       id_var: Some(id_var.clone()),
+      canonical_id_huh: sexpr.canonical_id_huh,
    });
    new_items.push(new_item);
    new_items
@@ -842,6 +864,17 @@ fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
             after.extend(new_body_after);
             // TODO: add inflation code
             new_args.push(SlogClauseArg::LogicVar(new_id_var, false));
+         } else if let SlogClauseArg::LogicVar(id, true) = arg {
+            let var = Ident::new(&format!("can_{}", id), id.span());
+            let new_sexpr = SlogSExprClause {
+               paren: ParenType::Regular,
+               rel_name: Ident::new("eq", id.span()),
+               args: vec![SlogClauseArg::LogicVar(var.clone(), false), SlogClauseArg::LogicVar(var.clone(), false)],
+               id_var: Some(id.clone()),
+               canonical_id_huh: sexpr.canonical_id_huh,
+            };
+            after.push(SlogRuleBodyItem::SlogSExprClause(new_sexpr));
+            new_args.push(SlogClauseArg::LogicVar(var, false));
          } else {
             new_args.push(arg.clone());
          }
@@ -852,6 +885,7 @@ fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
          rel_name: sexpr.rel_name.clone(),
          args: new_args,
          id_var: sexpr.id_var.clone(),
+         canonical_id_huh: sexpr.canonical_id_huh,
       };
       let new_item = SlogRuleBodyItem::SlogSExprClause(deconstructed_sexpr);
       let new_items = before.into_iter().chain(vec![new_item]).chain(after);
@@ -884,6 +918,7 @@ fn deconstruct_nested_sexpr_body(
       rel_name: sexpr.rel_name.clone(),
       args: new_args,
       id_var: Some(id_var.clone()),
+      canonical_id_huh: sexpr.canonical_id_huh,
    });
    if let ParenType::QuestionParen = &sexpr.paren {
       new_body_before.push(new_item);
@@ -922,6 +957,7 @@ fn remove_nested_union_clause(program: &SlogProgram) -> SlogProgram {
                                  rel_name: sexpr.rel_name.clone(),
                                  args: sexpr.args.clone(),
                                  id_var: Some(new_id.clone()),
+                                 canonical_id_huh: sexpr.canonical_id_huh,
                               };
                               if let ParenType::QuestionParen = &sexpr.paren {
                                  // add end of body

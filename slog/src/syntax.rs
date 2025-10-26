@@ -45,15 +45,16 @@ pub struct SlogSExprClause {
    pub rel_name: Ident,
    pub args: Vec<SlogClauseArg>,
    pub id_var: Option<Ident>,
+   pub canonical_id_huh: usize,
 }
 
 impl Parse for SlogSExprClause {
    fn parse(input: ParseStream) -> syn::Result<Self> {
-      let (content, paren, id_var) = if input.peek(Token![!]) {
+      let (content, paren, id_var, canonical_id_huh) = if input.peek(Token![!]) {
          let content;
          let _bang = input.parse::<Token![!]>()?;
          let _paren = parenthesized!(content in input);
-         (content, ParenType::BangParen, None)
+         (content, ParenType::BangParen, None, 0)
       } else if input.peek(syn::token::Paren) || input.peek(Token![?]) {
          let parent_type = if input.peek(Token![?]) {
             let _question = input.parse::<Token![?]>()?;
@@ -65,17 +66,21 @@ impl Parse for SlogSExprClause {
          let _paren = parenthesized!(content in input);
          if content.peek(Token![=]) {
             let _eq = content.parse::<Token![=]>()?;
+            let canonical_id_huh = content.peek(Token![@]);
+            if canonical_id_huh {
+               let _ = content.parse::<Token![@]>()?;
+            }
             let id_var = content.parse::<Ident>()?;
             let content_inner;
             let _paren2 = parenthesized!(content_inner in content);
-            (content_inner, parent_type, Some(id_var))
+            (content_inner, parent_type, Some(id_var), if canonical_id_huh { 1 } else { 0 })
          } else {
-            (content, parent_type, None)
+            (content, parent_type, None, 0)
          }
       } else if input.peek(syn::token::Brace) {
          let content;
          let _brace = braced!(content in input);
-         (content, ParenType::Curly, None)
+         (content, ParenType::Curly, None, 0)
       } else {
          return Err(input.error("expected regular parentheses or curly braces"));
       };
@@ -87,7 +92,7 @@ impl Parse for SlogSExprClause {
          args.push(content.parse::<SlogClauseArg>()?);
       }
 
-      Ok(SlogSExprClause { paren, rel_name, args, id_var })
+      Ok(SlogSExprClause { paren, rel_name, args, id_var, canonical_id_huh })
    }
 }
 

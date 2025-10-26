@@ -241,12 +241,12 @@ fn test_infinity_eq() {
       [(= e (eq e e)) <-- (expression e)]
 
       // congruence of eq for plus
-      [(eq (plus ?(eq x x) ?(eq y y)) p1) <--
-         (= p1 (plus x y))]
+      [(eq (plus x y) p1) <--
+         (= p1 (plus @x @y))]
       
       // substitution of eq
       [(eq (plus e (num 0)) e) <--
-         (expression (= e (eq _ _)))]
+         (expression @e)]
 
       [(plus ?(eq e1 e1) ?(eq n n)) <--
          (= e (plus e1 e2))

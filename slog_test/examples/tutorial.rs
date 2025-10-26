@@ -52,29 +52,27 @@ slog! {
     [(expression ?(shl x y)) <-- (expression x) (expression y)]
     (expression ?(var v))
     (expression ?(lit n))
+    
     // --------------- Reflexive of eq --------------- //
     [(= e (eq e e)) <-- (expression e)]
     // --------------- Congruence of eq --------------- //
-    [(eq e (div ?(eq x x) ?(eq y y))) <-- (= e (div x y))]
-    [(eq e (add ?(eq x x) ?(eq y y))) <-- (= e (add x y))]
-    [(eq e (mult ?(eq x x) ?(eq y y))) <-- (= e (mult x y))]
-    [(eq e (shl ?(eq x x) ?(eq y y))) <-- (= e (shl x y))]
+    [(eq e (div x y)) <-- (= e (div @x @y))]
+    [(eq e (add x y)) <-- (= e (add @x @y))]
+    [(eq e (mult x y)) <-- (= e (mult @x @y))]
+    [(eq e (shl x y)) <-- (= e (shl @x @y))]
 
     // --------------- EDB --------------- //
     (div (mult (var 1) (lit 2)) (lit 2))
 
     // --------------- Rewrite Rules in Egg --------------- //
-    [(eq (shl ?(eq x x) (lit 1)) m) <-- (= m (mult x (lit 2)))]
-    // bidirectional rewrite rule for div
-    // [(eq (div (mult ?(eq x x) ?(eq y y)) ?(eq z z)) m) <--
-    //     (= m (mult x (= d (eq d (div y z)))))]
-    [(eq (mult ?(eq x x) (div ?(eq y y) ?(eq z z))) m) <--
-        (= m (div (= d (eq d (mult x y))) z))]
+    [(eq (shl x (lit 1)) m) <-- (= m (mult @x (lit 2)))]
+    [(div y z) <--
+        (= m (div (= @d (mult @x @y)) @z))]
+    [(eq (mult x ?(= @n (div y z))) m) <--
+        (= m (div (= @d (mult @x @y)) @z))]
     [(eq (lit 1) e) <-- (= e (div x x))]
-    // [(eq (mult ?(eq e e) (lit 1)) e) <-- (expression e)]
-    [(eq ?(eq e e) ?(eq m m)) <-- (= m (mult e n)) (eq n (lit 1))]
-
-
+    // [(eq (mult e (lit 1)) e) <-- (expression @e)]
+    [(eq m e1) <-- (= m (mult @e1 (= @e2 (lit 1))))]
 
     // ----------- convert to equivalent EGraph -------------- //
     // convert to egg rec expr
