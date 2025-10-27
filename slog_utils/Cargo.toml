@@ -1,0 +1,6 @@
+[package]
+name = "slog_utils"
+edition = "2024"
+version.workspace = true
+
+[dependencies]

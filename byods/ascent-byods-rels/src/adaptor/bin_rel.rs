@@ -1,4 +1,4 @@
-use std::iter::{Map, Once, once};
+use std::iter::once;
 use std::marker::PhantomData;
 
 use ascent::internal::{
@@ -52,11 +52,11 @@ impl<'a, TBinRel: ByodsBinRel> RelIndexRead<'a> for ByodsBinRelInd0<'a, TBinRel>
    type Key = (TBinRel::T0,);
    type Value = (&'a TBinRel::T1,);
 
-   type IteratorType = std::iter::Map<TBinRel::Ind0ValsIter<'a>, fn(&TBinRel::T1) -> (&TBinRel::T1,)>;
+   // type IteratorType = std::iter::Map<TBinRel::Ind0ValsIter<'a>, fn(&TBinRel::T1) -> (&TBinRel::T1,)>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let res = self.0.ind0_index_get(&key.0)?;
-      let res: Self::IteratorType = res.map(|v| (v,));
+      let res = res.map(|v| (v,));
       Some(res)
    }
 
@@ -68,21 +68,9 @@ impl<'a, TBinRel: ByodsBinRel> RelIndexReadAll<'a> for ByodsBinRelInd0<'a, TBinR
    type Key = (&'a TBinRel::T0,);
    type Value = (&'a TBinRel::T1,);
 
-   type ValueIteratorType = std::iter::Map<TBinRel::Ind0AllIterValsIter<'a>, fn(&TBinRel::T1) -> (&TBinRel::T1,)>;
-   type AllIteratorType = Map<
-      TBinRel::Ind0AllIter<'a>,
-      for<'aa> fn(
-         (&'aa TBinRel::T0, TBinRel::Ind0AllIterValsIter<'a>),
-      )
-         -> ((&'aa TBinRel::T0,), Map<TBinRel::Ind0AllIterValsIter<'a>, fn(&TBinRel::T1) -> (&TBinRel::T1,)>),
-   >;
-
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res: Self::AllIteratorType = self.0.ind0_iter_all().map(|(k, vals_iter)| {
-         let new_vals_iter: Self::ValueIteratorType = vals_iter.map(|v| (v,));
-         ((k,), new_vals_iter)
-      });
-      res
+   // type ValueIteratorType = std::iter::Map<TBinRel::Ind0AllIterValsIter<'a>, fn(&TBinRel::T1) -> (&TBinRel::T1,)>;
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.ind0_iter_all().map(|(k, vals_iter)| ((k,), vals_iter.map(|v| (v,))))
    }
 }
 
@@ -92,11 +80,11 @@ impl<'a, TBinRel: ByodsBinRel> RelIndexRead<'a> for ByodsBinRelInd1<'a, TBinRel>
    type Key = (TBinRel::T1,);
    type Value = (&'a TBinRel::T0,);
 
-   type IteratorType = std::iter::Map<TBinRel::Ind1ValsIter<'a>, fn(&TBinRel::T0) -> (&TBinRel::T0,)>;
+   // type IteratorType = std::iter::Map<TBinRel::Ind1ValsIter<'a>, fn(&TBinRel::T0) -> (&TBinRel::T0,)>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let res = self.0.ind1_index_get(&key.0)?;
-      let res: Self::IteratorType = res.map(|v| (v,));
+      let res = res.map(|v| (v,));
       Some(res)
    }
 
@@ -108,21 +96,9 @@ impl<'a, TBinRel: ByodsBinRel> RelIndexReadAll<'a> for ByodsBinRelInd1<'a, TBinR
    type Key = (&'a TBinRel::T1,);
    type Value = (&'a TBinRel::T0,);
 
-   type ValueIteratorType = std::iter::Map<TBinRel::Ind1AllIterValsIter<'a>, fn(&TBinRel::T0) -> (&TBinRel::T0,)>;
-   type AllIteratorType = Map<
-      TBinRel::Ind1AllIter<'a>,
-      for<'aa> fn(
-         (&'aa TBinRel::T1, TBinRel::Ind1AllIterValsIter<'a>),
-      )
-         -> ((&'aa TBinRel::T1,), Map<TBinRel::Ind1AllIterValsIter<'a>, fn(&TBinRel::T0) -> (&TBinRel::T0,)>),
-   >;
-
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res: Self::AllIteratorType = self.0.ind1_iter_all().map(|(k, vals_iter)| {
-         let new_vals_iter: Self::ValueIteratorType = vals_iter.map(|v| (v,));
-         ((k,), new_vals_iter)
-      });
-      res
+   // type ValueIteratorType = std::iter::Map<TBinRel::Ind1AllIterValsIter<'a>, fn(&TBinRel::T0) -> (&TBinRel::T0,)>;
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.ind1_iter_all().map(|(k, vals_iter)| ((k,), vals_iter.map(|v| (v,))))
    }
 }
 
@@ -132,9 +108,9 @@ impl<'a, TBinRel: ByodsBinRel> RelIndexRead<'a> for ByodsBinRelInd0_1<'a, TBinRe
    type Key = (TBinRel::T0, TBinRel::T1);
    type Value = ();
 
-   type IteratorType = Once<()>;
+   // type IteratorType = Once<()>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       if self.0.contains(&key.0, &key.1) { Some(once(())) } else { None }
    }
 
@@ -146,15 +122,14 @@ impl<'a, TBinRel: ByodsBinRel> RelIndexReadAll<'a> for ByodsBinRelInd0_1<'a, TBi
    type Key = (&'a TBinRel::T0, &'a TBinRel::T1);
    type Value = ();
 
-   type ValueIteratorType = Once<()>;
-   type AllIteratorType = Map<
-      TBinRel::AllIter<'a>,
-      for<'aa> fn((&'aa TBinRel::T0, &'aa TBinRel::T1)) -> ((&'aa TBinRel::T0, &'aa TBinRel::T1), Once<()>),
-   >;
+   // type ValueIteratorType = Once<()>;
+   // type AllIteratorType = Map<
+   //    TBinRel::AllIter<'a>,
+   //    for<'aa> fn((&'aa TBinRel::T0, &'aa TBinRel::T1)) -> ((&'aa TBinRel::T0, &'aa TBinRel::T1), Once<()>),
+   // >;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res: Self::AllIteratorType = self.0.iter_all().map(|t| (t, once(())));
-      res
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.iter_all().map(|t| (t, once(())))
    }
 }
 
@@ -196,9 +171,9 @@ impl<'a, TBinRel: ByodsBinRel> RelIndexRead<'a> for ByodsBinRelIndNone<'a, TBinR
    type Key = ();
 
    type Value = (&'a TBinRel::T0, &'a TBinRel::T1);
-   type IteratorType = IteratorFromDyn<'a, Self::Value>;
+   // type IteratorType = IteratorFromDyn<'a, Self::Value>;
 
-   fn index_get(&'a self, (): &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, (): &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let res = || self.0.iter_all();
       Some(IteratorFromDyn::new(res))
    }
@@ -210,12 +185,11 @@ impl<'a, TBinRel: ByodsBinRel> RelIndexReadAll<'a> for ByodsBinRelIndNone<'a, TB
    type Key = ();
    type Value = (&'a TBinRel::T0, &'a TBinRel::T1);
 
-   type ValueIteratorType = TBinRel::AllIter<'a>;
-   type AllIteratorType = Once<((), Self::ValueIteratorType)>;
+   // type ValueIteratorType = TBinRel::AllIter<'a>;
+   // type AllIteratorType = Once<((), Self::ValueIteratorType)>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res = once(((), self.0.iter_all()));
-      res
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      once(((), self.0.iter_all()))
    }
 }
 

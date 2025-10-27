@@ -1,3 +1,4 @@
+#![allow(mismatched_lifetime_syntaxes)]
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::Debug;

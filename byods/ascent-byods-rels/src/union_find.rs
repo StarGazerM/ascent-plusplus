@@ -1,3 +1,4 @@
+#![allow(mismatched_lifetime_syntaxes)]
 use std::hash::{BuildHasherDefault, Hash};
 use std::iter::{FlatMap, Repeat, Zip};
 
@@ -67,6 +68,18 @@ impl<T: Clone + Hash + Eq> EqRel<T> {
    pub(crate) fn elem_set(&self, elem: &T) -> Option<usize> {
       self.elem_ids.get(elem).map(|id| self.get_dominant_id(*id))
    }
+
+
+   pub fn dominant_ids(&self) -> impl Iterator<Item = usize> + '_ {
+      self.elem_ids.iter().filter_map(move |(_, &id)|
+       if self.set_subsumptions.contains_key(&id) { None } else { Some(id) }
+      )
+   }
+
+   pub fn dominant_elements(&self) -> impl Iterator<Item = &T> + '_ {
+      self.dominant_ids()
+          .filter_map(|id| self.sets.get(id)?.iter().next())
+  }
 
    fn get_dominant_id_update(&mut self, id: usize) -> usize {
       match self.set_subsumptions.get(&id) {
@@ -172,6 +185,20 @@ impl<T: Clone + Hash + Eq> EqRel<T> {
    }
 
    pub fn count_exact(&self) -> usize { self.sets.iter().map(|s| s.len() * s.len()).sum() }
+
+   pub fn equiv_vec_huh(&self, vec1: &Vec<T>, vec2: &Vec<T>) -> bool {
+      if vec1.len() != vec2.len() { return false }
+      for (x, y) in vec1.iter().zip(vec2.iter()) {
+         if !self.contains(x, y) { return false }
+      }
+      true
+   }
+
+   pub fn get_dominant_elem(&self, elem: &T) -> Option<&T> {
+      let id = self.elem_set(elem)?;
+      let dom_id = self.get_dominant_id(id);
+      self.sets.get(dom_id)?.iter().next()
+   }
 }
 
 #[test]

@@ -2,7 +2,7 @@ use std::hash::{BuildHasherDefault, Hash};
 
 use ascent::internal::{RelIndexRead, RelIndexReadAll};
 use hashbrown::HashMap;
-use hashbrown::hash_map::Iter;
+// use hashbrown::hash_map::Iter;
 use rustc_hash::FxHasher;
 
 pub type MyHashSetIter<'a, T> = hashbrown::hash_set::Iter<'a, T>;
@@ -87,19 +87,8 @@ impl<'a, T: Clone + Hash + Eq + 'a> RelIndexReadAll<'a> for MapRelIndexAdaptor<'
 
    type Value = &'a T;
 
-   type ValueIteratorType = MyHashSetIter<'a, T>;
-
-   type AllIteratorType = std::iter::Map<
-      Iter<'a, T, MyHashSet<T, BuildHasherDefault<FxHasher>>>,
-      for<'aa> fn((&'aa T, &'a MyHashSet<T, BuildHasherDefault<FxHasher>>)) -> (&'aa T, Self::ValueIteratorType),
-   >;
-
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res: Self::AllIteratorType = self.0.iter().map(|(k, v)| {
-         let v_iter = v.iter();
-         (k, v_iter)
-      });
-      res
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.0.iter().map(|(k, v)| (k, v.iter()))
    }
 }
 
@@ -108,9 +97,9 @@ impl<'a, T: Clone + Hash + Eq> RelIndexRead<'a> for MapRelIndexAdaptor<'a, T> {
 
    type Value = &'a T;
 
-   type IteratorType = hashbrown::hash_set::Iter<'a, T>;
+   // type IteratorType = hashbrown::hash_set::Iter<'a, T>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let set = self.0.get(key)?;
       let res = set.iter();
       Some(res)
@@ -133,13 +122,13 @@ where
    type Key = T::Key;
    type Value = U;
 
-   type IteratorType = std::iter::Map<
-      std::iter::Zip<T::IteratorType, std::iter::Repeat<&'a RelIndexValTransformer<T, F>>>,
-      for<'aa> fn((V, &'aa RelIndexValTransformer<T, F>)) -> U,
-   >;
+   // type IteratorType = std::iter::Map<
+   //    std::iter::Zip<T::IteratorType, std::iter::Repeat<&'a RelIndexValTransformer<T, F>>>,
+   //    for<'aa> fn((V, &'aa RelIndexValTransformer<T, F>)) -> U,
+   // >;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
-      let res: Self::IteratorType =
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
+      let res =
          self.rel.index_get(key)?.zip(std::iter::repeat(self)).map(|(x, _self)| (_self.f)(x));
       Some(res)
    }
@@ -156,20 +145,7 @@ where
    type Key = T::Key;
    type Value = U;
 
-   type ValueIteratorType = std::iter::Map<
-      std::iter::Zip<T::ValueIteratorType, std::iter::Repeat<&'a RelIndexValTransformer<T, F>>>,
-      for<'aa> fn((V, &'aa RelIndexValTransformer<T, F>)) -> U,
-   >;
-
-   type AllIteratorType = Box<dyn Iterator<Item = (Self::Key, Self::ValueIteratorType)> + 'a>;
-
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res = self.rel.iter_all().map(move |(k, vals_iter)| {
-         let new_vals_iter: Self::ValueIteratorType =
-            vals_iter.zip(std::iter::repeat(self)).map(|(x, _self)| (_self.f)(x));
-         (k, new_vals_iter)
-      });
-
-      Box::new(res)
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.rel.iter_all().map(move |(k, vals_iter)| (k, vals_iter.zip(std::iter::repeat(self)).map(|(x, _self)| (_self.f)(x))))
    }
 }

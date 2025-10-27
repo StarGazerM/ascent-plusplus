@@ -1,0 +1,23 @@
+[package]
+name = "slog_theory"
+edition = "2024"
+version.workspace = true
+
+[lib]
+# proc-macro = true
+
+[dependencies]
+# syn = { version = "2.0.57", features = ["derive", "full", "extra-traits", "visit-mut"] } 
+# quote = "1.0"
+# proc-macro2 = "1.0"
+slog = { path = "../slog" }
+ascent = { path = "../ascent" }
+slog_utils = { path = "../slog_utils" }
+ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
+# ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
+# lazy_static = "1.4.0"
+good_lp = "1.14.0"
+smtlib = "0.3.0"
+easy-smt = "0.3.2"
+eqsolver = "0.3.0"
+nalgebra = "*"

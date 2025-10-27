@@ -239,3 +239,66 @@ where T: Send + Sync
 
 #[inline(always)]
 pub fn comment(_: &str) {}
+
+pub enum CombinedIter<I1, I2> {
+   First(I1),
+   Second(I2),
+}
+
+impl<I1, I2, V> Iterator for CombinedIter<I1, I2>
+where
+   I1: Iterator<Item = V>,
+   I2: Iterator<Item = V>, // Both must yield the same item type
+{
+   type Item = V;
+
+   fn next(&mut self) -> Option<Self::Item> {
+      match self {
+         CombinedIter::First(iter) => iter.next(),
+         CombinedIter::Second(iter) => iter.next(),
+      }
+   }
+}
+
+pub enum ParCombIter<I1, I2>
+where
+    I1: ParallelIterator,
+    I2: ParallelIterator<Item = I1::Item>,
+{
+    First(I1),
+    Second(I2),
+}
+
+
+use rayon::iter::plumbing::UnindexedConsumer;
+use rayon::prelude::*;
+
+impl<I1, I2> ParallelIterator for ParCombIter<I1, I2>
+where
+    I1: ParallelIterator + Send,
+    I2: ParallelIterator<Item = I1::Item> + Send,
+{
+    type Item = I1::Item;
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: UnindexedConsumer<Self::Item>,
+    {
+        // Match on the variant and delegate the driving to the inner iterator.
+        // This is resolved statically at compile time.
+        match self {
+            ParCombIter::First(iter) => iter.drive_unindexed(consumer),
+            ParCombIter::Second(iter) => iter.drive_unindexed(consumer),
+        }
+    }
+}
+
+pub trait CloneIter: Iterator + Clone {
+   fn clone(&self) -> Self;
+}
+
+impl<I> CloneIter for I
+where I: Iterator + Clone,
+{
+   fn clone(&self) -> Self { self.clone() }
+}

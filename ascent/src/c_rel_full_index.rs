@@ -3,6 +3,7 @@ use std::hash::{BuildHasherDefault, Hash};
 use ascent_base::util::update;
 use dashmap::{DashMap, SharedValue};
 use instant::Instant;
+use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
 
 use crate::c_rel_index::{DashMapViewParIter, shards_count};
@@ -114,9 +115,9 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a> RelIndexRead<'a> for CRelFullIndex<K,
    type Key = K;
    type Value = &'a V;
 
-   type IteratorType = std::iter::Once<&'a V>;
+   // type IteratorType = std::iter::Once<&'a V>;
 
-   fn index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn index_get(&'a self, key: &Self::Key) -> Option<impl Iterator<Item = Self::Value> + Clone + 'a> {
       let val = self.unwrap_frozen().get(key)?;
       let res = std::iter::once(val);
       Some(res)
@@ -127,14 +128,14 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a> RelIndexRead<'a> for CRelFullIndex<K,
    fn is_empty(&'a self) -> bool { self.unwrap_frozen().len() == 0 }
 }
 
-impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + Sync> CRelIndexRead<'a> for CRelFullIndex<K, V> {
+impl<'a, K: 'a + Clone + Hash + Eq + Send, V: 'a + Sync> CRelIndexRead<'a> for CRelFullIndex<K, V> {
    type Key = K;
 
    type Value = &'a V;
 
-   type IteratorType = rayon::iter::Once<&'a V>;
+   // type IteratorType = rayon::iter::Once<&'a V>;
 
-   fn c_index_get(&'a self, key: &Self::Key) -> Option<Self::IteratorType> {
+   fn c_index_get(&'a self, key: &Self::Key) -> Option<impl ParallelIterator<Item = Self::Value> + Clone + 'a> {
       let val = self.unwrap_frozen().get(key)?;
       let res = rayon::iter::once(val);
       Some(res)
@@ -193,12 +194,11 @@ impl<'a, K: 'a + Clone + Hash + Eq, V: 'a + Clone> RelIndexReadAll<'a> for CRelF
    type Key = &'a K;
    type Value = V;
 
-   type ValueIteratorType = std::iter::Once<V>;
-   type AllIteratorType = Box<dyn Iterator<Item = (&'a K, Self::ValueIteratorType)> + 'a>;
+   // type ValueIteratorType = std::iter::Once<V>;
+   // type AllIteratorType = Box<dyn Iterator<Item = (&'a K, Self::ValueIteratorType)> + 'a>;
 
-   fn iter_all(&'a self) -> Self::AllIteratorType {
-      let res = self.unwrap_frozen().iter().map(|(k, v)| (k, std::iter::once(v.clone())));
-      Box::new(res) as _
+   fn iter_all(&'a self) -> impl Iterator<Item = (Self::Key, impl Iterator<Item = Self::Value> + 'a)> + 'a {
+      self.unwrap_frozen().iter().map(|(k, v)| (k, std::iter::once(v.clone())))
    }
 }
 
@@ -208,19 +208,16 @@ impl<'a, K: 'a + Clone + Hash + Eq + Send + Sync, V: 'a + Clone + Send + Sync> C
    type Key = &'a K;
    type Value = &'a V;
 
-   type ValueIteratorType = rayon::iter::Once<&'a V>;
+   // type ValueIteratorType = rayon::iter::Once<&'a V>;
    // type AllIteratorType = Box<dyn Iterator<Item = (&'a K, Self::ValueIteratorType)> + 'a>;
 
-   type AllIteratorType = rayon::iter::Map<
-      DashMapViewParIter<'a, K, V, BuildHasherDefault<FxHasher>>,
-      for<'aa, 'bb> fn((&'aa K, &'bb V)) -> (&'aa K, rayon::iter::Once<&'bb V>),
-   >;
+  // type AllIteratorType = rayon::iter::Map<
+   //    DashMapViewParIter<'a, K, V, BuildHasherDefault<FxHasher>>,
+   //    for<'aa, 'bb> fn((&'aa K, &'bb V)) -> (&'aa K, rayon::iter::Once<&'bb V>),
+   // >;
 
-   fn c_iter_all(&'a self) -> Self::AllIteratorType {
-      use rayon::prelude::*;
-      let res: Self::AllIteratorType =
-         DashMapViewParIter::new(self.unwrap_frozen()).map(|(k, v)| (k, rayon::iter::once(v)));
-      res
+   fn c_iter_all(&'a self) -> impl ParallelIterator<Item = (Self::Key, impl ParallelIterator<Item = Self::Value> + 'a)> + 'a {
+      DashMapViewParIter::new(self.unwrap_frozen()).map(|(k, v)| (k, rayon::iter::once(v)))
    }
 }
 

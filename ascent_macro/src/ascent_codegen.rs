@@ -210,6 +210,22 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          }
       }
    };
+   let run_customized = if mir.config.custom_return_conditions {
+      quote! {
+         #[allow(unused_imports, noop_method_call, suspicious_double_ref_op)]
+         #[doc = "Runs the Ascent program to a fixed point or until the timeout is reached. In case of a timeout returns false"]
+         pub fn run_customized<T>(&mut self, extra_arg: T) -> bool {
+            __before_run!();
+            #run_usings
+            self.update_indices_priv();
+            let _self = self;
+            #(#sccs_compiled)*
+            true
+         }
+      }
+   } else {
+      quote! {}
+   };
    let run_code = if !is_ascent_run {
       quote! {}
    } else {
@@ -280,6 +296,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
          #run_func
 
          #run_timeout_func
+         #run_customized
          // TODO remove pub update_indices at some point
          #[allow(noop_method_call, suspicious_double_ref_op)]
          fn update_indices_priv(&mut self) {
@@ -1077,6 +1094,21 @@ fn compile_mir_rule_inner(
 
             }
          },
+         MirBodyItem::Magg(magg) => {
+            let agged_var = &magg.agged_var;
+            // generate comm_ind var name for rel
+            let ind_comm_var_name = rel_ind_common_var_name(&magg.rel.relation);
+            let ind_comm_delta_var_name = ir_relation_version_var_name(&ind_comm_var_name, MirRelationVersion::Delta);
+            let ind_comm_total_var_name = ir_relation_version_var_name(&ind_comm_var_name, MirRelationVersion::Total);
+
+            let agg_func = &magg.aggregator;
+            let arg_exprs = &magg.arg_exprs;
+            let _self = quote! { _self };
+            quote_spanned! {magg.span=>
+               let #agged_var = #agg_func(&#ind_comm_delta_var_name, &#ind_comm_total_var_name, #(#arg_exprs)* );
+               #next_loop
+            }
+         }
       }
    } else {
       quote! {
@@ -1234,8 +1266,9 @@ fn head_update_code(rule: &MirRule, scc: &MirScc, mir: &AscentMir) -> proc_macro
                if let Some(mut __existing_ind) = #head_lat_full_index_var_name_new.index_get(&__lattice_key)
                   .or_else(|| #head_lat_full_index_var_name_delta.index_get(&__lattice_key))
                   .or_else(|| #head_lat_full_index_var_name_full.index_get(&__lattice_key))
+                  .and_then(|mut iter| iter.next().copied()) // freeing the iterator
                {
-                  let __existing_ind = *__existing_ind.next().unwrap();
+                  // let __existing_ind = *__existing_ind.next().unwrap();
                   // TODO possible excessive cloning here?
                   let __lat_changed = ::ascent::Lattice::join_mut(&mut #_self.#head_rel_name[__existing_ind].#tuple_lat_index, __new_row.#tuple_lat_index.clone());
                   if __lat_changed {

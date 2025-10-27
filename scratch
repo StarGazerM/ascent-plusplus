@@ -1,0 +1,43 @@
+
+TC in eqrel
+
+edge(1, 2);
+edge(2, 3);
+edge(3, 4);
+
+tc(x, y) <-- edge(x, y); // done!
+
+in union-find it stored like:
+insert (1, 2)
+{1 <=> 2}
+insert (2, 3)
+{1 <=> 2, 2 <=> 3} ?
+because {1 <=> 2}  is actually {1 <=> P{2}} {2 <=> P{3}}
+so after insert (2, 3)
+{1 <=> P{1, 2, 3}, 2 <=> P{1, 2, 3}, 3 <=> P{1, 2, 3}}
+
+the definition of tc is:
+relation tc(usize, usize);
+which seems not 100% proper anymore, (but its not fully wrong, will be explained later)
+relation tc(usize, {usize}) is better
+but the second arugument in relation tc is not random set. It's set constructed based on few axioms:
+transitive, reflexive, and symmetric.
+An algebraic way to define this is:
+each edges will generate:
+t1 ={{1 <=> P{2}}, {2 <=> P{3}}, {3 <=> P{4}}}
+
+reflexive is:
+t2 = {{1 <=> {1}}, {2 <=> {2}}, {3 <=> {3}}, {4 <=> {4}}}
+
+we further construct by cross product like op:
+t3 = { x <=> { xs ∪ ys }, y <=> { ys ∪ xs } | (x, xs) in t1, (ys, y) in t2, ys ∩ xs != ∅}
+t3 is now:
+{1 <=> {1, 2}, 2 <=> {2, 3}, 3 <=> {3, 4}}
+
+seem some order between T1, T2, T3 to form a lattice.
+T1, T2's least upper bound is T3?
+
+
+
+?tc(1, 4);
+

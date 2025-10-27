@@ -1,3 +1,4 @@
+#![allow(mismatched_lifetime_syntaxes)]
 use core::panic;
 use std::hash::{BuildHasherDefault, Hash};
 use std::rc::Rc;
@@ -229,16 +230,17 @@ impl<T: Clone + Hash + Eq> RelIndexMerge for TrRelIndCommon<T> {
          target: &mut RelMap<T>, target_rev: &mut RelMap<T>, rel1: &'a Rel1, rel2_rev: &'a Rel2Rev,
          mut can_add: impl FnMut(&T, &T) -> bool, _name: &str,
       ) -> bool
-      where
-         Rel1::ValueIteratorType: Clone,
+      // where
+      //    Rel1::ValueIteratorType: Clone,
       {
          let mut changed = false;
          if rel1.len_estimate() < rel2_rev.len_estimate() {
             for (x, x_set) in rel1.iter_all() {
+               let x_set = x_set.cloned().collect::<Vec<_>>();
                if let Some(x_rev_set) = rel2_rev.index_get(x) {
                   for w in x_rev_set {
                      let entry = target.entry(w.clone()).or_default();
-                     for y in x_set.clone() {
+                     for y in &x_set {
                         if !can_add(w, y) {
                            continue
                         }
