@@ -65,14 +65,14 @@ slog! {
     (div (mult (var 1) (lit 2)) (lit 2))
 
     // --------------- Rewrite Rules in Egg --------------- //
-    [(eq (shl x (lit 1)) m) <-- (= m (mult @x (lit 2)))]
+    [(eq (shl x (lit 1)) m) <-- (= m (mult @x @(lit 2)))]
     [(div y z) <--
-        (= m (div (= @d (mult @x @y)) @z))]
-    [(eq (mult x ?(= @n (div y z))) m) <--
-        (= m (div (= @d (mult @x @y)) @z))]
+        (= m (div @(mult @x @y) @z))]
+    [(eq (mult x @(div y z)) m) <--
+        (= m (div @(mult @x @y) @z))]
     [(eq (lit 1) e) <-- (= e (div x x))]
     // [(eq (mult e (lit 1)) e) <-- (expression @e)]
-    [(eq m e1) <-- (= m (mult @e1 (= @e2 (lit 1))))]
+    [(eq m e1) <-- (= m (mult @e1 @(lit 1)))]
 
     // ----------- convert to equivalent EGraph -------------- //
     // convert to egg rec expr

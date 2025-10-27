@@ -8,6 +8,8 @@ use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, Ident, Path, Token, Type, braced, bracketed, parenthesized};
 
+use crate::util::new_ident;
+
 // keywords
 pub mod kw_slog {
    syn::custom_punctuation!(LongLeftArrow, ==>);
@@ -55,7 +57,13 @@ impl Parse for SlogSExprClause {
          let _bang = input.parse::<Token![!]>()?;
          let _paren = parenthesized!(content in input);
          (content, ParenType::BangParen, None, 0)
-      } else if input.peek(syn::token::Paren) || input.peek(Token![?]) {
+      } else if input.peek(syn::token::Paren) || input.peek(Token![?]) || input.peek(Token![@]) {
+         let at_paren = if input.peek(Token![@]) {
+            let _ = input.parse::<Token![@]>()?;
+            true
+         } else {
+            false
+         };
          let parent_type = if input.peek(Token![?]) {
             let _question = input.parse::<Token![?]>()?;
             ParenType::QuestionParen
@@ -75,7 +83,13 @@ impl Parse for SlogSExprClause {
             let _paren2 = parenthesized!(content_inner in content);
             (content_inner, parent_type, Some(id_var), if canonical_id_huh { 1 } else { 0 })
          } else {
-            (content, parent_type, None, 0)
+            if at_paren {
+               // generate a new id var
+               let new_id_var = new_ident("tmp_clause_id");
+               (content, parent_type, Some(new_id_var), 1)
+            } else {
+               (content, parent_type, None, 0)
+            }
          }
       } else if input.peek(syn::token::Brace) {
          let content;
@@ -97,7 +111,10 @@ impl Parse for SlogSExprClause {
 }
 
 fn is_slog_paren(input: &ParseStream) -> bool {
-   input.peek(syn::token::Paren) || input.peek(syn::token::Brace) || input.peek(Token![!]) || input.peek(Token![?])
+   input.peek(syn::token::Paren)
+      || input.peek(syn::token::Brace)
+      || ((input.peek(Token![!]) || input.peek(Token![?]) || input.peek(Token![@])) && input.peek2(syn::token::Paren))
+      || (input.peek(Token![@]) && input.peek2(Token![?]) && input.peek3(syn::token::Paren))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
