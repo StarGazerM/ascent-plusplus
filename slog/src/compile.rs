@@ -194,7 +194,7 @@ fn compile_slog_clause_unstructured_head(
                let cl_arg = Ident::new(&format!("hcl_{}_{}", clause_num, i), expr.span());
                if clause_num != 0 {
                   expr_alias.push(quote_spanned! { expr.span() =>
-                     let #cl_arg_e = #expr
+                     let #cl_arg_e = &#expr
                   });
                   if use_theory_unification && let SlogType::Theory(th_name) = ty {
                      // let canonicalize_fn = canonicalize_theory(&th_name, theory);
@@ -243,11 +243,16 @@ fn compile_slog_clause_unstructured_head(
    // let id_rel_name = Ident::new(&format!("{}_id", rel_name), rel_name.span());
    let rel_name_str = rel_name.to_string();
 
+   let id_calc_code = if clause.canonical_id_huh > 0 {
+      quote! { &slog_utils::calc_id_canonical(&(#rel_name_str, #(#args_tokens),*), &_self.eq) }
+   } else {
+      quote! { &slog_utils::calc_id(&(#rel_name_str, #(#args_tokens),*)) }
+   };
    if clause.id_var.is_some() {
       let id_var = clause.id_var.clone().unwrap();
       if !body_vars.contains(&id_var) {
          new_id_decls.push(quote_spanned! { clause.id_var.clone().unwrap().span() =>
-            let #id_var = &calc_id(&(#rel_name_str, #(#args_tokens),*))
+            let #id_var = #id_calc_code
          });
       }
       Ok(quote_spanned! { rel_name.span() =>
@@ -255,7 +260,7 @@ fn compile_slog_clause_unstructured_head(
       })
    } else {
       Ok(quote_spanned! { rel_name.span() =>
-         #rel_name(#(#args_tokens),*, calc_id(&(#rel_name_str, #(#args_tokens),*)))
+         #rel_name(#(#args_tokens),*, #id_calc_code)
       })
    }
 }
@@ -357,13 +362,18 @@ fn compile_slog_clause_unstructured_body(
       let id_var = if clause.canonical_id_huh > 0 {
          let id_var = clause.id_var.clone().unwrap();
          let intermediate_id = Ident::new(&format!("intermediate_{}", id_var), id_var.span());
+         let iter_name = Ident::new(&format!("iter_{}", id_var), id_var.span());
          if clause.canonical_id_huh == 1 {
             clause_before_code_vec.push(quote_spanned! {id_var.span()=>
-               eq(#id_var, #intermediate_id, _)
+               // eq(#id_var, #intermediate_id, _)
+               // let #intermediate_id = &slog_utils::canonicalize(#id_var, &_self.eq)
+               let #iter_name = slog_utils::id_set(#id_var, &_self.eq).into_iter(),
+               for #intermediate_id in #iter_name
             });
          } else {
             clause_after_code_vec.push(quote_spanned! {id_var.span()=>
-               eq(#id_var, #intermediate_id, _)
+               // eq(#id_var, #intermediate_id, _)
+               let #intermediate_id = &slog_utils::canonicalize(#id_var, &_self.eq)
             });
          }
          intermediate_id
@@ -866,14 +876,20 @@ fn destruct_slog_body_item(item: &SlogRuleBodyItem) -> Vec<SlogRuleBodyItem> {
             new_args.push(SlogClauseArg::LogicVar(new_id_var, false));
          } else if let SlogClauseArg::LogicVar(id, true) = arg {
             let var = Ident::new(&format!("can_{}", id), id.span());
-            let new_sexpr = SlogSExprClause {
-               paren: ParenType::Regular,
-               rel_name: Ident::new("eq", id.span()),
-               args: vec![SlogClauseArg::LogicVar(var.clone(), false), SlogClauseArg::LogicVar(var.clone(), false)],
-               id_var: Some(id.clone()),
-               canonical_id_huh: sexpr.canonical_id_huh,
-            };
-            after.push(SlogRuleBodyItem::SlogSExprClause(new_sexpr));
+            // let new_sexpr = SlogSExprClause {
+            //    paren: ParenType::Regular,
+            //    rel_name: Ident::new("eq", id.span()),
+            //    args: vec![SlogClauseArg::LogicVar(var.clone(), false), SlogClauseArg::LogicVar(var.clone(), false)],
+            //    id_var: Some(id.clone()),
+            //    canonical_id_huh: sexpr.canonical_id_huh,
+            // };
+            let new_expr = SlogRuleBodyItem::AscentClause(
+               quote_spanned! { id.span() =>
+                  let #id = &slog_utils::canonicalize(#var, &_self.eq)
+               }
+            );
+            // after.push(SlogRuleBodyItem::SlogSExprClause(new_sexpr));
+            after.push(new_expr);
             new_args.push(SlogClauseArg::LogicVar(var, false));
          } else {
             new_args.push(arg.clone());

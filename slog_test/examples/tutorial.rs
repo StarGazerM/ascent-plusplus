@@ -56,18 +56,20 @@ slog! {
     // --------------- Reflexive of eq --------------- //
     [(= e (eq e e)) <-- (expression e)]
     // --------------- Congruence of eq --------------- //
-    [(eq e (div x y)) <-- (= e (div @x @y))]
-    [(eq e (add x y)) <-- (= e (add @x @y))]
-    [(eq e (mult x y)) <-- (= e (mult @x @y))]
-    [(eq e (shl x y)) <-- (= e (shl @x @y))]
+    // [(eq e (div x y)) <-- (= e (div @x @y))]
+    // [(= ec (div x y)) <-- (= e (div @x @y)) (= ec (eq e e))]
+    // [(eq e (add x y)) <-- (= e (add @x @y))]
+    // [(= ec (add x y)) <-- (= e (add @x @y)) (= ec (eq e e))]
+    // [(eq e (mult x y)) <-- (= e (mult @x @y))]
+    // [(= ec (mult x y)) <-- (= e (mult @x @y)) (= ec (eq e e))]
+    // [(eq e (shl x y)) <-- (= e (shl @x @y)) (eq x y)]
+    // [(= ec (shl x y)) <-- (= e (shl @x @y)) (= ec (eq e e))]
 
     // --------------- EDB --------------- //
     (div (mult (var 1) (lit 2)) (lit 2))
 
     // --------------- Rewrite Rules in Egg --------------- //
-    [(eq (shl x (lit 1)) m) <-- (= m (mult @x @(lit 2)))]
-    [(div y z) <--
-        (= m (div @(mult @x @y) @z))]
+    [(eq (shl x @(lit 1)) m) <-- (= m (mult @x @(lit 2)))]
     [(eq (mult x @(div y z)) m) <--
         (= m (div @(mult @x @y) @z))]
     [(eq (lit 1) e) <-- (= e (div x x))]
@@ -104,8 +106,8 @@ slog! {
         (= ec (egg_expr _ e2_id))
         ,(let _ = union_expr!(e1_id, e2_id))]
     
-    // (define materialize_eq usize usize)
-    // [(= id (materialize_eq e1 e2)) <-- (= id (eq e1 e2)) ,(if e1 != e2)]
+    (define materialize_eq usize usize)
+    [(= id (materialize_eq e1 e2)) <-- (= id (eq e1 e2)) ,(if e1 != e2)]
 }
 
 fn main() {

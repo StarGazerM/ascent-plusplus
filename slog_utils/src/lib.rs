@@ -1,5 +1,6 @@
 /// calculate the id of a tuple
 use std::collections::hash_map::DefaultHasher;
+use ascent_byods_rels::fake_vec::VecEqRel;
 use std::hash::{Hash, Hasher};
 pub fn calc_id<T: Hash>(t: &T) -> usize {
    let mut s = DefaultHasher::new();
@@ -11,6 +12,26 @@ pub fn calc_id<T: Hash>(t: &T) -> usize {
 fn test_calc_id() {
    let t = (1, 2, 3);
    assert_eq!(calc_id(&t), 646939227381880718);
+}
+
+pub fn calc_id_canonical<T: Hash + Eq + Clone>(t: &T, eqvec: &VecEqRel) -> usize {
+   let mut s = DefaultHasher::new();
+   t.hash(&mut s);
+   let v = s.finish() as usize;
+   *eqvec.eqrel.get_dominant_elem(&v).unwrap_or(&v)
+}
+
+pub fn canonicalize(t: &usize, eqvec: &VecEqRel) -> usize {
+   *eqvec.eqrel.get_dominant_elem(t).unwrap_or(t)
+}
+
+pub fn id_set(t: & usize, eqvec: & VecEqRel) -> Vec<usize> {
+    let set = eqvec.eqrel.set_of(t);
+    if let Some(set) = set {
+        set.cloned().collect()
+    } else {
+        vec![*t]
+    }
 }
 
 /// collect all the items in the input iterator as a vector

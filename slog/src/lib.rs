@@ -18,6 +18,7 @@ pub fn prelude(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
       use slog_utils::calc_id;
       use slog_utils::collect;
       type Str = &'static str;
+      // use slog_utils as slog_utils;
       // use slog_theory::canonicalize;
       // use slog_theory::unification_ds;
       // use slog_theory::theory_propagation;

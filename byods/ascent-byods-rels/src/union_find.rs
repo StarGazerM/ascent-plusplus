@@ -196,8 +196,8 @@ impl<T: Clone + Hash + Eq> EqRel<T> {
 
    pub fn get_dominant_elem(&self, elem: &T) -> Option<&T> {
       let id = self.elem_set(elem)?;
-      let dom_id = self.get_dominant_id(id);
-      self.sets.get(dom_id)?.iter().next()
+      // let dom_id = self.get_dominant_id(id);
+      self.sets.get(id)?.iter().next()
    }
 }
 

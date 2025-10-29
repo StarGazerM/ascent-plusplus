@@ -83,7 +83,7 @@ slog! {
     (expression ?(symbol x))
     // reflexive of expression
     [(= e (eq e e)) <-- (expression e)]
-    // congruence of eq for expression
+    // // congruence of eq for expression
     [(eq (add x y) p1) <-- (= p1 (add @x @y))]
     [(eq (sub x y) p1) <-- (= p1 (sub @x @y))]
     [(eq (mul x y) p1) <-- (= p1 (mul @x @y))]
@@ -99,27 +99,27 @@ slog! {
     // rw!("comm-mul";  "(* ?a ?b)"        => "(* ?b ?a)"),
     [(= p1 (mul @y @x)) --> (eq (mul x y) p1)]
     // rw!("assoc-add"; "(+ ?a (+ ?b ?c))" => "(+ (+ ?a ?b) ?c)"),
-    [(add @(add @x @y) @z) --> (add y z)]
-    [(= p1 (add @(add @x @y) @z)) --> (eq (add x @?(add y z)) p1)]
+    // [(add @(add @x @y) @z) --> (add y z)]
+    [(= p1 (add @(add @x @y) @z)) --> (eq (add x @(add y z)) p1)]
 
     // rw!("assoc-mul"; "(* ?a (* ?b ?c))" => "(* (* ?a ?b) ?c)"),
-    [(mul @a @(mul @b _))--> (mul a b)]
-    [(= m1 (mul @a @(mul @b @c))) --> (eq (mul @?(mul a b) c) m1)]
+    // [(mul @a @(mul @b _))--> (mul a b)]
+    [(= m1 (mul @a @(mul @b @c))) --> (eq (mul @(mul a b) c) m1)]
     
     // rw!("distribute"; "(* ?a (+ ?b ?c))"        => "(+ (* ?a ?b) (* ?a ?c))"),
-    [(mul @a @(add @b @c)) --> (add (mul a b) (mul a c))]
-    [(= m1 (mul @a @(add @b @c))) --> (eq (add @?(mul a b) @?(mul a c)) m1)]
+    // [(mul @a @(add @b @c)) --> (add (mul a b) (mul a c))]
+    [(= m1 (mul @a @(add @b @c))) --> (eq (add @(mul a b) @(mul a c)) m1)]
 
     // rw!("factor"    ; "(+ (* ?a ?b) (* ?a ?c))" => "(* ?a (+ ?b ?c))"),
-    [(add @(mul @a @b) @(mul @a @c)) --> (add b c)]
-    [(= p1 (add (mul @a @b) @(mul @a @c))) --> (eq (mul a @?(add b c)) p1)]
+    // [(add @(mul @a @b) @(mul @a @c)) --> (add b c)]
+    [(= p1 (add (mul @a @b) @(mul @a @c))) --> (eq (mul a @(add b c)) p1)]
 
     // rw!("pow-mul"; "(* (pow ?a ?b) (pow ?a ?c))" => "(pow ?a (+ ?b ?c))"),
-    [(mul @(pow @a @b) @(pow a @c)) --> (add b c)]
-    [(= m1 (mul @(pow @a @b) @(pow a @c))) --> (eq (pow a @?(add b c)) m1)]
+    // [(mul @(pow @a @b) @(pow a @c)) --> (add b c)]
+    [(= m1 (mul @(pow @a @b) @(pow a @c))) --> (eq (pow a @(add b c)) m1)]
 
     // rw!("pow0"; "(pow ?x 0)" => "1"
-    //     if is_not_zero("?x")),
+    // //     if is_not_zero("?x")),
     [(= p1 (pow _ @(constant ,(hf!(0.0)))))--> (eq (constant ,(hf!(1.0))) p1)]
     // rw!("pow1"; "(pow ?x 1)" => "?x"),
     [(= p1 (pow @x @(constant ,(hf!(1.0))))) --> (eq p1 x)]
@@ -130,38 +130,27 @@ slog! {
     //     if is_not_zero("?x")),
     [(= p1 (pow @x @(constant ,(hf!(-1.0))))) --> (eq (div 1 x) p1)]
     // rw!("recip-mul-div"; "(* ?x (/ 1 ?x))" => "1" if is_not_zero("?x")),
-    [(= m1 (mul @x @(constant ,(hf!(1.0))))) --> (eq (div 1 x) m1)]
+    [(= cc1 (constant ,(hf!(1.0)))) (= c1 (eq cc1 cc1))
+     (= m1 (mul @x @(div c1 @y))) (eq x y) --> (eq c1 m1)]
 
     // rw!("d-variable"; "(d ?x ?x)" => "1" if is_sym("?x")),
-    [(= p1 (diff @x @x)) --> (eq (constant ,(hf!(1.0))) p1)]
+    [(= p1 (diff @x @y)) ,(if x == y) --> (eq (constant ,(hf!(1.0))) p1)]
     // rw!("d-constant"; "(d ?x ?c)" => "0" if is_sym("?x") if is_const_or_distinct_var("?c", "?x")),
     [(= p1 (diff @x @(constant ,(hf!(0.0))))) --> (eq (constant ,(hf!(0.0))) p1)]
 
     // rw!("d-add"; "(d ?x (+ ?a ?b))" => "(+ (d ?x ?a) (d ?x ?b))"),
-    [(diff @x (add @a @b)) --> (diff x a) (diff x b)]
-    [(= d1 (diff @x (add @a @b))) --> (eq (add @?(diff x a) @?(diff x b)) d1)]
+    // [(diff @x (add @a @b)) --> (diff x a) (diff x b)]
+    [(= d1 (diff @x (add @a @b))) --> (eq (add @(diff x a) @(diff x b)) d1)]
     // rw!("d-mul"; "(d ?x (* ?a ?b))" => "(+ (* ?a (d ?x ?b)) (* ?b (d ?x ?a)))"),
-    // TODO: how to handle this using syntax sugar?
-    [(diff @x (mul @a @b)) --> (diff x b) (diff x a)]
-    [(diff @x (mul @a @b)) --> (add @?(diff x b) @?(diff x a))]
-    [(diff @x (mul @a @b))
-     (= d2 (diff x a)) (= dd2 (eq d2 d2))
-     (= d3 (diff x b)) (= dd3 (eq d3 d3))
-     --> (mul a dd3) (mul b dd2)]
-    [(= d1 (diff @x (mul @a @b)))
-     (= d2 (diff x a)) (= dd2 (eq d2 d2))
-     (= d3 (diff x b)) (= dd3 (eq d3 d3))
-     (= m1 (mul b dd2)) (= mm1 (eq m1 m1))
-     (= m2 (mul a dd3)) (= mm2 (eq m2 m2))
-     --> (eq (add mm1 mm2) d1)]
+    [(= d1 (diff @x (mul @a @b))) --> (eq (add @(mul a @(diff x b)) @(mul b @(diff x a))) d1)]
 
     // rw!("d-sin"; "(d ?x (sin ?x))" => "(cos ?x)"),
     [(= p1 (diff @x @(sin @x))) --> (eq (cos x) p1)]
     // rw!("d-cos"; "(d ?x (cos ?x))" => "(* -1 (sin ?x))"),
-    [(diff @x @(cos @x)) --> (sin x)]
-    [(= p1 (diff @x @(cos @x))) --> (eq (mul (constant ,(hf!(-1.0))) @?(sin x)) p1)]
+    // [(diff @x @(cos @x)) --> (sin x)]
+    [(= p1 (diff @x @(cos @x))) --> (eq (mul (constant ,(hf!(-1.0))) @(sin x)) p1)]
 
-    // rw!("d-ln"; "(d ?x (ln ?x))" => "(/ 1 ?x)" if is_not_zero("?x")),
+    // // rw!("d-ln"; "(d ?x (ln ?x))" => "(/ 1 ?x)" if is_not_zero("?x")),
     [(= d1 (diff @x @(ln x))) --> (eq (div (constant ,(hf!(1.0))) x) d1)]
 
     // rw!("d-power";
@@ -179,28 +168,52 @@ slog! {
     [(= p1 (integral (= @n (constant ,(hf!(1.0)))) @x)) --> (eq x p1)]
     // rw!("i-power-const"; "(i (pow ?x ?c) ?x)" =>
     //     "(/ (pow ?x (+ ?c 1)) (+ ?c 1))" if is_const("?c")),
-    [(integral @(pow @x @c) @x) --> (add c (constant ,(hf!(1.0))))]
-    // TODO: TBD
+    [(= i1 (integral @(pow @x @c) x))
+     (= cc1 (constant ,(hf!(1.0)))) (= c1 (eq cc1 cc1))
+     --> (eq (div @(pow x @(add c1 c)) @(add c1 c)) i1)]
+    
     // rw!("i-cos"; "(i (cos ?x) ?x)" => "(sin ?x)"),
-    [(= i1 (integral @(cos @x) @x)) --> (eq (sin x) i1)]
-    // rw!("i-sin"; "(i (sin ?x) ?x)" => "(* -1 (cos ?x))"),
-    [(integral @(sin @x) @x) --> (cos x)]
-    [(= i1 (integral @(sin @x) @x)) --> (eq (mul (constant ,(hf!(-1.0))) @?(cos x)) i1)]
+    [(= i1 (integral @(cos @x) @y)) ,(if x == y) --> (eq (sin x) i1)]
+    // // rw!("i-sin"; "(i (sin ?x) ?x)" => "(* -1 (cos ?x))"),
+    [(= i1 (integral @(sin @x) @y)) ,(if x == y) --> (eq (mul (constant ,(hf!(-1.0))) @(cos x)) i1)]
 
-    // rw!("i-sum"; "(i (+ ?f ?g) ?x)" => "(+ (i ?f ?x) (i ?g ?x))"),
-    [(integral @(add @f @g) @x) --> (integral f x) (integral g x)]
-    [(= i1 (integral @(add @f @g) @x)) --> (eq (add @?(integral f x) @?(integral g x)) i1)]
-    // rw!("i-dif"; "(i (- ?f ?g) ?x)" => "(- (i ?f ?x) (i ?g ?x))"),
-    [(integral @(sub @f @g) @x) --> (integral f x) (integral g x)]
-    [(= i1 (integral @(sub @f @g) @x)) --> (eq (sub @?(integral f x) @?(integral g x)) i1)]
-    // rw!("i-parts"; "(i (* ?a ?b) ?x)" =>
-    //     "(- (* ?a (i ?b ?x)) (i (* (d ?x ?a) (i ?b ?x)) ?x))"),
-    // TODO: TBD
+    // // rw!("i-sum"; "(i (+ ?f ?g) ?x)" => "(+ (i ?f ?x) (i ?g ?x))"),
+    [(= i1 (integral @(add @f @g) @x)) --> (eq (add @(integral f x) @(integral g x)) i1)]
+    // // rw!("i-dif"; "(i (- ?f ?g) ?x)" => "(- (i ?f ?x) (i ?g ?x))"),
+    [(= i1 (integral @(sub @f @g) @x)) --> (eq (sub @(integral f x) @(integral g x)) i1)]
+    // // rw!("i-parts"; "(i (* ?a ?b) ?x)" =>
+    // //     "(- (* ?a (i ?b ?x)) (i (* (d ?x ?a) (i ?b ?x)) ?x))"),
+    [(= i1 (integral @(mul @a @b) @x)) --> (eq (sub @(mul a @(integral b x)) @(integral @(mul a @(diff x b)) x)) i1)]
+    
+    //  rw!("comm-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
+    [(= p1 (add @y @x)) --> (eq (add x y) p1)]
+    //  rw!("assoc-add"; "(+ ?a (+ ?b ?c))" => "(+ (+ ?a ?b) ?c)")
+    [(= p1 (add @x @(add @y @z))) --> (eq (add @(add x y) z) p1)]
+
+    // "(+ 1 (+ 2 (+ 3 (+ 4 (+ 5 (+ 6 7))))))"
+    (define left_expr usize)
+    (define right_expr usize)
+    (define res usize)
+    (left_expr
+        (add (constant ,(hf!(1.0)))
+            (add (constant ,(hf!(2.0)))
+                (add (constant ,(hf!(3.0)))
+                    (add (constant ,(hf!(4.0)))
+                        (add (constant ,(hf!(5.0)))
+                            (add (constant ,(hf!(6.0))) (constant ,(hf!(7.0))))))))))
+    (right_expr
+        (add (constant ,(hf!(7.0)))
+            (add (constant ,(hf!(6.0)))
+                (add (constant ,(hf!(5.0)))
+                    (add (constant ,(hf!(4.0)))
+                        (add (constant ,(hf!(3.0)))
+                            (add (constant ,(hf!(2.0))) (constant ,(hf!(1.0))))))))))
+    [(left_expr a1) (right_expr a2) (eq a1 a2) --> (res 1)]
 }
 
 
 fn main() {
     let mut prog = Math::default();
     prog.run();
-    // println!("{:?}", prog.math);
+    println!("{:?}", prog.res);
 }

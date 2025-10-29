@@ -11,7 +11,8 @@ pub use eqrel_canonical_rel_codegen as rel_codegen;
 #[macro_export]
 macro_rules! eqrel_canonical_rel {
    ($name: ident, ($col1: ty, $col2: ty, $col3: ty), $indices: expr, ser, ()) => {
-      $crate::fake_vec::FakeVec<($col1, $col2, $col3)>
+      // $crate::fake_vec::FakeVec<($col1, $col2, $col3)>
+      $crate::fake_vec::VecEqRel
    };
    ($name: ident, ($col1: ty, $col2: ty, $col3: ty), $indices: expr, par, ()) => {
       $crate::fake_vec::FakeVec<($col1, $col2, $col3)>

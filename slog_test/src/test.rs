@@ -232,7 +232,8 @@ fn test_infinity_eq() {
       [,(canonical_expression(e)) <-- (expression e) (= e (eq _ _))]
       
       // EDB
-      (plus (plus (var 1) (num 0)) (num 0))
+      // (plus (plus (var 1) (num 0)) (num 0))
+      (plus (plus (plus (plus (plus (plus (var 1) (num 0)) (num 0)) (num 0)) (num 0)) (num 0)) (num 0))
       
       // reflexive of eq
       (expression ?(num n))
@@ -241,16 +242,13 @@ fn test_infinity_eq() {
       [(= e (eq e e)) <-- (expression e)]
 
       // congruence of eq for plus
-      [(eq (plus x y) p1) <--
-         (= p1 (plus @x @y))]
+      [(eq (plus xx yy) p1) <--
+         (= p1 (plus x y)) (= x (eq x xx)) (= y (eq y yy))]
       
       // substitution of eq
       [(eq (plus e (num 0)) e) <--
          (expression @e)]
 
-      [(plus ?(eq e1 e1) ?(eq n n)) <--
-         (= e (plus e1 e2))
-         (= n (num 0))]
 
       [(res 1) <--
          (= ev (var 1))
@@ -261,6 +259,22 @@ fn test_infinity_eq() {
          (= e1 (plus (plus ev (num 0)) (num 0)))
          (= e1 (eq e1 ev))]
       [(res 3) <--
+         (= ev (var 1))
+         (= e1 (plus (plus (plus ev (num 0)) (num 0)) (num 0)))
+         (= e1 (eq e1 ev))]
+      [(res 4) <--
+         (= ev (var 1))
+         (= e1 (plus (plus (plus (plus ev (num 0)) (num 0)) (num 0)) (num 0)))
+         (= e1 (eq e1 ev))]
+      [(res 5) <--
+         (= ev (var 1))
+         (= e1 (plus (plus (plus (plus (plus ev (num 0)) (num 0)) (num 0)) (num 0)) (num 0)))
+         (= e1 (eq e1 ev))]
+      [(res 6) <--
+         (= ev (var 1))
+         (= e1 (plus (plus (plus (plus (plus (plus ev (num 0)) (num 0)) (num 0)) (num 0)) (num 0)) (num 0)))
+         (= e1 (eq e1 ev))]
+      [(res 7) <--
          (= ev (var 1))
          (= e1 (plus (plus ev (num 0)) (num 1)))
          (= e1 (eq e1 ev))]

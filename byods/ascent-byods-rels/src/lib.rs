@@ -6,7 +6,7 @@
 // See Cargo.toml for why this is needed.
 use syn as _;
 
-mod union_find;
+pub mod union_find;
 #[doc(hidden)]
 pub mod eqrel_ind;
 mod iterator_from_dyn;

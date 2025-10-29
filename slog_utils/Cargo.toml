@@ -4,3 +4,4 @@ edition = "2024"
 version.workspace = true
 
 [dependencies]
+ascent-byods-rels = { path = "../byods/ascent-byods-rels" }
