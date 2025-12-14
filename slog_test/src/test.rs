@@ -172,7 +172,10 @@ fn test_eq2() {
       (foobar (bar 1) (bar 2))
       (foobar (bar 2) (bar 2))
       (foobar (bar 1) (bar 1))
-      [(top f) <-- (= f (foobar x y)) (eq x (bar 1))]
+      [(top f) <-- (= f (foobar x y))
+         ,(let xm = x + 1)
+         (eq xm (bar 1))
+      (eq y (bar 2))]
 
       [(= e (eq e e)) <-- (expression e)]
       [(eq x ?(bar ,(m + 1))) <-- (= x (bar m))]
