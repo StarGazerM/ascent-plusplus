@@ -465,6 +465,9 @@ impl AggregatorNode {
 }
 
 pub struct RuleNode {
+   /// Rule-level attributes (e.g. `#[plan(variant(delta=1, order=[1,0]))]`).
+   /// Populated by `parse_ascent_program`; `RuleNode::parse` leaves it empty.
+   pub attrs: Vec<Attribute>,
    pub head_clauses: Punctuated<HeadItemNode, Token![,]>,
    pub body_items: Vec<BodyItemNode>, // Punctuated<BodyItemNode, Token![,]>,
 }
@@ -481,14 +484,89 @@ impl Parse for RuleNode {
 
       if input.peek(Token![;]) {
          input.parse::<Token![;]>()?;
-         Ok(RuleNode { head_clauses, body_items: vec![] /*Punctuated::default()*/ })
+         Ok(RuleNode { attrs: vec![], head_clauses, body_items: vec![] })
       } else {
          input.parse::<kw::LongLeftArrow>()?;
          let body_items = Punctuated::<BodyItemNode, Token![,]>::parse_separated_nonempty(input)?;
          input.parse::<Token![;]>()?;
-         Ok(RuleNode { head_clauses, body_items: body_items.into_iter().collect() })
+         Ok(RuleNode { attrs: vec![], head_clauses, body_items: body_items.into_iter().collect() })
       }
    }
+}
+
+/// A user-supplied compilation plan for a rule:
+/// `#[plan(variant(delta=N, order=[i0, i1, ...]), ...)]`.
+///
+/// Each variant describes one semi-naive instantiation of the rule: which
+/// body clause reads a delta from the previous iteration (`delta`), and in
+/// what order the body items should be joined (`order`). Variants are
+/// lowered by `ascent_hir` into independent `IrRule`s before index selection.
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub struct PlanAttr {
+   pub variants: Vec<PlanVariant>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub struct PlanVariant {
+   /// Index into the rule's ORIGINAL (pre-permutation) body-item list.
+   pub delta: usize,
+   /// Permutation of original body indices; first entry is the seed clause.
+   pub order: Vec<usize>,
+}
+
+/// Parse the inside of `#[plan(...)]`. Expects one or more
+/// `variant(delta = N, order = [...])` args separated by commas.
+#[allow(dead_code)]
+pub(crate) fn parse_plan_attr(attr: &Attribute) -> Result<PlanAttr> {
+   let mut variants = vec![];
+   attr.parse_nested_meta(|meta| {
+      if !meta.path.is_ident("variant") {
+         return Err(meta.error("expected `variant(delta = N, order = [..])`"));
+      }
+      let mut delta: Option<usize> = None;
+      let mut order: Option<Vec<usize>> = None;
+      meta.parse_nested_meta(|inner| {
+         if inner.path.is_ident("delta") {
+            let lit: syn::LitInt = inner.value()?.parse()?;
+            delta = Some(lit.base10_parse()?);
+            Ok(())
+         } else if inner.path.is_ident("order") {
+            let list: syn::ExprArray = inner.value()?.parse()?;
+            let mut v = vec![];
+            for e in &list.elems {
+               if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(i), .. }) = e {
+                  v.push(i.base10_parse::<usize>()?);
+               } else {
+                  return Err(Error::new(e.span(), "order elements must be usize literals"));
+               }
+            }
+            order = Some(v);
+            Ok(())
+         } else {
+            Err(inner.error("expected `delta` or `order`"))
+         }
+      })?;
+      let delta = delta.ok_or_else(|| meta.error("missing `delta = N`"))?;
+      let order = order.ok_or_else(|| meta.error("missing `order = [..]`"))?;
+      variants.push(PlanVariant { delta, order });
+      Ok(())
+   })?;
+   if variants.is_empty() {
+      return Err(Error::new(attr.span(), "`#[plan(...)]` must contain at least one `variant(...)`"));
+   }
+   Ok(PlanAttr { variants })
+}
+
+/// Extract `#[plan(...)]` from an attribute list. Returns `Ok(None)` if
+/// no plan attribute is present. The plan attribute is removed from `attrs`.
+#[allow(dead_code)]
+pub(crate) fn extract_plan_attr(attrs: &mut Vec<Attribute>) -> Result<Option<PlanAttr>> {
+   let idx = attrs.iter().position(|a| a.path().is_ident("plan"));
+   let Some(i) = idx else { return Ok(None) };
+   let attr = attrs.remove(i);
+   parse_plan_attr(&attr).map(Some)
 }
 
 // TODO maybe remove?
@@ -635,10 +713,11 @@ pub(crate) fn parse_ascent_program(
             IncludeSourceMacroCall { include_node, before_tokens, after_tokens, ascent_macro_name };
          return Ok(Either::Right(include_source_macro_call));
       } else {
-         if !attrs.is_empty() {
-            return Err(Error::new(attrs[0].span(), "unexpected attribute(s)"));
-         }
-         rules.push(RuleNode::parse(input)?);
+         // Rule-level attributes are allowed (e.g. `#[plan(...)]`). HIR
+         // validates them; unknown attributes flow through for later passes.
+         let mut rule_node = RuleNode::parse(input)?;
+         rule_node.attrs = attrs;
+         rules.push(rule_node);
       }
    }
    Ok(Either::Left(AscentProgram { rules, relations, signatures, attributes, macros }))
@@ -732,7 +811,11 @@ fn rule_desugar_disjunction_nodes(rule: RuleNode) -> Vec<RuleNode> {
 
    let mut res = vec![];
    for conjunction in bitems_desugar(&rule.body_items) {
-      res.push(RuleNode { body_items: conjunction, head_clauses: rule.head_clauses.clone() })
+      res.push(RuleNode {
+         attrs: rule.attrs.clone(),
+         body_items: conjunction,
+         head_clauses: rule.head_clauses.clone(),
+      })
    }
    res
 }
@@ -903,6 +986,7 @@ fn rule_desugar_pattern_args(rule: RuleNode) -> RuleNode {
    }
    let mut gensym = GenSym::default();
    RuleNode {
+      attrs: rule.attrs,
       body_items: rule
          .body_items
          .into_iter()
@@ -1113,7 +1197,7 @@ fn rule_expand_macro_invocations(rule: RuleNode, macros: &HashMap<Ident, &MacroD
       .pipe(punctuated_try_unwrap)?
       .pipe(flatten_punctuated);
 
-   Ok(RuleNode { body_items: new_body_items, head_clauses: new_head_items })
+   Ok(RuleNode { attrs: rule.attrs, body_items: new_body_items, head_clauses: new_head_items })
 }
 
 pub(crate) fn desugar_ascent_program(mut prog: AscentProgram) -> Result<AscentProgram> {
