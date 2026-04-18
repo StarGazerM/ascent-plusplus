@@ -195,6 +195,39 @@ fn session_negation_roundtrip() {
    assert!(added.contains(&(2,)), "expected (2,) re-insertion, got {added:?}");
 }
 
+/// Retracting an edge whose derived paths have ALTERNATE derivations
+/// must NOT retract those paths. Shows reduce's multiplicity-aware
+/// semantics: path(1,3) has two derivations (direct via edge(1,3) and
+/// 2-hop via 1→2→3); removing edge(1,3) leaves the 2-hop derivation
+/// intact, so path(1,3) stays in the snapshot.
+#[test]
+fn session_retraction_alt_derivation_survives() {
+   let mut s = ChanTcS::session();
+
+   // Triangle: 1→2, 2→3, AND a direct 1→3. path(1,3) has two derivations.
+   s.edge_insert((1, 2));
+   s.edge_insert((2, 3));
+   s.edge_insert((1, 3));
+   s.commit();
+   let mut snap = s.path_snapshot();
+   snap.sort();
+   assert_eq!(snap, vec![(1, 2), (1, 3), (2, 3)]);
+
+   // Retract the direct edge. 2-hop derivation of path(1,3) still holds.
+   s.edge_remove((1, 3));
+   s.commit();
+   let mut snap = s.path_snapshot();
+   snap.sort();
+   // path(1,3) SURVIVES — alternate derivation keeps it alive.
+   assert_eq!(snap, vec![(1, 2), (1, 3), (2, 3)]);
+
+   // The delta for this commit should be *empty* for path (no net change)
+   // because the cancelled derivation was rebalanced by the other one.
+   let net_diff_for_1_3: isize =
+      s.path_deltas().iter().filter(|(t, _)| *t == (1, 3)).map(|(_, d)| *d).sum();
+   assert_eq!(net_diff_for_1_3, 0, "path(1,3) shouldn't churn in deltas");
+}
+
 /// Re-insertion after retraction — idempotent state.
 #[test]
 fn session_reinsert_after_retract() {
