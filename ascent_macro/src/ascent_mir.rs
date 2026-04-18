@@ -276,7 +276,10 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
 
       let rules = scc
          .iter()
-         .flat_map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set))
+         .map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set))
+         .collect::<syn::Result<Vec<_>>>()?
+         .into_iter()
+         .flatten()
          .collect_vec();
 
       for rule in rules.iter() {
@@ -319,7 +322,9 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
    })
 }
 
-fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>) -> Vec<MirRule> {
+fn compile_hir_rule_to_mir_rules(
+   rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>,
+) -> syn::Result<Vec<MirRule>> {
    fn versions_base(count: usize) -> Vec<Vec<MirRelationVersion>> {
       if count == 0 {
          vec![]
@@ -397,30 +402,109 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
       })
       .collect_vec();
 
-   let version_combinations =
-      if dynamic_cls.is_empty() { vec![vec![]] } else { versions(&dynamic_cls[..], rule.simple_join_start_index) };
+   // Either the user's `#[plan(...)]` variants drive the semi-naive
+   // expansion, or we fall back to the auto-generated `versions()` set.
+   // Each produced variant is a Vec<(permuted_body_index, Option<version>)>
+   // — permuted so codegen's left-to-right walk matches the requested plan.
+   let plan_variants: Vec<Vec<(usize, Option<MirRelationVersion>)>> = match &rule.plan {
+      None => {
+         let version_combinations = if dynamic_cls.is_empty() {
+            vec![vec![]]
+         } else {
+            versions(&dynamic_cls[..], rule.simple_join_start_index)
+         };
+         version_combinations
+            .into_iter()
+            .map(|vc| {
+               // Natural order: body items kept in original position.
+               let versions_per_item: Vec<Option<MirRelationVersion>> = dynamic_cls
+                  .iter()
+                  .zip(vc)
+                  .fold(vec![None; rule.body_items.len()], |mut acc, (i, v)| {
+                     acc[*i] = Some(v);
+                     acc
+                  });
+               (0..rule.body_items.len()).map(|i| (i, versions_per_item[i])).collect()
+            })
+            .collect()
+      },
+      Some(user_variants) => {
+         let mut out = Vec::with_capacity(user_variants.len());
+         for (vi, pv) in user_variants.iter().enumerate() {
+            // SCC-context validation: the delta clause must be dynamic
+            // (i.e., in an IDB relation within this SCC). Static/EDB
+            // clauses have no delta stream; rejecting here gives a clear
+            // error rather than silently producing wrong output.
+            let is_dynamic = match &rule.body_items[pv.delta] {
+               IrBodyItem::Clause(cl) => dynamic_relations.contains(&cl.rel.relation),
+               _ => false,
+            };
+            if !is_dynamic {
+               let rel_name: String = match &rule.body_items[pv.delta] {
+                  IrBodyItem::Clause(cl) => cl.rel.relation.name.to_string(),
+                  _ => "<non-clause>".into(),
+               };
+               return Err(syn::Error::new(
+                  rule.head_clauses[0].span,
+                  format!(
+                     "#[plan] variant {vi}: `delta = {}` points to clause `{rel_name}`, but that relation is not \
+                      recursive in this SCC (no delta stream exists). Pick a delta clause that names an IDB \
+                      relation participating in the recursion.",
+                     pv.delta
+                  ),
+               ));
+            }
 
-   let mut mir_body_items = Vec::with_capacity(version_combinations.len());
+            // Build version assignment for this variant in the permuted
+            // order. Mirrors `versions_base`'s semantics:
+            //   - in the permuted order, the delta clause position is Delta.
+            //   - clauses before the delta position are TotalDelta.
+            //   - clauses after are Total.
+            // (Only dynamic clauses get a version; others stay None.)
+            let delta_pos_in_order =
+               pv.order.iter().position(|&i| i == pv.delta).expect("structural validator guarantees this");
+            let mut assignment: Vec<(usize, Option<MirRelationVersion>)> = Vec::with_capacity(pv.order.len());
+            for (pos_in_order, &orig_i) in pv.order.iter().enumerate() {
+               let is_dyn = match &rule.body_items[orig_i] {
+                  IrBodyItem::Clause(cl) => dynamic_relations.contains(&cl.rel.relation),
+                  _ => false,
+               };
+               let version = if !is_dyn {
+                  None
+               } else if pos_in_order < delta_pos_in_order {
+                  Some(MirRelationVersion::TotalDelta)
+               } else if pos_in_order == delta_pos_in_order {
+                  Some(MirRelationVersion::Delta)
+               } else {
+                  Some(MirRelationVersion::Total)
+               };
+               assignment.push((orig_i, version));
+            }
+            out.push(assignment);
+         }
+         out
+      },
+   };
 
-   for version_combination in version_combinations {
-      let versions =
-         dynamic_cls.iter().zip(version_combination).fold(vec![None; rule.body_items.len()], |mut acc, (i, v)| {
-            acc[*i] = Some(v);
-            acc
-         });
-      let mir_bodys =
-         rule.body_items.iter().zip(versions).map(|(bi, v)| hir_body_item_to_mir_body_item(bi, v)).collect_vec();
-      mir_body_items.push(mir_bodys)
-   }
+   // Lower each variant: walk the permuted indices in order, emit MIR body
+   // items with the chosen version per clause.
+   let mir_body_items: Vec<Vec<MirBodyItem>> = plan_variants
+      .iter()
+      .map(|assignment| {
+         assignment.iter().map(|&(orig_i, v)| hir_body_item_to_mir_body_item(&rule.body_items[orig_i], v)).collect()
+      })
+      .collect();
 
-   mir_body_items
+   Ok(mir_body_items
       .into_iter()
       .map(|bcls| {
          // rule is reorderable if it is a simple join and the second clause does not depend on items
-         // before the first clause (e.g., let z = &1, foo(x, y), bar(y, z) is not reorderable)
+         // before the first clause (e.g., let z = &1, foo(x, y), bar(y, z) is not reorderable).
+         // User-supplied plans already pin the order, so reorderability is moot;
+         // the existing heuristic still applies harmlessly.
          let reorderable = rule.simple_join_start_index.is_some_and(|ind| {
             let pre_first_clause_vars = bcls.iter().take(ind).flat_map(MirBodyItem::bound_vars);
-            !intersects(pre_first_clause_vars, bcls[ind + 1].bound_vars())
+            bcls.get(ind + 1).map_or(false, |bi| !intersects(pre_first_clause_vars, bi.bound_vars()))
          });
          MirRule {
             body_items: bcls,
@@ -429,5 +513,5 @@ fn compile_hir_rule_to_mir_rules(rule: &IrRule, dynamic_relations: &HashSet<Rela
             reorderable,
          }
       })
-      .collect()
+      .collect())
 }
