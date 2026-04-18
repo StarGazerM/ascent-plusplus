@@ -8,6 +8,7 @@ use super::Lattice;
 
 /// A set type that implements the `Lattice` trait
 #[derive(Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Set<T: PartialEq + Eq + Hash + Ord>(pub BTreeSet<T>);
 
 impl<T: PartialEq + Eq + Hash + Ord> Set<T> {

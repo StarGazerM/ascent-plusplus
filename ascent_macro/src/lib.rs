@@ -5,6 +5,7 @@ mod ascent_mir;
 mod utils;
 mod ascent_hir;
 mod ascent_codegen;
+mod ascent_codegen_dd;
 mod ascent_syntax;
 mod test_errors;
 mod syn_utils;
@@ -24,7 +25,8 @@ use syn::{Attribute, Ident, Result, Token, parse_quote, parse_quote_spanned};
 use syn_utils::ResTokenStream2Ext;
 
 use crate::ascent_codegen::compile_mir;
-use crate::ascent_hir::compile_ascent_program_to_hir;
+use crate::ascent_codegen_dd::compile_mir_dd;
+use crate::ascent_hir::{Backend, compile_ascent_program_to_hir};
 use crate::ascent_mir::compile_hir_to_mir;
 
 /// The main macro of the ascent library. Allows writing logical inference rules similar to Datalog.
@@ -241,9 +243,13 @@ pub(crate) fn ascent_impl(input: proc_macro2::TokenStream, kind: AscentMacroKind
 
    let hir = compile_ascent_program_to_hir(&prog, is_parallel)?;
 
+   let backend = hir.config.backend;
    let mir = compile_hir_to_mir(&hir)?;
 
-   let code = compile_mir(&mir, is_ascent_run);
+   let code = match backend {
+      Backend::Batch => compile_mir(&mir, is_ascent_run),
+      Backend::Dd => compile_mir_dd(&mir, is_ascent_run),
+   };
 
    Ok(code)
 }

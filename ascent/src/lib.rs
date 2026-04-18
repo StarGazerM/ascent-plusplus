@@ -35,3 +35,9 @@ pub use dashmap;
 #[cfg(feature = "par")]
 pub use rayon;
 pub use {boxcar, hashbrown};
+
+/// Runtime support for the `#![backend(dd)]` codegen. Generated DD-backed
+/// programs reference `::ascent::dd::...`; enable the `dd` feature on
+/// `ascent` to pull this in.
+#[cfg(feature = "dd")]
+pub use ascent_dd_runtime as dd;

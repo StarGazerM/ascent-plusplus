@@ -17,6 +17,7 @@ readme = "../README.MD"
 [dependencies]
 ascent_macro = { workspace = true }
 ascent_base = { workspace = true }
+ascent_dd_runtime = { workspace = true, optional = true }
 cfg-if = "1.0"
 hashbrown = {version = "0.14", features = ["raw"]}
 rustc-hash = "2.0"
@@ -33,3 +34,4 @@ web-time = "1.1.0"
 default = ["par"]
 wasm-bindgen = []
 par = ["dashmap", "hashbrown/rayon", "once_cell", "rayon"]
+dd = ["dep:ascent_dd_runtime"]

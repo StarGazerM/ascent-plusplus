@@ -5,7 +5,8 @@ use std::ops::Deref;
 use super::BoundedLattice;
 use crate::Lattice;
 
-#[derive(PartialEq, Eq, Clone, Copy, Hash)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 // TODO uncomment for a major release
 // #[repr(transparent)]
 /// A wrapper type that swaps (`<=` and `>=`) for `PartialOrd`s, (`meet` and `join`) for `Lattice`s,

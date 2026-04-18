@@ -9,3 +9,12 @@ description = "support library for the ascent package"
 
 [dependencies]
 pastey = "0.1.1"
+# Optional: adds serde/Default derives on lattice types so they can participate
+# in the DD backend's `Collection` (DD requires `ExchangeData = Serialize +
+# Deserialize + 'static + ...`). Enabled by the `dd` feature of the `ascent`
+# crate.
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]

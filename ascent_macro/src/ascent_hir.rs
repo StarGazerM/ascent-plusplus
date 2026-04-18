@@ -15,6 +15,13 @@ use crate::ascent_syntax::{
 use crate::syn_utils::{expr_get_vars, pattern_get_vars};
 use crate::utils::{dedup_all_keep_last_by, expr_to_ident, is_wild_card, tuple_type};
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) enum Backend {
+   #[default]
+   Batch,
+   Dd,
+}
+
 #[derive(Clone)]
 pub(crate) struct AscentConfig {
    #[allow(dead_code)]
@@ -23,12 +30,14 @@ pub(crate) struct AscentConfig {
    pub generate_run_partial: bool,
    pub inter_rule_parallelism: bool,
    pub default_ds: DsAttributeContents,
+   pub backend: Backend,
 }
 
 impl AscentConfig {
    const MEASURE_RULE_TIMES_ATTR: &'static str = "measure_rule_times";
    const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
+   const BACKEND_ATTR: &'static str = "backend";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
       let include_rule_times = attrs
@@ -49,10 +58,38 @@ impl AscentConfig {
          .map(|attr| attr.meta.require_path_only())
          .transpose()?;
 
+      let backend_attr = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::BACKEND_ATTR));
+      let backend = match backend_attr {
+         None => Backend::default(),
+         Some(attr) => {
+            let list = attr.meta.require_list()?;
+            let ident: Ident = parse2(list.tokens.clone())
+               .map_err(|e| Error::new(e.span(), format!("expected `batch` or `dd`: {e}")))?;
+            match ident.to_string().as_str() {
+               "batch" => Backend::Batch,
+               "dd" => Backend::Dd,
+               other => {
+                  return Err(Error::new(
+                     ident.span(),
+                     format!("unknown backend `{other}`; expected `batch` or `dd`"),
+                  ));
+               },
+            }
+         },
+      };
+
+      if backend == Backend::Dd && is_parallel {
+         return Err(Error::new_spanned(
+            backend_attr.unwrap(),
+            "the `dd` backend is not compatible with `ascent_par!` / `ascent_run_par!`",
+         ));
+      }
+
       let recognized_attrs = [
          Self::MEASURE_RULE_TIMES_ATTR,
          Self::GENERATE_RUN_TIMEOUT_ATTR,
          Self::INTER_RULE_PARALLELISM_ATTR,
+         Self::BACKEND_ATTR,
          REL_DS_ATTR,
       ];
       for attr in attrs.iter() {
@@ -75,6 +112,7 @@ impl AscentConfig {
          include_rule_times,
          generate_run_partial,
          default_ds,
+         backend,
       })
    }
 }

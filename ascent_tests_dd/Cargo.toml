@@ -1,0 +1,23 @@
+[package]
+name = "ascent_tests_dd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Mirror of `ascent_tests` that exercises the `#![backend(dd)]` codegen
+# backend. Each upstream test maps to an entry here; currently-unsupported
+# cases are `#[ignore = "dd: phase N — reason"]` rather than deleted or
+# adapted, so pass-rate is a meaningful metric as phases land.
+
+[lib]
+# No special proc-macro; just a harness crate with unit tests.
+
+[dependencies]
+ascent = { path = "../ascent", default-features = false, features = ["dd"] }
+itertools = "0.14"
+# DD's ExchangeData requires Serialize + Deserialize on every tuple field type.
+# The `rc` feature makes Rc<T> / Arc<T> serializable — several upstream tests
+# (e.g. `test_dl_lambda`) use `Arc<LambdaCalcExpr>` inside relation tuples.
+serde = { version = "1.0", features = ["derive", "rc"] }
+
+[dev-dependencies]

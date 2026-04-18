@@ -1,0 +1,18 @@
+[package]
+name = "ascent_dd_runtime"
+version.workspace = true
+edition = "2021"
+description = "Runtime support for the ascent macro's differential-dataflow backend"
+license = "MIT"
+
+[dependencies]
+# DD 0.15 pins timely 0.21 transitively. Using the same version here avoids
+# two parallel copies of timely ending up in the generated binary.
+timely = { version = "0.21", default-features = false }
+differential-dataflow = { version = "0.15", default-features = false }
+# For the LatDiff wrapper's `ascent_base::Lattice` bound.
+ascent_base = { workspace = true, features = ["serde"] }
+# `OrderedFloat` wraps `f32`/`f64` with a total order (NaN > +∞, NaN == NaN).
+# Needed so aggregator outputs like `mean() → f64` can live in a DD Collection
+# (which requires `Ord` on value types).
+ordered-float = { version = "4", default-features = false, features = ["serde"] }
