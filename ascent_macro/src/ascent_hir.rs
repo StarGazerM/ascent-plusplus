@@ -140,6 +140,24 @@ pub(crate) struct IrRule {
    pub head_clauses: Vec<IrHeadClause>,
    pub body_items: Vec<IrBodyItem>,
    pub simple_join_start_index: Option<usize>,
+   /// User-supplied semi-naive plan (from `#[plan(variant(...), ...)]`).
+   /// When `Some`, overrides the default variant set in MIR expansion:
+   /// exactly the listed variants are emitted, in the listed order, each
+   /// with the listed body-item permutation and delta clause.
+   ///
+   /// When `None`, MIR auto-generates variants (one per IDB clause being
+   /// delta, natural body order) — the pre-existing behavior.
+   #[allow(dead_code)] // read by MIR in a follow-up stage
+   pub plan: Option<Vec<IrPlanVariant>>,
+}
+
+/// One semi-naive variant as spelled by the user. `delta` and `order`
+/// both index into the rule's ORIGINAL body-item list (before permutation).
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct IrPlanVariant {
+   pub delta: usize,
+   pub order: Vec<usize>,
 }
 
 #[allow(unused)]
@@ -519,7 +537,130 @@ fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result
       }
    }
 
-   Ok((IrRule { simple_join_start_index, head_clauses, body_items }, vec![]))
+   // Extract `#[plan(...)]` if present. Structural validation (permutation,
+   // bounds, delta-is-a-clause) happens here; recursion-context validation
+   // (delta-clause-must-be-dynamic) has to wait until SCC analysis in MIR.
+   let plan = rule
+      .attrs
+      .iter()
+      .find(|a| a.path().is_ident("plan"))
+      .map(crate::ascent_syntax::parse_plan_attr)
+      .transpose()?;
+   let plan = plan.map(|p| validate_and_lower_plan(&p, body_items.len(), &body_items)).transpose()?;
+
+   Ok((IrRule { simple_join_start_index, head_clauses, body_items, plan }, vec![]))
+}
+
+/// Structural validation of a `#[plan(...)]` — checks everything that can
+/// be decided without SCC / dynamic-relation information:
+///   1. `order` is a permutation of `0..body_len`.
+///   2. `delta` is within bounds and listed in `order`.
+///   3. `body_items[delta]` is a clause (not a let/for/if/agg).
+///   4. Permuted body passes variable-binding dependency order.
+///
+/// Returns a lowered Vec<IrPlanVariant> ready to store on IrRule.
+fn validate_and_lower_plan(
+   plan: &crate::ascent_syntax::PlanAttr, body_len: usize, body_items: &[IrBodyItem],
+) -> syn::Result<Vec<IrPlanVariant>> {
+   use crate::syn_utils::{expr_get_vars, pattern_get_vars};
+   let mut out = Vec::with_capacity(plan.variants.len());
+   for (vi, variant) in plan.variants.iter().enumerate() {
+      // (1) permutation
+      if variant.order.len() != body_len {
+         return Err(Error::new(
+            Span::call_site(),
+            format!(
+               "#[plan] variant {vi}: `order` has {} entries, but rule has {body_len} body items",
+               variant.order.len()
+            ),
+         ));
+      }
+      let mut seen = vec![false; body_len];
+      for &i in &variant.order {
+         if i >= body_len {
+            return Err(Error::new(
+               Span::call_site(),
+               format!("#[plan] variant {vi}: `order` contains index {i} but rule has only {body_len} body items"),
+            ));
+         }
+         if seen[i] {
+            return Err(Error::new(
+               Span::call_site(),
+               format!("#[plan] variant {vi}: `order` repeats index {i}; must be a permutation"),
+            ));
+         }
+         seen[i] = true;
+      }
+      // (2) delta in range + listed in order
+      if variant.delta >= body_len {
+         return Err(Error::new(
+            Span::call_site(),
+            format!("#[plan] variant {vi}: `delta = {}` out of bounds (body has {body_len} items)", variant.delta),
+         ));
+      }
+      // (3) delta must be a clause. EDB/IDB distinction deferred to MIR.
+      if !matches!(body_items[variant.delta], IrBodyItem::Clause(_)) {
+         return Err(Error::new(
+            Span::call_site(),
+            format!(
+               "#[plan] variant {vi}: `delta = {}` points to a non-clause body item (let/if/for/agg \
+                have no deltas)",
+               variant.delta
+            ),
+         ));
+      }
+      // (4) var-binding in permuted order. Mirrors existing
+      // `compile_rule_to_ir_rule` dependency check: each body item's free
+      // vars must be bound by a strictly earlier item in the permuted order.
+      let mut bound: Vec<Ident> = Vec::new();
+      for (pos, &i) in variant.order.iter().enumerate() {
+         let bi = &body_items[i];
+         // Gather free vars this item reads.
+         let free: Vec<Ident> = match bi {
+            IrBodyItem::Clause(cl) => cl.args.iter().flat_map(expr_get_vars).collect(),
+            IrBodyItem::Generator(g) => expr_get_vars(&g.expr),
+            IrBodyItem::Cond(c) => match c {
+               CondClause::If(ic) => expr_get_vars(&ic.cond),
+               CondClause::IfLet(il) => expr_get_vars(&il.exp),
+               CondClause::Let(lc) => expr_get_vars(&lc.exp),
+            },
+            IrBodyItem::Agg(a) => a.rel_args.iter().flat_map(expr_get_vars).collect(),
+         };
+         for v in &free {
+            let item_binds_this = match bi {
+               IrBodyItem::Clause(cl) => cl.args.iter().any(|e| crate::utils::expr_to_ident(e).as_ref() == Some(v)),
+               _ => false,
+            };
+            if !item_binds_this && !bound.iter().any(|b| b == v) {
+               return Err(Error::new(
+                  v.span(),
+                  format!(
+                     "#[plan] variant {vi}: variable `{v}` used at reordered position {pos} (original index {i}) \
+                      is not bound by any prior body item in this order"
+                  ),
+               ));
+            }
+         }
+         // After this item, add any new bindings.
+         let new_binds: Vec<Ident> = match bi {
+            IrBodyItem::Clause(cl) => cl.args.iter().filter_map(crate::utils::expr_to_ident).collect(),
+            IrBodyItem::Generator(g) => pattern_get_vars(&g.pattern),
+            IrBodyItem::Cond(CondClause::Let(lc)) => pattern_get_vars(&lc.pattern),
+            IrBodyItem::Cond(CondClause::IfLet(il)) => pattern_get_vars(&il.pattern),
+            _ => vec![],
+         };
+         for nb in new_binds {
+            if !bound.iter().any(|b| b == &nb) {
+               bound.push(nb);
+            }
+         }
+      }
+      out.push(IrPlanVariant { delta: variant.delta, order: variant.order.clone() });
+   }
+   if out.is_empty() {
+      return Err(Error::new(Span::call_site(), "#[plan(...)] must contain at least one `variant(...)`"));
+   }
+   Ok(out)
 }
 
 pub fn ir_name_for_rel_indices(rel: &Ident, indices: &[usize]) -> Ident {
