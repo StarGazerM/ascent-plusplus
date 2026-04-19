@@ -191,7 +191,14 @@ use timely::progress::Timestamp;
 use timely::worker::Worker;
 
 /// Shorthand for the root scope type we hand to user build closures.
-pub type RootScope<'a> = Child<'a, Worker<timely::communication::allocator::thread::Thread>, u32>;
+/// Dataflow root scope used by `execute_batch`. Parameterised by `Generic`
+/// so it covers both single-worker (`Config::thread()`) and multi-worker
+/// (`Config::process(N)`) execution paths without type-surgery at every use.
+pub type RootScope<'a> = Child<'a, Worker<timely::communication::allocator::Generic>, u32>;
+
+/// Session-mode root scope. Session is single-worker for now (persistent
+/// worker across many `commit()` calls with shared-state arrangements).
+pub type SessionRootScope<'a> = Child<'a, Worker<timely::communication::allocator::thread::Thread>, u32>;
 
 /// Shorthand for the worker type persisted inside generated `<Name>Session`s.
 pub type SessionWorker = Worker<timely::communication::allocator::thread::Thread>;
@@ -220,17 +227,24 @@ impl<D: ExchangeData> Sealable for InputSession<u32, D, isize> {
 
 /// Registry of input sessions that `execute_batch` drives to the closed time
 /// after the user build closure returns.
+///
+/// In a multi-worker run, only worker 0 actually inserts tuples — DD's
+/// `arrange_by_key` hash-partitions data to the appropriate worker, so
+/// loading on a single worker is correct AND cheaper than loading N×.
+/// Non-zero workers still create (empty) InputSessions so they advance
+/// the frontier in lockstep and the probe reaches the sealed time.
 pub struct Sealer {
    sessions: Vec<Box<dyn Sealable + 'static>>,
+   worker_index: usize,
 }
 
 impl Sealer {
-   fn new() -> Self { Self { sessions: Vec::new() } }
+   fn new(worker_index: usize) -> Self { Self { sessions: Vec::new(), worker_index } }
 
-   /// Register a `Vec<T>` as an input relation. Data is inserted at time 0;
-   /// the session is sealed to time 1 after dataflow construction.
-   ///
-   /// Returns the collection the user build closure should consume.
+   /// Register a `Vec<T>` as an input relation. Data is inserted at time 0
+   /// on worker 0 only; other workers get an empty InputSession. DD's
+   /// arrange operators redistribute tuples by key-hash — no data is lost.
+   /// The session is sealed to time 1 after dataflow construction.
    pub fn input<T, G>(&mut self, scope: &mut G, data: Vec<T>) -> Collection<G, T, isize>
    where
       T: ExchangeData,
@@ -238,9 +252,12 @@ impl Sealer {
    {
       let mut session: InputSession<u32, T, isize> = InputSession::new();
       let coll = session.to_collection(scope);
-      for t in data {
-         session.insert(t);
+      if self.worker_index == 0 {
+         for t in data {
+            session.insert(t);
+         }
       }
+      // drop `data` on non-zero workers.
       self.sessions.push(Box::new(session));
       coll
    }
@@ -354,24 +371,53 @@ where
 #[inline]
 pub fn clone_borrow<T: Clone>(x: &T) -> T { x.clone() }
 
-pub fn execute_batch<F>(build: F)
-where F: for<'a> FnOnce(&mut RootScope<'a>, &mut Sealer, &mut ProbeHandle<u32>) {
-   let alloc = timely::communication::allocator::thread::Thread::default();
-   let mut worker = timely::worker::Worker::new(
-      timely::WorkerConfig::default(),
-      alloc,
-      Some(std::time::Instant::now()),
-   );
-   let (mut sealer, probe) = worker.dataflow::<u32, _, _>(|scope| {
-      let mut sealer = Sealer::new();
-      let mut probe = ProbeHandle::new();
-      build(scope, &mut sealer, &mut probe);
-      (sealer, probe)
-   });
-   sealer.seal_all(1);
-   while probe.less_than(&1) {
-      worker.step();
+/// DD worker count.
+///
+/// Resolution order:
+///   1. `ASCENT_DD_WORKERS` env var (any integer ≥ 1).
+///   2. Fall back to `std::thread::available_parallelism()` (logical CPUs).
+///   3. If even that fails, `1`.
+///
+/// Setting `ASCENT_DD_WORKERS=1` forces single-worker mode (no thread
+/// spawn, lowest overhead) — handy for debugging or tiny inputs where
+/// channel coordination would dominate.
+pub fn dd_worker_count() -> usize {
+   if let Ok(s) = std::env::var("ASCENT_DD_WORKERS") {
+      if let Ok(n) = s.parse::<usize>() {
+         if n >= 1 {
+            return n;
+         }
+      }
    }
+   std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+}
+
+pub fn execute_batch<F>(build: F)
+where F: for<'a> Fn(&mut RootScope<'a>, &mut Sealer, &mut ProbeHandle<u32>) + Send + Sync + 'static {
+   let workers = dd_worker_count();
+   let config = if workers == 1 { timely::Config::thread() } else { timely::Config::process(workers) };
+   let build = Arc::new(build);
+   // Each worker runs `build` independently; shared state (Sink's
+   // Arc<Mutex<Vec>>) is captured by reference. Inputs are re-`.clone()`d
+   // per worker call — DD's arrange operators hash-partition keys across
+   // workers, so redundant loading is correct and the real join work
+   // distributes.
+   timely::execute::execute(config, move |worker| {
+      let build = build.clone();
+      let worker_index = worker.index();
+      let (mut sealer, probe) = worker.dataflow::<u32, _, _>(|scope| {
+         let mut sealer = Sealer::new(worker_index);
+         let mut probe = ProbeHandle::new();
+         build(scope, &mut sealer, &mut probe);
+         (sealer, probe)
+      });
+      sealer.seal_all(1);
+      while probe.less_than(&1) {
+         worker.step();
+      }
+   })
+   .unwrap()
+   .join();
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +442,7 @@ where F: for<'a> FnOnce(&mut RootScope<'a>, &mut Sealer, &mut ProbeHandle<u32>) 
 pub fn build_session_worker<T, F>(
    build: F,
 ) -> (timely::worker::Worker<timely::communication::allocator::thread::Thread>, T)
-where F: FnOnce(&mut RootScope<'_>) -> T {
+where F: FnOnce(&mut SessionRootScope<'_>) -> T {
    let alloc = timely::communication::allocator::thread::Thread::default();
    let mut worker = timely::worker::Worker::new(
       timely::WorkerConfig::default(),

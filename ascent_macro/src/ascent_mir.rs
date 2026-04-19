@@ -274,9 +274,16 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
          }
       }
 
+      // DD handles semi-naive natively via timely's `Variable` — it
+      // tracks deltas across iterations at the operator level. Emitting
+      // N delta-variants per rule (one per IDB clause being Delta)
+      // produces N redundant rule bodies, each doing the same full join.
+      // DD's internal delta-tracking still gives correct output but at
+      // N× the work. Emit ONE variant per source rule for DD.
+      let is_dd = matches!(hir.config.backend, crate::ascent_hir::Backend::Dd);
       let rules = scc
          .iter()
-         .map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set))
+         .map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set, is_dd))
          .collect::<syn::Result<Vec<_>>>()?
          .into_iter()
          .flatten()
@@ -323,7 +330,7 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
 }
 
 fn compile_hir_rule_to_mir_rules(
-   rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>,
+   rule: &IrRule, dynamic_relations: &HashSet<RelationIdentity>, dd_no_variants: bool,
 ) -> syn::Result<Vec<MirRule>> {
    fn versions_base(count: usize) -> Vec<Vec<MirRelationVersion>> {
       if count == 0 {
@@ -406,7 +413,20 @@ fn compile_hir_rule_to_mir_rules(
    // expansion, or we fall back to the auto-generated `versions()` set.
    // Each produced variant is a Vec<(permuted_body_index, Option<version>)>
    // — permuted so codegen's left-to-right walk matches the requested plan.
+   //
+   // For the DD backend (`dd_no_variants`), we emit exactly one variant per
+   // source rule with all `Option<version>` = None. DD's iterative scope
+   // with `Variable`/`SemigroupVariable` does semi-naive AT THE OPERATOR
+   // LEVEL — the arrange + join operators process only the per-iteration
+   // delta batch on each input, so manual variant expansion (as batch needs)
+   // would produce redundant work. Confirmed against the canonical DD
+   // datalog example (differential-dataflow/experiments/src/bin/graspan1.rs),
+   // which emits exactly one `join_core` per recursive rule.
    let plan_variants: Vec<Vec<(usize, Option<MirRelationVersion>)>> = match &rule.plan {
+      None if dd_no_variants => {
+         // One variant, natural order, all versions = None (no delta markers).
+         vec![(0..rule.body_items.len()).map(|i| (i, None)).collect()]
+      },
       None => {
          let version_combinations = if dynamic_cls.is_empty() {
             vec![vec![]]

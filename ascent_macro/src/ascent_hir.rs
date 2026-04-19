@@ -78,12 +78,12 @@ impl AscentConfig {
          },
       };
 
-      if backend == Backend::Dd && is_parallel {
-         return Err(Error::new_spanned(
-            backend_attr.unwrap(),
-            "the `dd` backend is not compatible with `ascent_par!` / `ascent_run_par!`",
-         ));
-      }
+      // `ascent_par!` + `#![backend(dd)]`: DD's parallelism is orthogonal
+      // to the batch `par` machinery. Workers are controlled by
+      // `ASCENT_DD_WORKERS` at runtime; `ascent_par!` on DD is effectively
+      // the same as `ascent!` at codegen time.
+      let _ = is_parallel;
+      let _ = backend_attr;
 
       let recognized_attrs = [
          Self::MEASURE_RULE_TIMES_ATTR,

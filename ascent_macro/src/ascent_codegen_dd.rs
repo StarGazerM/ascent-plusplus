@@ -1056,17 +1056,17 @@ pub(crate) fn compile_mir_dd(mir: &AscentMir, is_ascent_run: bool) -> TokenStrea
       TokenStream::new()
    };
 
-   // Dedup: when a Session exists, `run()` is a thin wrapper around one
-   // `.commit()`. The dataflow construction is emitted ONCE (in
-   // `Session::new`), halving generated-code size + compile time for
-   // programs with non-trivial rule bodies.
-   let run_body = match (&blocker, emit_session_for_this_program) {
-      (None, true) => {
-         let session_name = session_struct_name(struct_name);
-         run_via_session_body(mir, &self_target, &session_name)
-      },
-      (None, false) => phase1_run_body(mir, &self_target),
-      (Some(reason), _) => {
+   // `run()` uses `execute_batch` directly (multi-worker capable). We
+   // previously dedup'd by routing `run()` through `Session::commit()`
+   // for the session-emitted path, but Session is single-worker — that
+   // bypassed `execute_batch`'s parallel timely runtime and made `run()`
+   // silently serial regardless of `ASCENT_DD_WORKERS`. Restoring the
+   // direct `execute_batch` emission here is what makes `run()` actually
+   // scale across cores; code-size regains are a follow-up once Session
+   // itself supports multi-worker.
+   let run_body = match &blocker {
+      None => phase1_run_body(mir, &self_target),
+      Some(reason) => {
          let comment = format!("dd backend: falling back to noop run() — {reason}");
          quote! {
             // #comment
@@ -1074,6 +1074,7 @@ pub(crate) fn compile_mir_dd(mir: &AscentMir, is_ascent_run: bool) -> TokenStrea
          }
       },
    };
+   let _ = emit_session_for_this_program; // still controls Session struct emission, just not `run()` body
    let run_func = if is_ascent_run {
       quote! {}
    } else {
@@ -1187,17 +1188,22 @@ fn emit_struct_and_default(mir: &AscentMir, include_rel_init_in_default: bool) -
 /// scope, rule SCCs, then per-relation `materialize_rel` + sink attach
 /// (via `sink_ident` + `probe_expr`).
 ///
-/// Returns `(body, hoists)` — `body` goes inside the dataflow closure;
-/// `hoists` must be emitted OUTSIDE it so user generator expressions that
-/// reference non-'static borrows can land in `'static` Vecs before the
-/// closure moves them.
+/// Returns `(body, hoists, hoist_count)`:
+///   - `body` goes inside the dataflow closure.
+///   - `hoists` must be emitted OUTSIDE it so user generator expressions that
+///     reference non-'static borrows can land in `'static` Vecs before the
+///     closure moves them.
+///   - `hoist_count` is the total number of `__hoist_gen_*` bindings produced.
+///     Callers running the closure as `Fn` (multi-worker `execute_batch`)
+///     use this to emit per-call clone-rebindings so the captured Vecs
+///     aren't moved out by inner DD operator closures.
 fn emit_closure_body(
    mir: &AscentMir,
    sorted_rels: &[&RelationIdentity],
    init_coll: impl Fn(&RelationIdentity) -> TokenStream,
    sink_ident: impl Fn(&RelationIdentity) -> TokenStream,
    probe_expr: TokenStream,
-) -> (TokenStream, TokenStream) {
+) -> (TokenStream, TokenStream, usize) {
    let mut body = TokenStream::new();
    body.extend(quote! {
       use ::ascent::dd::differential_dataflow::operators::{Join, Reduce, Threshold};
@@ -1245,7 +1251,7 @@ fn emit_closure_body(
          #sink_id.attach(&(#materialized), #probe_expr);
       });
    }
-   (body, hoists)
+   (body, hoists, hoist_counter)
 }
 
 fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStream {
@@ -1279,14 +1285,18 @@ fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStream {
    }
 
    // Shared core: imports, collections, unit scope, SCC bodies, attach.
-   let (closure_body, hoists) = emit_closure_body(
+   let (closure_body, hoists, hoist_count) = emit_closure_body(
       mir,
       &sorted_rels,
       |rel| {
          // Batch init: create the Collection from the input Vec via Sealer.
          let coll = relation_coll_var(&rel.name);
          let in_var = relation_input_var(&rel.name);
-         quote! { let mut #coll = sealer.input(scope, #in_var); }
+         // `.clone()` because `execute_batch`'s build closure is `Fn` (may
+         // be invoked per-worker under multi-worker DD). Each invocation
+         // gets its own Vec; DD's arrange operators hash-partition so
+         // redundant-load-all-workers is correct.
+         quote! { let mut #coll = sealer.input(scope, #in_var.clone()); }
       },
       |rel| {
          // Batch attach target: inner sink clone moved into the closure.
@@ -1296,12 +1306,25 @@ fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStream {
       quote! { probe },
    );
 
+   // Parallel-DD Fn compliance: for every `__hoist_gen_N` bound OUTSIDE
+   // the closure, shadow it with a fresh clone INSIDE so inner DD
+   // `move` closures (e.g. `.flat_map`) can move the clone without
+   // consuming the outer-captured Vec. Per-call cost is one clone per
+   // hoist; outer closure stays `Fn`-callable across workers.
+   let hoist_rebinds: TokenStream = (1..=hoist_count)
+      .map(|i| {
+         let id = Ident::new(&format!("__hoist_gen_{i}"), Span::call_site());
+         quote! { let #id = #id.clone(); }
+      })
+      .collect();
+
    quote! {
       #(#inputs_setup)*
       #(#sinks_decl)*
       #(#sinks_clone)*
       #hoists
       ::ascent::dd::execute_batch(move |scope, sealer, probe| {
+         #hoist_rebinds
          #closure_body
       });
       #(#sink_drains)*
@@ -1678,7 +1701,10 @@ fn emit_session_build_body(mir: &AscentMir, sorted_rels: &[&RelationIdentity]) -
    });
 
    // Shared core: imports, mut coll rebind, unit scope, SCC bodies, attach.
-   let (body, hoists) = emit_closure_body(
+   // Session path is FnOnce (single-worker, persistent). No hoist rebinds
+   // needed — the build closure runs exactly once inside `worker.dataflow`,
+   // inner DD operators can safely move hoisted Vecs without the Fn trap.
+   let (body, hoists, _hoist_count) = emit_closure_body(
       mir,
       sorted_rels,
       |rel| {

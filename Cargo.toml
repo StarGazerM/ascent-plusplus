@@ -1,6 +1,6 @@
 [workspace]
 members = ["byods/ascent-byods-rels", "ascent", "ascent_base", "ascent_dd_runtime", "ascent_macro"]
-exclude = ["ascent_tests", "ascent_tests_dd", "wasm-tests"]
+exclude = ["ascent_tests", "ascent_tests_dd", "wasm-tests", "benches"]
 resolver = "2"
 
 [workspace.package]
