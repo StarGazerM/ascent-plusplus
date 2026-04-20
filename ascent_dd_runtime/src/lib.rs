@@ -459,6 +459,9 @@ pub struct BatchSealer {
 impl BatchSealer {
    fn new(worker_index: usize) -> Self { Self { sessions: Vec::new(), worker_index } }
 
+   /// Worker index. Exposed so generated code can route per-worker sink writes.
+   pub fn worker_index(&self) -> usize { self.worker_index }
+
    pub fn input<T, G>(&mut self, scope: &mut G, data: Vec<T>) -> Collection<G, T, BatchDiff>
    where
       T: ExchangeData,
@@ -493,10 +496,14 @@ impl BatchSealer {
    }
 }
 
-/// Present-typed output sink. Each worker shares the same Arc-backed
-/// buffer; all derivations land as `(tuple, Present)` entries.
+/// Present-typed output sink with PER-WORKER slots — each worker writes
+/// to `bufs[worker_index]`, no cross-worker Mutex contention on the hot
+/// path. Prior design used one `Arc<Mutex<Vec>>` shared across workers;
+/// at 24 workers pushing millions of tuples that lock dominated runtime
+/// and killed parallel scaling (we stayed at 55s from 4→24 workers while
+/// FlowLog scaled to 23s). Per-worker slot Mutexes are uncontended.
 pub struct BatchSink<T: Clone + Send + 'static> {
-   buf: Arc<Mutex<Vec<T>>>,
+   bufs: Arc<Vec<Mutex<Vec<T>>>>,
 }
 
 impl<T: Clone + Send + 'static> Default for BatchSink<T> {
@@ -504,30 +511,64 @@ impl<T: Clone + Send + 'static> Default for BatchSink<T> {
 }
 
 impl<T: Clone + Send + 'static> Clone for BatchSink<T> {
-   fn clone(&self) -> Self { Self { buf: self.buf.clone() } }
+   fn clone(&self) -> Self { Self { bufs: self.bufs.clone() } }
 }
 
 impl<T: Clone + Send + 'static> BatchSink<T> {
-   pub fn new() -> Self { Self { buf: Arc::new(Mutex::new(Vec::new())) } }
+   pub fn new() -> Self {
+      // Pre-allocate one slot per worker. `dd_worker_count()` resolves the
+      // env var / CPU-count fallback that `execute_batch_present` will use.
+      let n = dd_worker_count();
+      let mut bufs = Vec::with_capacity(n);
+      for _ in 0..n {
+         bufs.push(Mutex::new(Vec::new()));
+      }
+      Self { bufs: Arc::new(bufs) }
+   }
 
-   pub fn attach<G>(&self, collection: &Collection<G, T, BatchDiff>, probe: &mut ProbeHandle<G::Timestamp>)
+   pub fn attach<G>(
+      &self, worker_index: usize, collection: &Collection<G, T, BatchDiff>,
+      probe: &mut ProbeHandle<G::Timestamp>,
+   )
    where
       G: Scope,
       G::Timestamp: Lattice + Timestamp,
       T: ExchangeData + Hashable,
    {
-      let buf = self.buf.clone();
+      let bufs = self.bufs.clone();
       collection
          .clone()
          .inspect(move |(d, _t, _present)| {
-            buf.lock().unwrap().push(d.clone());
+            // Only this worker writes to this slot — Mutex is uncontested,
+            // lock/unlock are near-free on modern pthreads (~10ns).
+            bufs[worker_index].lock().unwrap().push(d.clone());
          })
          .probe_with(probe);
    }
 
-   /// Drain accumulated tuples. Present semantics: each tuple appears
-   /// exactly once (no multiplicity tracking needed).
-   pub fn into_vec(self) -> Vec<T> { std::mem::take(&mut *self.buf.lock().unwrap()) }
+   /// Drain all per-worker slots, concat into a single Vec.
+   pub fn into_vec(self) -> Vec<T> {
+      // `Arc::try_unwrap` lets us consume the inner Vec<Mutex<Vec<T>>>
+      // without cloning. Should succeed since we're consuming self and
+      // all closures hold their own clones that are dropped by now.
+      match Arc::try_unwrap(self.bufs) {
+         Ok(vec) => {
+            let mut out = Vec::new();
+            for m in vec {
+               out.append(&mut m.into_inner().unwrap());
+            }
+            out
+         }
+         Err(arc) => {
+            // Fallback: outstanding clones still exist — drain via lock.
+            let mut out = Vec::new();
+            for m in arc.iter() {
+               out.append(&mut std::mem::take(&mut *m.lock().unwrap()));
+            }
+            out
+         }
+      }
+   }
 }
 
 /// Present-typed parallel batch runner. Mirrors `execute_batch` but uses

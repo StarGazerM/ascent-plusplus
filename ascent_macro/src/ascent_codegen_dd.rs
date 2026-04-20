@@ -1625,9 +1625,19 @@ fn emit_closure_body(
       } else {
          materialize_rel(rel, quote! { #coll }, is_batch)
       };
-      body.extend(quote! {
-         #sink_id.attach(&(#final_expr), #probe_expr);
-      });
+      // Batch `BatchSink::attach` takes `(worker_index, &coll, &mut probe)`
+      // for per-worker slot writes (avoids Mutex contention at high worker
+      // counts). Incremental `Sink::attach` keeps its 2-arg signature.
+      let attach_stmt = if is_batch {
+         quote! {
+            #sink_id.attach(sealer.worker_index(), &(#final_expr), #probe_expr);
+         }
+      } else {
+         quote! {
+            #sink_id.attach(&(#final_expr), #probe_expr);
+         }
+      };
+      body.extend(attach_stmt);
    }
    (body, hoists, hoist_counter)
 }
