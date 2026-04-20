@@ -16,6 +16,7 @@ ascent! {
    ab(x, y) <-- a(x), b(y);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn cross_join_non_recursive() {
    let mut prog = CrossJoin::default();
@@ -39,6 +40,7 @@ ascent! {
    two_hop(x, z) <-- edge(x, y), edge(y, z);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn two_hop_shared_var() {
    let mut prog = TwoHop::default();
@@ -61,6 +63,7 @@ ascent! {
    path(x, z) <-- edge(x, y), path(y, z);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn transitive_closure() {
    let mut prog = Tc::default();

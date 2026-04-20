@@ -171,41 +171,78 @@ fn compile_rule_body_phase1(
    let mut accum: Option<TokenStream> = None;
    let mut hoisted_pre = TokenStream::new();
 
-   for item in &rule.body_items {
+   // Track whether current `accum` is a raw first-clause flat_map of a
+   // single relation (Some(rel)) or a derived/filtered intermediate (None).
+   // If Some, compile_join_clause can reuse the shared arrangement for that
+   // relation's current keying instead of building its own LHS arrangement —
+   // matches FlowLog's pattern of never duplicating arrangements of the
+   // same (rel, keying).
+   // For FlowLog-style fusion: detect the "simple N-clause rule" case where
+   // all body items are plain Clauses (no cond/let/neg/agg/gen), the rule
+   // has exactly ONE head clause, AND the body has ≥2 clauses (otherwise
+   // there's no join_core to fuse into — the single-clause path emits a
+   // raw flat_map of different shape than the head).
+   use crate::ascent_mir::MirBodyItem;
+   let clause_count = rule.body_items.iter().filter(|i| matches!(i, MirBodyItem::Clause(_))).count();
+   let all_clauses_simple = clause_count >= 2
+      && rule.body_items.iter().all(|item| match item {
+         MirBodyItem::Clause(cl) => cl.cond_clauses.is_empty(),
+         _ => false,
+      });
+   let last_clause_idx = rule.body_items.iter().rposition(|it| matches!(it, MirBodyItem::Clause(_)));
+   let fused_head_expr: Option<(TokenStream, TokenStream)> =
+      if all_clauses_simple && rule.head_clause.len() == 1 {
+         let hcl = &rule.head_clause[0];
+         let row_ty = tuple_type(&hcl.rel.field_types);
+         let head_tuple = build_expr_tuple(&hcl.args);
+         Some((quote! { #row_ty }, head_tuple))
+      } else {
+         None
+      };
+   let mut prior_rel: Option<crate::ascent_mir::MirRelation> = None;
+   for (i, item) in rule.body_items.iter().enumerate() {
+      let is_last_clause = Some(i) == last_clause_idx;
+      let fused_for_this = if is_last_clause { fused_head_expr.clone() } else { None };
+      let _ = is_last_clause;
       match item {
          MirBodyItem::Clause(cl) => {
             if accum.is_none() {
                let (new_bound, new_accum) = compile_first_clause(cl);
-               // All clause-bound vars are Ref-natural (batch convention).
                var_kinds = vec![VarKind::Ref; new_bound.len()];
                bound_vars = new_bound;
                accum = Some(new_accum);
+               prior_rel = if cl.cond_clauses.is_empty() { Some(cl.rel.clone()) } else { None };
             } else {
                let old_len = bound_vars.len();
-               let (new_bound, new_accum) = compile_join_clause(&bound_vars, &var_kinds, accum.take().unwrap(), cl);
-               // Newly introduced vars from the join clause are Ref-natural.
+               let (new_bound, new_accum) = compile_join_clause(
+                  &bound_vars, &var_kinds, accum.take().unwrap(), cl,
+                  prior_rel.as_ref(), fused_for_this.clone(),
+               );
                for _ in old_len..new_bound.len() {
                   var_kinds.push(VarKind::Ref);
                }
                bound_vars = new_bound;
                accum = Some(new_accum);
+               // After a join, accum is an intermediate collection, not a raw
+               // single-relation flat_map. Reset — the next join must build
+               // its own LHS arrangement.
+               prior_rel = None;
             }
             for cc in &cl.cond_clauses {
                match cc {
                   CondClause::If(ic) => {
                      accum = Some(emit_filter(accum.take().unwrap(), &bound_vars, &var_kinds, &ic.cond));
+                     prior_rel = None;
                   },
                   CondClause::Let(lc) => {
                      let (nb, na) = emit_let(bound_vars.clone(), &var_kinds, accum.take().unwrap(), &lc.pattern, &lc.exp);
-                     // Match batch semantics: `let v = <ref-ident>` keeps the
-                     // new var Ref-natural (so `*v` works in later body items).
-                     // Complex expressions default to Owned.
                      let let_kind = if_let_new_var_kind(&lc.exp, &bound_vars, &var_kinds);
                      for _ in bound_vars.len()..nb.len() {
                         var_kinds.push(let_kind);
                      }
                      bound_vars = nb;
                      accum = Some(na);
+                     prior_rel = None;
                   },
                   CondClause::IfLet(ic) => {
                      let (nb, na) = emit_if_let(bound_vars.clone(), &var_kinds, accum.take().unwrap(), &ic.pattern, &ic.exp);
@@ -215,6 +252,7 @@ fn compile_rule_body_phase1(
                      }
                      bound_vars = nb;
                      accum = Some(na);
+                     prior_rel = None;
                   },
                }
             }
@@ -222,6 +260,7 @@ fn compile_rule_body_phase1(
          MirBodyItem::Cond(CondClause::If(ic)) => {
             let a = accum.take().unwrap_or_else(|| unit_seed(scope_ident));
             accum = Some(emit_filter(a, &bound_vars, &var_kinds, &ic.cond));
+            prior_rel = None;
          },
          MirBodyItem::Cond(CondClause::Let(lc)) => {
             let a = accum.take().unwrap_or_else(|| unit_seed(scope_ident));
@@ -232,22 +271,20 @@ fn compile_rule_body_phase1(
             }
             bound_vars = nb;
             accum = Some(na);
+            prior_rel = None;
          },
          MirBodyItem::Agg(agg) => {
             if is_not_aggregator(&agg.aggregator) {
                let a = accum.take().expect("negation before first clause not supported");
                accum = Some(emit_negation(a, &bound_vars, &var_kinds, &agg.rel.relation.name, &agg.rel_args));
             } else {
-               // Aggregator may be the FIRST body item (e.g. `num_paths(n) <--
-               // agg n = count() in path(_, _)`). Use a unit seed if no accum
-               // yet — gives the join a single empty-key row to merge with
-               // the aggregator result.
                let a = accum.take().unwrap_or_else(|| unit_seed(scope_ident));
                let (nb, nk, na) = emit_agg(a, &bound_vars, &var_kinds, agg);
                bound_vars = nb;
                var_kinds = nk;
                accum = Some(na);
             }
+            prior_rel = None;
          },
          MirBodyItem::Cond(CondClause::IfLet(ic)) => {
             let a = accum.take().unwrap_or_else(|| unit_seed(scope_ident));
@@ -258,6 +295,7 @@ fn compile_rule_body_phase1(
             }
             bound_vars = nb;
             accum = Some(na);
+            prior_rel = None;
          },
          MirBodyItem::Generator(gen) => {
             let prior_len = bound_vars.len();
@@ -298,6 +336,7 @@ fn compile_rule_body_phase1(
             }
             bound_vars = nb;
             accum = Some(na);
+            prior_rel = None;
          },
       }
    }
@@ -406,8 +445,11 @@ fn compile_first_clause(cl: &crate::ascent_mir::MirBodyClause) -> (Vec<Ident>, T
       quote! { #( ( #filters ) )&&* }
    };
 
+   // DD 0.20: `flat_map` consumes self — clone the `#rel_coll` handle so
+   // the same collection can be used by multiple rules / other operators.
+   // `.clone()` on a Collection is a cheap Arc handle bump.
    let tokens = quote! {
-      #rel_coll.flat_map(move |#destruct| {
+      #rel_coll.clone().flat_map(move |#destruct| {
          if #filter_pred { ::std::option::Option::Some(#proj_tuple) } else { ::std::option::Option::None }
       })
    };
@@ -417,17 +459,24 @@ fn compile_first_clause(cl: &crate::ascent_mir::MirBodyClause) -> (Vec<Ident>, T
 fn compile_join_clause(
    prior_bound: &[Ident], prior_var_kinds: &[VarKind], accum: TokenStream,
    cl: &crate::ascent_mir::MirBodyClause,
+   prior_rel: Option<&crate::ascent_mir::MirRelation>,
+   // FlowLog fusion: if this is the TERMINAL clause of a simple rule body
+   // (single head clause, all-Clause body, no cond/let/neg/agg), emit the
+   // head tuple directly inside the `join_core` closure instead of the
+   // pass-through bound-vars tuple. Caller skips the trailing `.map()` step.
+   // `(head_row_ty, head_expr_tuple)` — row_ty for a precise Some::<row_ty>
+   // annotation, expr_tuple is the head projection evaluated in closure scope.
+   fused_head: Option<(TokenStream, TokenStream)>,
 ) -> (Vec<Ident>, TokenStream) {
    let (plans, shared_in_clause_order, new_vars, filters, computed_keys) = plan_clause(&cl.args, prior_bound);
 
-   // Re-order shared by prior_bound order.
-   let shared_by_accum_order: Vec<(Ident, Ident)> = prior_bound
-      .iter()
-      .filter_map(|v| shared_in_clause_order.iter().find(|(cv, _)| cv == v).cloned())
-      .collect();
-
-   let shared_vars: Vec<Ident> = shared_by_accum_order.iter().map(|(v, _)| v.clone()).collect();
-   let shared_cols: Vec<Ident> = shared_by_accum_order.iter().map(|(_, c)| c.clone()).collect();
+   // Key layout uses CLAUSE COLUMN ORDER (canonical per `IrRelation.indices`,
+   // sorted ascending). Matches the arrangement's flat_map emission so all
+   // users of the same `(rel, indices)` produce identical key tuples —
+   // prerequisite for arrangement sharing across rule bodies. Was previously
+   // ordered by `prior_bound` (per-rule binding order), which prevented share.
+   let shared_vars: Vec<Ident> = shared_in_clause_order.iter().map(|(v, _)| v.clone()).collect();
+   let shared_cols: Vec<Ident> = shared_in_clause_order.iter().map(|(_, c)| c.clone()).collect();
 
    let accum_vals: Vec<Ident> =
       prior_bound.iter().filter(|v| !shared_vars.iter().any(|s| s == *v)).cloned().collect();
@@ -497,20 +546,149 @@ fn compile_join_clause(
    let accum_vals_cloned = own_values_tuple(&accum_vals, &accum_val_kinds);
 
    let destr_accum = emit_user_destructure(prior_bound, prior_var_kinds, quote! { &__b });
-   let tokens = quote! {
-      {
-         let __l = (#accum).map(move |__b| {
-            #destr_accum
-            (#accum_key_tuple, #accum_vals_cloned)
-         });
-         let __r = #rel_coll.flat_map(move |#destruct| {
-            if #filter_pred {
-               ::std::option::Option::Some((#clause_key_tuple, #new_vars_cols_tuple))
-            } else {
-               ::std::option::Option::None
+   // FlowLog-shape emission. Accumulator side is arranged per-rule (inherently
+   // rule-specific — carries prior-join state). RHS references the SHARED
+   // arrangement `__arr_<ir_name>` emitted once per SCC (see
+   // `emit_shared_arrangement_binding`). All users of the same `(rel, keying)`
+   // pair reuse the same arranged trace — avoids N-fold trace maintenance.
+   //
+   // Correctness guards: the shared arrangement's `(key, val)` layout is
+   // derived from `ir_rel.indices` (clause-column order, ascending). The key
+   // this rule constructs on the LHS uses `shared_in_clause_order` (same
+   // canonicalization). If the clause needs per-use filters or computed keys
+   // the shared arrangement can't express (e.g. literal-arg filters or let
+   // bindings that pick from clause cols), fall back to per-clause
+   // `flat_map().arrange_by_key()`.
+   let shared_arr_name = shared_arr_ident(&{
+      use crate::ascent_hir::IrRelation;
+      // Reconstruct `IrRelation` from MirRelation fields — `ir_name` is the
+      // product of `rel.name` + `indices`, so this is deterministic.
+      IrRelation {
+         relation: cl.rel.relation.clone(),
+         indices: cl.rel.indices.clone(),
+         val_type: cl.rel.val_type.clone(),
+      }
+   });
+   let can_use_shared = filters.is_empty() && !cl.rel.indices.is_empty();
+   // LHS-shared: when `prior_rel` is set and matches the shape of the first
+   // clause's raw flat_map (no cond/filter), skip building `__l` — reuse
+   // `__arr_<prior_rel.name>_indices_<prior_rel.indices>` directly as the
+   // LHS arrangement. Matches FlowLog: one arrangement per (rel, keying)
+   // shared across all rules, not one per rule-clause. Condition for reuse:
+   //   - `prior_rel` is Some (accum is a raw first-clause flat_map)
+   //   - `prior_rel.indices` is non-empty (there's a usable key)
+   //   - `filters` are empty (shared arr has no filter baked in)
+   let lhs_shared_arr: Option<Ident> = match prior_rel {
+      Some(pr) if filters.is_empty() && !pr.indices.is_empty() => {
+         let nm = format!(
+            "__arr_{}_indices_{}",
+            pr.relation.name,
+            pr.indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_")
+         );
+         Some(Ident::new(&nm, pr.relation.name.span()))
+      },
+      _ => None,
+   };
+   let tokens = if can_use_shared && lhs_shared_arr.is_some() {
+      let lhs_arr = lhs_shared_arr.unwrap();
+      if let Some((head_row_ty, head_expr_tuple)) = fused_head.as_ref() {
+         // Bind lv/rv/k as refs (via match ergonomics: `let (x,) = &(1,);`
+         // gives x: &T). Head expressions like `*x` and `Convert::convert(x)`
+         // both work uniformly with Ref-kind vars — matching what the
+         // non-fused `.map(|__b| { #destr; head })` path does via
+         // `emit_user_destructure(&__b)`.
+         quote! {
+            {
+               #lhs_arr.clone().join_core(#shared_arr_name.clone(), |__k, __lv, __rv| {
+                  let (#accum_vals_tuple, #new_vars_tuple) = (__lv, __rv);
+                  let #join_key_pattern = __k;
+                  ::std::option::Option::Some::<#head_row_ty>(#head_expr_tuple)
+               })
             }
-         });
-         __l.join(&__r).map(|(#join_key_pattern, (#accum_vals_tuple, #new_vars_tuple))| #out_tuple)
+         }
+      } else {
+         quote! {
+            {
+               #lhs_arr.clone().join_core(#shared_arr_name.clone(), |__k, __lv, __rv| {
+                  let (#accum_vals_tuple, #new_vars_tuple) = (__lv.clone(), __rv.clone());
+                  let #join_key_pattern = __k.clone();
+                  ::std::option::Option::Some::<_>(#out_tuple)
+               })
+            }
+         }
+      }
+   } else if can_use_shared {
+      if let Some((head_row_ty, head_expr_tuple)) = fused_head.as_ref() {
+         quote! {
+            {
+               let __l = (#accum).map(move |__b| {
+                  #destr_accum
+                  (#accum_key_tuple, #accum_vals_cloned)
+               }).arrange_by_key();
+               __l.join_core(#shared_arr_name.clone(), |__k, __lv, __rv| {
+                  let (#accum_vals_tuple, #new_vars_tuple) = (__lv, __rv);
+                  let #join_key_pattern = __k;
+                  ::std::option::Option::Some::<#head_row_ty>(#head_expr_tuple)
+               })
+            }
+         }
+      } else {
+         quote! {
+            {
+               let __l = (#accum).map(move |__b| {
+                  #destr_accum
+                  (#accum_key_tuple, #accum_vals_cloned)
+               }).arrange_by_key();
+               __l.join_core(#shared_arr_name.clone(), |__k, __lv, __rv| {
+                  let (#accum_vals_tuple, #new_vars_tuple) = (__lv.clone(), __rv.clone());
+                  let #join_key_pattern = __k.clone();
+                  ::std::option::Option::Some::<_>(#out_tuple)
+               })
+            }
+         }
+      }
+   } else if let Some((head_row_ty, head_expr_tuple)) = fused_head.as_ref() {
+      quote! {
+         {
+            let __l = (#accum).map(move |__b| {
+               #destr_accum
+               (#accum_key_tuple, #accum_vals_cloned)
+            }).arrange_by_key();
+            let __r = #rel_coll.clone().flat_map(move |#destruct| {
+               if #filter_pred {
+                  ::std::option::Option::Some((#clause_key_tuple, #new_vars_cols_tuple))
+               } else {
+                  ::std::option::Option::None
+               }
+            }).arrange_by_key();
+            __l.join_core(__r, |__k, __lv, __rv| {
+               let (#accum_vals_tuple, #new_vars_tuple) = (__lv, __rv);
+               let #join_key_pattern = __k;
+               ::std::option::Option::Some::<#head_row_ty>(#head_expr_tuple)
+            })
+         }
+      }
+   } else {
+      // Fallback: per-clause arrangement (filters or no-key clause).
+      quote! {
+         {
+            let __l = (#accum).map(move |__b| {
+               #destr_accum
+               (#accum_key_tuple, #accum_vals_cloned)
+            }).arrange_by_key();
+            let __r = #rel_coll.clone().flat_map(move |#destruct| {
+               if #filter_pred {
+                  ::std::option::Option::Some((#clause_key_tuple, #new_vars_cols_tuple))
+               } else {
+                  ::std::option::Option::None
+               }
+            }).arrange_by_key();
+            __l.join_core(__r, |__k, __lv, __rv| {
+               let (#accum_vals_tuple, #new_vars_tuple) = (__lv.clone(), __rv.clone());
+               let #join_key_pattern = __k.clone();
+               ::std::option::Option::Some::<_>(#out_tuple)
+            })
+         }
       }
    };
 
@@ -611,7 +789,7 @@ fn emit_negation(
 
    quote! {
       {
-         let __r_keys = #rel_coll.flat_map(move |#destruct| {
+         let __r_keys = #rel_coll.clone().flat_map(move |#destruct| {
             if #filter_pred {
                ::std::option::Option::Some(#clause_key_tuple)
             } else {
@@ -622,7 +800,7 @@ fn emit_negation(
             #destr_accum
             (#accum_key_tuple, #accum_vals_cloned)
          });
-         __accum_keyed.antijoin(&__r_keys).map(|(#join_key_pattern, #accum_vals_tuple)| #accum_bound_tuple)
+         __accum_keyed.antijoin(__r_keys).map(|(#join_key_pattern, #accum_vals_tuple)| #accum_bound_tuple)
       }
    }
 }
@@ -783,9 +961,9 @@ fn emit_agg(
 
    let tokens = quote! {
       {
-         use ::ascent::dd::differential_dataflow::operators::Reduce;
+         // DD 0.20: `reduce` is inherent on Collection — no trait import.
          // Arrange rel_coll as Collection<(GroupKey, FullRelTuple)>.
-         let __agg_input = #rel_coll.flat_map(move |#agg_destruct| {
+         let __agg_input = #rel_coll.clone().flat_map(move |#agg_destruct| {
             if #filter_pred {
                ::std::option::Option::Some((#clause_key_tuple, #rel_full_value))
             } else {
@@ -808,7 +986,7 @@ fn emit_agg(
             #destr_accum
             (#accum_key_tuple, #accum_vals_cloned)
          });
-         __l.join(&__agg_result).map(|(#join_key_pattern, (#accum_vals_tuple, __agg_out))| {
+         __l.join(__agg_result).map(|(#join_key_pattern, (#accum_vals_tuple, __agg_out))| {
             // `__agg_out` is the DD-storable form. For `Ord` agg outputs
             // (integers, strings, tuples of these) this is the original type.
             // For `f64` / `f32` it's `OrderedFloat<T>` — user code sees the
@@ -946,6 +1124,89 @@ fn emit_generator(
 ///
 /// `scope_ident` names the scope variable in the enclosing Rust code —
 /// `scope` in outer codegen, `inner` inside `scope.iterative(|inner| { ... })`.
+/// Emits rule body expressions per head — one Collection producing the
+/// head-shaped tuples for each head clause of `rule`. Returns
+/// `(Vec<(head_rel_name, body_expr)>, hoisted_pre)`.
+///
+/// FlowLog-style: caller decides how to use these — chain-concat for
+/// looping SCCs (matches `next_X = rule1.concat(rule2)...threshold()`),
+/// or per-head `head_coll = head_coll.concat(body_expr)` for non-looping
+/// SCCs.
+fn compile_rule_head_exprs(
+   rule: &MirRule, scope_ident: &Ident, hoist_counter: &mut usize,
+) -> (Vec<(Ident, TokenStream)>, TokenStream) {
+   if rule.body_items.is_empty() {
+      let seed = unit_seed(scope_ident);
+      let mut out = Vec::new();
+      for hcl in &rule.head_clause {
+         let head_tuple = build_expr_tuple(&hcl.args);
+         out.push((hcl.rel.name.clone(), quote! { (#seed).map(move |()| #head_tuple) }));
+      }
+      return (out, TokenStream::new());
+   }
+
+   use crate::ascent_mir::MirBodyItem;
+   let clause_count = rule.body_items.iter().filter(|i| matches!(i, MirBodyItem::Clause(_))).count();
+   let single_clause_fusion = rule.body_items.len() == 1
+      && rule.head_clause.len() == 1
+      && matches!(&rule.body_items[0], MirBodyItem::Clause(cl) if cl.cond_clauses.is_empty());
+   if single_clause_fusion {
+      let cl = match &rule.body_items[0] {
+         MirBodyItem::Clause(c) => c,
+         _ => unreachable!(),
+      };
+      let rel_coll = relation_coll_var(&cl.rel.relation.name);
+      let (plans, _shared, _new_vars, filters, _ck) = plan_clause(&cl.args, &[]);
+      let hcl = &rule.head_clause[0];
+      let head_expr_tuple = build_expr_tuple(&hcl.args);
+      let row_ty = tuple_type(&hcl.rel.field_types);
+      let destruct = destructure_pattern(&plans);
+      let filter_pred = if filters.is_empty() { quote! { true } } else { quote! { #( ( #filters ) )&&* } };
+      let var_rebinds: Vec<TokenStream> = plans
+         .iter()
+         .filter_map(|p| p.var_binding.as_ref().map(|(v, c)| quote! { let #v = &#c; }))
+         .collect();
+      let expr = quote! {
+         #rel_coll.clone().flat_map(move |#destruct| -> ::std::option::Option<#row_ty> {
+            #(#var_rebinds)*
+            if #filter_pred { ::std::option::Option::Some(#head_expr_tuple) } else { ::std::option::Option::None }
+         })
+      };
+      return (vec![(hcl.rel.name.clone(), expr)], TokenStream::new());
+   }
+
+   let (bound_vars, var_kinds, body_expr, hoisted_pre) =
+      compile_rule_body_phase1(rule, scope_ident, hoist_counter);
+
+   let all_clauses_simple = clause_count >= 2
+      && rule.body_items.iter().all(|item| match item {
+         MirBodyItem::Clause(cl) => cl.cond_clauses.is_empty(),
+         _ => false,
+      });
+   let fused = all_clauses_simple && rule.head_clause.len() == 1;
+
+   if fused {
+      let hcl = &rule.head_clause[0];
+      return (vec![(hcl.rel.name.clone(), body_expr)], hoisted_pre);
+   }
+
+   // Fallback: body_expr is bound-var tuple; each head gets its own Collection
+   // by `.map()`'ing body_expr. For multi-head rules we rely on `body_expr`
+   // being a cheap Rust expression (DD Collection construction) that can be
+   // inlined per head — DD's operator graph dedups identical subgraphs anyway.
+   let mut out = Vec::new();
+   for hcl in rule.head_clause.iter() {
+      let head_expr_tuple = build_expr_tuple(&hcl.args);
+      let row_ty = tuple_type(&hcl.rel.field_types);
+      let destr = emit_user_destructure(&bound_vars, &var_kinds, quote! { &__b });
+      let body_ref = quote! {
+         (#body_expr).map(move |__b| -> #row_ty { #destr #head_expr_tuple })
+      };
+      out.push((hcl.rel.name.clone(), body_ref));
+   }
+   (out, hoisted_pre)
+}
+
 fn compile_rule_with_head_target(
    rule: &MirRule, head_target: &dyn Fn(&Ident) -> Ident, scope_ident: &Ident, hoist_counter: &mut usize,
 ) -> (TokenStream, TokenStream) {
@@ -959,29 +1220,89 @@ fn compile_rule_with_head_target(
          out.extend(quote! {
             {
                let __fc = (#seed).map(move |()| #head_tuple);
-               #head_target_ident = #head_target_ident.concat(&__fc);
+               #head_target_ident = #head_target_ident.concat(__fc);
             }
          });
       }
       return (out, TokenStream::new());
    }
 
+   use crate::ascent_mir::MirBodyItem;
+   let clause_count = rule.body_items.iter().filter(|i| matches!(i, MirBodyItem::Clause(_))).count();
+
+   // SINGLE-CLAUSE FUSION: rule has exactly one body clause (a Clause, no
+   // generators/conds/aggs) with no cond_clauses, and one head clause.
+   // FlowLog emits this as a single `.flat_map` that scans the rel and
+   // builds the head tuple. Without fusion we'd emit `flat_map(identity)`
+   // followed by `.map(head)` — two operators for what's one.
+   let single_clause_fusion = rule.body_items.len() == 1
+      && rule.head_clause.len() == 1
+      && matches!(&rule.body_items[0], MirBodyItem::Clause(cl) if cl.cond_clauses.is_empty());
+   if single_clause_fusion {
+      let cl = match &rule.body_items[0] {
+         MirBodyItem::Clause(c) => c,
+         _ => unreachable!(),
+      };
+      let rel_coll = relation_coll_var(&cl.rel.relation.name);
+      let (plans, _shared, _new_vars, filters, _ck) = plan_clause(&cl.args, &[]);
+      let hcl = &rule.head_clause[0];
+      let head_target_ident = head_target(&hcl.rel.name);
+      let head_expr_tuple = build_expr_tuple(&hcl.args);
+      let row_ty = tuple_type(&hcl.rel.field_types);
+      let destruct = destructure_pattern(&plans);
+      let filter_pred = if filters.is_empty() { quote! { true } } else { quote! { #( ( #filters ) )&&* } };
+      // plan_clause's destructure binds col idents (`__c0, __c1`). `build_expr_tuple`
+      // emits user var names. Add `let user_var = &col_ident;` rebindings so the
+      // head expression can reference user var names (as refs, matching the
+      // non-fused path's `#destr` that emit_user_destructure produces).
+      let var_rebinds: Vec<TokenStream> = plans
+         .iter()
+         .filter_map(|p| p.var_binding.as_ref().map(|(v, c)| quote! { let #v = &#c; }))
+         .collect();
+      return (
+         quote! {
+            {
+               let __prod = #rel_coll.clone().flat_map(move |#destruct| -> ::std::option::Option<#row_ty> {
+                  #(#var_rebinds)*
+                  if #filter_pred { ::std::option::Option::Some(#head_expr_tuple) } else { ::std::option::Option::None }
+               });
+               #head_target_ident = #head_target_ident.concat(__prod);
+            }
+         },
+         TokenStream::new(),
+      );
+   }
+
    let (bound_vars, var_kinds, body_expr, hoisted_pre) =
       compile_rule_body_phase1(rule, scope_ident, hoist_counter);
 
+   // N-CLAUSE FUSION (N>=2): when all clauses simple + single head, body_expr
+   // is ALREADY the head-projected Collection (fusion happened inside the
+   // final join_core closure). Skip the trailing .map(), just concat.
+   let all_clauses_simple = clause_count >= 2
+      && rule.body_items.iter().all(|item| match item {
+         MirBodyItem::Clause(cl) => cl.cond_clauses.is_empty(),
+         _ => false,
+      });
+   let fused = all_clauses_simple && rule.head_clause.len() == 1;
+
    let mut out = TokenStream::new();
+   if fused {
+      let hcl = &rule.head_clause[0];
+      let head_target_ident = head_target(&hcl.rel.name);
+      out.extend(quote! {
+         #head_target_ident = #head_target_ident.concat(#body_expr);
+      });
+      return (out, hoisted_pre);
+   }
+
    let rule_body_var = Ident::new("__rule_body", Span::call_site());
    out.extend(quote! {
       let #rule_body_var = #body_expr;
    });
-
    for hcl in &rule.head_clause {
       let head_target_ident = head_target(&hcl.rel.name);
       let head_expr_tuple = build_expr_tuple(&hcl.args);
-      // Explicit return-type annotation on the map closure biases method
-      // resolution so `x.clone()` on `&T` resolves to `<T>::clone` (owned)
-      // rather than `<&T>::clone` (ref). Mirrors batch's
-      // `let __new_row: (T, U) = ...` trick.
       let row_ty = tuple_type(&hcl.rel.field_types);
       let destr = emit_user_destructure(&bound_vars, &var_kinds, quote! { &__b });
       out.extend(quote! {
@@ -990,7 +1311,7 @@ fn compile_rule_with_head_target(
                #destr
                #head_expr_tuple
             });
-            #head_target_ident = #head_target_ident.concat(&__prod);
+            #head_target_ident = #head_target_ident.concat(__prod);
          }
       });
    }
@@ -1002,6 +1323,16 @@ fn compile_rule_with_head_target(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn compile_mir_dd(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
+   match mir.config.dd_mode {
+      crate::ascent_hir::DdMode::Incremental => compile_mir_dd_incremental(mir, is_ascent_run),
+      crate::ascent_hir::DdMode::Batch => match compile_mir_dd_batch(mir, is_ascent_run) {
+         Ok(ts) => ts,
+         Err(e) => e.to_compile_error(),
+      },
+   }
+}
+
+fn compile_mir_dd_incremental(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
    let blocker = phase1_blocker(mir);
 
    // Struct + Default are phase-agnostic.
@@ -1203,26 +1534,61 @@ fn emit_closure_body(
    init_coll: impl Fn(&RelationIdentity) -> TokenStream,
    sink_ident: impl Fn(&RelationIdentity) -> TokenStream,
    probe_expr: TokenStream,
+   is_batch: bool,
 ) -> (TokenStream, TokenStream, usize) {
    let mut body = TokenStream::new();
-   body.extend(quote! {
-      use ::ascent::dd::differential_dataflow::operators::{Join, Reduce, Threshold};
-   });
+   // DD 0.20: `join`, `reduce`, `arrange_by_*`, `consolidate` are inherent
+   // on Collection. Only `threshold_semigroup` still needs its trait import.
+   if is_batch {
+      body.extend(quote! {
+         use ::ascent::dd::differential_dataflow::operators::ThresholdTotal;
+      });
+   }
    for rel in sorted_rels {
       body.extend(init_coll(rel));
    }
+   // `__unit_scope` seeds generator-only rules. Its diff type must match
+   // the rest of the dataflow's diff (isize incremental, Present batch).
+   let unit_seed_ty = if is_batch {
+      quote! { ::ascent::dd::BatchDiff }
+   } else {
+      quote! { isize }
+   };
+   // `__unit_scope` seeds generator-only rules. `new_collection_from` is
+   // hardcoded to `isize` diff; batch mode uses `new_collection_from_raw`
+   // to get a `Present`-diff Collection. Batch also skips `advance_to(1)`
+   // since the `()` timestamp has nothing to advance to.
    body.extend(quote! {
-      use ::ascent::dd::differential_dataflow::operators::iterate::Variable;
+      // DD 0.20: `Variable<G, C>` is 2-arg; the 3-arg alias is `VecVariable`.
+      // Our runtime re-exports both under the name `Variable` (= `VecVariable`)
+      // so codegen's `Variable<_, TupTy, Diff>` keeps compiling.
+      use ::ascent::dd::Variable;
       use ::ascent::dd::timely::order::Product;
       use ::ascent::dd::timely::dataflow::Scope;
-      let __unit_scope: ::ascent::dd::differential_dataflow::Collection<_, (), isize> = {
-         use ::ascent::dd::differential_dataflow::input::Input;
-         let (mut __s, __c) = scope.new_collection_from(::std::iter::once(()));
-         __s.advance_to(1);
-         __s.flush();
-         __c
-      };
    });
+   if is_batch {
+      body.extend(quote! {
+         let __unit_scope: ::ascent::dd::differential_dataflow::VecCollection<_, (), ::ascent::dd::BatchDiff> = {
+            use ::ascent::dd::differential_dataflow::input::Input;
+            let (mut __s, __c) = scope.new_collection_from_raw::<(), ::ascent::dd::BatchDiff, _>(
+               ::std::iter::once(((), (), ::ascent::dd::BATCH_DIFF_ONE))
+            );
+            __s.flush();
+            __c
+         };
+      });
+   } else {
+      body.extend(quote! {
+         let __unit_scope: ::ascent::dd::differential_dataflow::VecCollection<_, (), isize> = {
+            use ::ascent::dd::differential_dataflow::input::Input;
+            let (mut __s, __c) = scope.new_collection_from(::std::iter::once(()));
+            __s.advance_to(1);
+            __s.flush();
+            __c
+         };
+      });
+   }
+   let _ = unit_seed_ty;
    let mut hoists = TokenStream::new();
    let mut hoist_counter: usize = 0;
    for (scc_idx, scc) in mir.sccs.iter().enumerate() {
@@ -1239,16 +1605,28 @@ fn emit_closure_body(
          body_only_names.join(", ")
       );
       body.extend(quote! { ::ascent::internal::comment(#scc_label); });
-      let (b, h) = compile_scc(scc, scc_idx, &mut hoist_counter);
+      let (b, h) = compile_scc(scc, scc_idx, &mut hoist_counter, is_batch);
       body.extend(b);
       hoists.extend(h);
    }
    for rel in sorted_rels {
       let coll = relation_coll_var(&rel.name);
       let sink_id = sink_ident(rel);
-      let materialized = materialize_rel(rel, quote! { #coll });
+      // FlowLog pattern: after scope.iterative returns, a recursive IDB
+      // collection is already threshold'd inside the loop; re-thresholding
+      // via `materialize_rel` is pure wasted work. A non-recursive collection
+      // may have concat-duplicates; `consolidate` handles that cheaply.
+      // Lattices still need reduce (handled inside materialize_rel).
+      // Attach sink WITHOUT additional consolidate/materialize in batch mode.
+      // Recursive IDBs are already threshold'd inside `scope.iterative`;
+      // non-recursive collections are consolidated at input. FlowLog-style.
+      let final_expr = if is_batch && !rel.is_lattice {
+         quote! { (#coll).clone() }
+      } else {
+         materialize_rel(rel, quote! { #coll }, is_batch)
+      };
       body.extend(quote! {
-         #sink_id.attach(&(#materialized), #probe_expr);
+         #sink_id.attach(&(#final_expr), #probe_expr);
       });
    }
    (body, hoists, hoist_counter)
@@ -1304,6 +1682,7 @@ fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStream {
          quote! { #sink_inner }
       },
       quote! { probe },
+      false,
    );
 
    // Parallel-DD Fn compliance: for every `__hoist_gen_N` bound OUTSIDE
@@ -1329,6 +1708,212 @@ fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStream {
       });
       #(#sink_drains)*
    }
+}
+
+/// Batch-mode `run()` body: Present diff, `threshold_semigroup` distinct,
+/// `execute_batch_present` multi-worker runtime. FlowLog-equivalent shape for
+/// the subset of programs allowed by `compile_mir_dd_batch` (no negation,
+/// no lattice, no aggregates).
+fn phase1_run_body_batch(mir: &AscentMir, target: &TokenStream) -> TokenStream {
+   let sorted_rels = mir.relations_ir_relations.keys().sorted_by_key(|r| &r.name).collect_vec();
+
+   let mut inputs_setup = vec![];
+   let mut sinks_decl = vec![];
+   let mut sinks_clone = vec![];
+   let mut sink_drains = vec![];
+   for rel in &sorted_rels {
+      let name = &rel.name;
+      let tuple_ty = tuple_type(&rel.field_types);
+      let in_var = relation_input_var(name);
+      let sink_outer = relation_sink_outer(name);
+      let sink_inner = relation_sink_inner(name);
+      inputs_setup.push(quote! {
+         let #in_var: ::std::vec::Vec<#tuple_ty> = #target.#name.clone();
+      });
+      sinks_decl.push(quote! {
+         let #sink_outer: ::ascent::dd::BatchSink<#tuple_ty> = ::ascent::dd::BatchSink::new();
+      });
+      sinks_clone.push(quote! {
+         let #sink_inner = #sink_outer.clone();
+      });
+      sink_drains.push(quote! {
+         #target.#name = #sink_outer.into_vec();
+      });
+   }
+
+   let (closure_body, hoists, hoist_count) = emit_closure_body(
+      mir,
+      &sorted_rels,
+      |rel| {
+         let coll = relation_coll_var(&rel.name);
+         let in_var = relation_input_var(&rel.name);
+         // `.consolidate()` after input: matches FlowLog's pattern. Sorts
+         // tuples into a canonical trace, drops zero-weight/duplicates.
+         // Critical because downstream `arrange_by_key` + `threshold_semigroup`
+         // assume a consolidated input; without consolidation, duplicate diffs
+         // create redundant per-iteration maintenance work inside the
+         // iterative scope.
+         quote! {
+            let mut #coll = sealer.input(scope, #in_var.clone()).consolidate();
+         }
+      },
+      |rel| {
+         let sink_inner = relation_sink_inner(&rel.name);
+         quote! { #sink_inner }
+      },
+      quote! { probe },
+      true,
+   );
+
+   let hoist_rebinds: TokenStream = (1..=hoist_count)
+      .map(|i| {
+         let id = Ident::new(&format!("__hoist_gen_{i}"), Span::call_site());
+         quote! { let #id = #id.clone(); }
+      })
+      .collect();
+
+   quote! {
+      #(#inputs_setup)*
+      #(#sinks_decl)*
+      #(#sinks_clone)*
+      #hoists
+      ::ascent::dd::execute_batch_present(move |scope, sealer, probe| {
+         #hoist_rebinds
+         #closure_body
+      });
+      #(#sink_drains)*
+   }
+}
+
+/// Batch-mode entry point. FlowLog-style DD codegen: Present diff,
+/// `threshold_semigroup` distinct. Rejects features Present can't express
+/// (negation via antijoin requires Abelian; lattice reduce needs isize;
+/// aggregators cross strata).
+fn compile_mir_dd_batch(mir: &AscentMir, is_ascent_run: bool) -> syn::Result<TokenStream> {
+   use crate::ascent_mir::MirBodyItem;
+   // Feature gate: batch mode only supports pure-datalog joins + generators.
+   // In MIR, negation lands as `MirBodyItem::Agg` with a "not" aggregator —
+   // `is_not_aggregator` discriminates it from real aggregators.
+   for scc in &mir.sccs {
+      for rule in &scc.rules {
+         for item in &rule.body_items {
+            match item {
+               MirBodyItem::Cond(_) | MirBodyItem::Clause(_) | MirBodyItem::Generator(_) => {},
+               MirBodyItem::Agg(agg) => {
+                  if is_not_aggregator(&agg.aggregator) {
+                     return Err(syn::Error::new(
+                        mir.signatures.declaration.ident.span(),
+                        "batch mode does not support negation (`!rel(...)`). Use `mode = \"incremental\"` instead.",
+                     ));
+                  } else {
+                     return Err(syn::Error::new(
+                        mir.signatures.declaration.ident.span(),
+                        "batch mode does not support aggregation (`agg ...`). Use `mode = \"incremental\"` instead.",
+                     ));
+                  }
+               },
+            }
+         }
+      }
+   }
+   for rel in mir.relations_ir_relations.keys() {
+      if rel.is_lattice {
+         return Err(syn::Error::new(
+            mir.signatures.declaration.ident.span(),
+            format!(
+               "batch mode does not support lattice relations (`{}`). Use `mode = \"incremental\"` instead.",
+               rel.name
+            ),
+         ));
+      }
+   }
+
+   let blocker = phase1_blocker(mir);
+   let struct_and_default = emit_struct_and_default(mir, !is_ascent_run);
+
+   let self_target: TokenStream = quote!(self);
+   let (impl_impl_generics, impl_ty_generics, impl_where_clause) = mir.signatures.split_impl_generics_for_impl();
+   let struct_name = &mir.signatures.declaration.ident;
+
+   let summary = format!(
+      "DD backend (batch) — {} relations, phase1_blocker: {:?}",
+      mir.relations_ir_relations.len(),
+      blocker
+   );
+   let summary_fn = if is_ascent_run {
+      quote! { pub fn summary(&self) -> &'static str { #summary } }
+   } else {
+      quote! { pub fn summary() -> &'static str { #summary } }
+   };
+
+   let run_body = match &blocker {
+      None => phase1_run_body_batch(mir, &self_target),
+      Some(reason) => {
+         let comment = format!("dd batch backend: falling back to noop run() — {reason}");
+         quote! {
+            let _ = #comment;
+         }
+      },
+   };
+   let run_func = if is_ascent_run {
+      quote! {}
+   } else {
+      quote! {
+         #[doc = "Runs the Ascent program to a fixed point (DD backend, batch mode)."]
+         pub fn run(&mut self) {
+            #![allow(unused_imports, unused_mut, unused_variables, clippy::all)]
+            #run_body
+         }
+      }
+   };
+
+   let methods = quote! {
+      impl #impl_impl_generics #struct_name #impl_ty_generics #impl_where_clause {
+         #run_func
+         #summary_fn
+         pub fn relation_sizes_summary(&self) -> ::std::string::String { ::std::string::String::new() }
+         pub fn scc_times_summary(&self) -> ::std::string::String { ::std::string::String::new() }
+      }
+   };
+
+   let ascent_run_wrapper = if is_ascent_run {
+      let inputs_assign: TokenStream = mir
+         .relations_ir_relations
+         .keys()
+         .sorted_by_key(|r| &r.name)
+         .map(|rel| {
+            let name = &rel.name;
+            quote! { __run_res.#name = #name; }
+         })
+         .collect();
+      let run_body = phase1_run_body_batch(mir, &quote!(__run_res));
+      quote! {
+         {
+            #![allow(unused_imports, unused_mut, unused_variables, clippy::all)]
+            let mut __run_res = <#struct_name #impl_ty_generics as ::std::default::Default>::default();
+            #inputs_assign
+            #run_body
+            __run_res
+         }
+      }
+   } else {
+      quote! {}
+   };
+
+   Ok(if is_ascent_run {
+      quote! {
+         {
+            #struct_and_default
+            #methods
+            #ascent_run_wrapper
+         }
+      }
+   } else {
+      quote! {
+         #struct_and_default
+         #methods
+      }
+   })
 }
 
 // ---------------------------------------------------------------------------
@@ -1718,6 +2303,7 @@ fn emit_session_build_body(mir: &AscentMir, sorted_rels: &[&RelationIdentity]) -
          quote! { #sink }
       },
       quote! { &mut probe },
+      false,
    );
    setup.extend(hoists);
    setup.extend(body);
@@ -1754,31 +2340,90 @@ fn emit_session_build_body(mir: &AscentMir, sorted_rels: &[&RelationIdentity]) -
 // SCC compilation
 // ---------------------------------------------------------------------------
 
-fn compile_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize) -> (TokenStream, TokenStream) {
+fn compile_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, is_batch: bool) -> (TokenStream, TokenStream) {
    if scc.is_looping {
-      compile_looping_scc(scc, scc_idx, hoist_counter)
+      compile_looping_scc(scc, scc_idx, hoist_counter, is_batch)
    } else {
-      compile_nonlooping_scc(scc, hoist_counter)
+      compile_nonlooping_scc(scc, hoist_counter, is_batch)
    }
 }
 
 /// Non-looping SCC: rules append productions directly to the outer-scope
 /// `__<rel>_coll` of each head relation. Body clauses read `__<rel>_coll`.
-fn compile_nonlooping_scc(scc: &MirScc, hoist_counter: &mut usize) -> (TokenStream, TokenStream) {
+fn compile_nonlooping_scc(scc: &MirScc, hoist_counter: &mut usize, is_batch: bool) -> (TokenStream, TokenStream) {
    let mut out = TokenStream::new();
    let mut hoists = TokenStream::new();
    let head_target = |name: &Ident| relation_coll_var(name);
    let outer_scope = Ident::new("scope", Span::call_site());
+   // Shared arrangements at outer scope — matches the looping-SCC pattern but
+   // without the `scope.iterative` wrapper. Non-looping SCCs still have
+   // body clauses that need arrangements for `join_core`.
+   // Only `body_only_relations` need arrangements here — those are read by
+   // this SCC's rule bodies. `dynamic_relations` (the SCC's OUTPUT) are
+   // populated by the rules below via `concat`, so arranging them at this
+   // point would capture pre-concat (empty) state; downstream SCCs'
+   // arrangement step will arrange them correctly over the populated
+   // collection. Emit body_only arrangements BEFORE the rules so join_core
+   // inside rule bodies can reference them.
+   // Collect actually-used arrangement names from this SCC's rule bodies
+   // (skip first-clauses without a subsequent join, and empty-indices which
+   // are never referenced via the shared-arr path).
+   use crate::ascent_mir::MirBodyItem;
+   let mut used_arr_names: std::collections::HashSet<Ident> =
+      std::collections::HashSet::new();
    for rule in &scc.rules {
-      // Emit a no-op `ascent::internal::comment` before each rule so the
-      // expanded code has a visible landmark — matches batch codegen's
-      // convention. Hugely helpful when reading `cargo expand` output.
+      let rule_has_join = rule.body_items.iter().filter(|it| matches!(it, MirBodyItem::Clause(_))).count() >= 2;
+      for (i, item) in rule.body_items.iter().enumerate() {
+         if let MirBodyItem::Clause(cl) = item {
+            if cl.rel.indices.is_empty() { continue; }
+            if i == 0 && !rule_has_join { continue; }
+            let name = format!(
+               "__arr_{}_indices_{}",
+               cl.rel.relation.name,
+               cl.rel.indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_")
+            );
+            used_arr_names.insert(Ident::new(&name, cl.rel.relation.name.span()));
+         }
+      }
+   }
+   let mut seen_arrs: std::collections::HashSet<Ident> = std::collections::HashSet::new();
+   let rel_iter = scc
+      .body_only_relations
+      .iter()
+      .sorted_by_cached_key(|(rel, _)| rel.name.to_string());
+   for (_rel_ident, ir_rels) in rel_iter {
+      for ir_rel in ir_rels.iter().sorted_by_cached_key(|r| r.ir_name()) {
+         let arr_name = shared_arr_ident(ir_rel);
+         if !used_arr_names.contains(&arr_name) {
+            continue;
+         }
+         if !seen_arrs.insert(arr_name.clone()) {
+            continue;
+         }
+         out.extend(emit_shared_arrangement_binding(ir_rel));
+      }
+   }
+   for rule in &scc.rules {
       let summary = format!("rule {}", mir_rule_summary(rule));
       out.extend(quote! { ::ascent::internal::comment(#summary); });
       let (body, pre) = compile_rule_with_head_target(rule, &head_target, &outer_scope, hoist_counter);
       out.extend(body);
       hoists.extend(pre);
    }
+   // FlowLog pattern (batch mode only): consolidate each non-looping SCC's
+   // head `__<rel>_coll` after the rules have concat'd into it. Multiple
+   // rules emitting the same tuple (e.g. CSPA's
+   // `value_flow(x,x) <-- assign(_,x)` + `value_flow(x,x) <-- assign(x,_)`)
+   // produce duplicates; without consolidation they propagate into the
+   // looping SCC's seed as redundant diffs that every iteration's
+   // `threshold_semigroup` has to dedupe — O(iter × duplicates) wasted work.
+   // Incremental/session path handles this through Variable/isize semantics.
+   // Note: FlowLog consolidates ONCE per relation after ALL non-recursive
+   // rules producing it have concat'd. Ascent's MIR splits rules into
+   // separate SCCs, so consolidating in every non-looping SCC would emit
+   // N consolidates per relation. Downstream (looping-SCC threshold /
+   // sink-attach) dedups anyway — skip per-SCC consolidate.
+   let _ = is_batch;
    (out, hoists)
 }
 
@@ -1786,30 +2431,35 @@ fn compile_nonlooping_scc(scc: &MirScc, hoist_counter: &mut usize) -> (TokenStre
 /// per dynamic relation and `.enter()`'d body-only relations. Each rule
 /// accumulates into the dynamic relation's `__<rel>_acc`, which the final
 /// `var.set(&acc.distinct()).leave()` returns to outer scope.
-fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize) -> (TokenStream, TokenStream) {
+fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, is_batch: bool) -> (TokenStream, TokenStream) {
    // Stable iteration order so generated code is deterministic.
    let dyn_rels: Vec<&RelationIdentity> = scc.dynamic_relations.keys().sorted_by_key(|r| &r.name).collect();
    let body_only_rels: Vec<&RelationIdentity> =
       scc.body_only_relations.keys().sorted_by_key(|r| &r.name).collect();
 
-   // 1. Outer-scope `.enter(inner)` bindings — runs with the OUTER
-   //    `__<rel>_coll` names (before shadowing).
+   // 1. FlowLog naming: `in_<rel>` for entered non-recursive Collections,
+   //    `in_<arr>` for entered arrangements. Consolidate before entering:
+   //    Ascent's MIR splits non-recursive rules into separate SCCs, so
+   //    `__<rel>_coll` is a chain of N concats. FlowLog consolidates after
+   //    their equivalent chain (`valueflow = t1.concat(t2).concat(t3).consolidate()`).
+   //    Without consolidate, duplicates enter the iterative scope and cause
+   //    threshold_semigroup's "first-seen" accounting to loop more iterations.
    let mut inner_body_only_bindings = TokenStream::new();
    for rel in &body_only_rels {
       let name = &rel.name;
       let coll = relation_coll_var(name);
-      let seed = Ident::new(&format!("__{}_seed", name), name.span());
+      let seed = Ident::new(&format!("in_{}", name), name.span());
       inner_body_only_bindings.extend(quote! {
-         let #seed = #coll.enter(inner);
+         let #seed = #coll.clone().consolidate().enter(inner);
       });
    }
    let mut inner_dyn_seed_bindings = TokenStream::new();
    for rel in &dyn_rels {
       let name = &rel.name;
       let coll = relation_coll_var(name);
-      let seed = Ident::new(&format!("__{}_seed", name), name.span());
+      let seed = Ident::new(&format!("in_{}", name), name.span());
       inner_dyn_seed_bindings.extend(quote! {
-         let #seed = #coll.enter(inner);
+         let #seed = #coll.clone().consolidate().enter(inner);
       });
    }
 
@@ -1820,15 +2470,32 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize) 
    // Enter the outer unit collection into this iterative scope so fact /
    // generator-first rules inside the SCC can seed from it.
    var_decls.extend(quote! {
-      let __unit_inner = __unit_scope.enter(inner);
+      let __unit_inner = __unit_scope.clone().enter(inner);
    });
+   // DD 0.20 API change: `Variable::new` returns `(Variable, Collection)` —
+   // no more `Deref`. Unpack here so downstream shadow bindings can read
+   // the companion Collection directly (without `*var`) and the var itself
+   // is consumed by `.set(...)` at the bind-leave point.
    for rel in &dyn_rels {
       let name = &rel.name;
-      let var = Ident::new(&format!("__{}_var", name), name.span());
+      let var = Ident::new(&format!("recursive_{}_var", name), name.span());
+      let read = Ident::new(&format!("recursive_{}", name), name.span());
       let tup_ty = tuple_type(&rel.field_types);
-      var_decls.extend(quote! {
-         let #var: Variable<_, #tup_ty, isize> = Variable::new(inner, Product::new(Default::default(), 1));
-      });
+      if is_batch {
+         var_decls.extend(quote! {
+            let (#var, #read): (
+               ::ascent::dd::SemigroupVariable<_, #tup_ty, ::ascent::dd::BatchDiff>,
+               ::ascent::dd::differential_dataflow::VecCollection<_, #tup_ty, ::ascent::dd::BatchDiff>,
+            ) = ::ascent::dd::SemigroupVariable::new(inner, Product::new(Default::default(), 1));
+         });
+      } else {
+         var_decls.extend(quote! {
+            let (#var, #read): (
+               Variable<_, #tup_ty, isize>,
+               ::ascent::dd::differential_dataflow::VecCollection<_, #tup_ty, isize>,
+            ) = Variable::new(inner, Product::new(Default::default(), 1));
+         });
+      }
    }
 
    // 3. Shadow `__<rel>_coll` inside the scope so rule bodies keep their
@@ -1839,7 +2506,7 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize) 
    for rel in &body_only_rels {
       let name = &rel.name;
       let coll = relation_coll_var(name);
-      let seed = Ident::new(&format!("__{}_seed", name), name.span());
+      let seed = Ident::new(&format!("in_{}", name), name.span());
       shadow_bindings.extend(quote! {
          let #coll = #seed;
       });
@@ -1847,44 +2514,160 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize) 
    for rel in &dyn_rels {
       let name = &rel.name;
       let coll = relation_coll_var(name);
-      let var = Ident::new(&format!("__{}_var", name), name.span());
+      let read = Ident::new(&format!("recursive_{}", name), name.span());
+      // DD 0.20: read from the companion Collection returned by `Variable::new`,
+      // not from `*var` (Deref removed).
       shadow_bindings.extend(quote! {
-         let #coll = (*#var).clone();
+         let #coll = #read.clone();
       });
    }
 
-   // 4. Per-dynamic-rel accumulators, seeded with the user's pre-run data so
-   //    existing facts survive the loop.
-   let mut acc_init = TokenStream::new();
-   for rel in &dyn_rels {
-      let name = &rel.name;
-      let acc = Ident::new(&format!("__{}_acc", name), name.span());
-      let seed = Ident::new(&format!("__{}_seed", name), name.span());
-      acc_init.extend(quote! {
-         let mut #acc = #seed;
-      });
-   }
+   // 4. No `__<rel>_acc` bindings — FlowLog-style chain-concat at bind_leave
+   //    replaces mutable accumulators.
 
-   // 5. Rule productions — head target routes to the accumulator.
-   let dyn_names_set: std::collections::HashSet<String> = dyn_rels.iter().map(|r| r.name.to_string()).collect();
-   let head_target = move |name: &Ident| {
-      if dyn_names_set.contains(&name.to_string()) {
-         Ident::new(&format!("__{}_acc", name), name.span())
-      } else {
-         // Head relation derived in this SCC but not dynamic? Shouldn't happen.
-         // Fall back to outer __<rel>_coll — at worst, this becomes a noop.
-         relation_coll_var(name)
+   // 4b. Shared arrangements — one per unique (relation, indices) used as a
+   //     clause RHS in this SCC. Emitted once inside the iterative scope so
+   //     every rule body references the same arranged trace instead of
+   //     rebuilding its own. Covers both `body_only_relations` (read-only in
+   //     this SCC) and `dynamic_relations` (recursive; Variable-backed).
+   //     `scc.{body_only,dynamic}_relations` is the MIR's pre-deduped set of
+   //     `(rel, keying)` specs — the exact planner output FlowLog computes.
+   // FlowLog split: arrange body_only (EDB/non-recursive IDB) OUTSIDE the
+   // iterative scope, `.enter(inner)` the arrangement handle into the loop.
+   // Arrange dynamic (recursive) relations INSIDE the loop on the Variable's
+   // read handle (shadow __<rel>_coll above).
+   //
+   // Only emit arrangements for `(rel, indices)` pairs ACTUALLY REFERENCED
+   // by some rule body's clause in this SCC. MIR's `dynamic_relations` /
+   // `body_only_relations` include full-index IrRelations that aren't used
+   // by any join — emitting them creates dead DD operators that still cost
+   // per-iteration maintenance. Pre-pass over rule bodies to collect the
+   // used set. (Upstream TODO in ascent_mir.rs: "we can add only indices
+   // used in bodies in the scc, that requires the codegen to be updated.")
+   use crate::ascent_mir::MirBodyItem;
+   let mut used_arr_names: std::collections::HashSet<Ident> =
+      std::collections::HashSet::new();
+   for rule in &scc.rules {
+      for (i, item) in rule.body_items.iter().enumerate() {
+         if let MirBodyItem::Clause(cl) = item {
+            // Empty indices = no-key arrangement — never used via shared
+            // arrangement path (compile_join_clause's `can_use_shared`
+            // requires non-empty indices). Skip emitting.
+            if cl.rel.indices.is_empty() {
+               continue;
+            }
+            // First-clause (i==0): only needed as LHS-shared target if the
+            // rule has >=2 clauses (prior_rel optimization). Otherwise it's
+            // scanned via compile_first_clause which doesn't need the
+            // arrangement.
+            let is_first = i == 0;
+            let rule_has_join = rule.body_items.iter().filter(|it| matches!(it, MirBodyItem::Clause(_))).count() >= 2;
+            if is_first && !rule_has_join {
+               continue;
+            }
+            let name = format!(
+               "__arr_{}_indices_{}",
+               cl.rel.relation.name,
+               cl.rel.indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_")
+            );
+            used_arr_names.insert(Ident::new(&name, cl.rel.relation.name.span()));
+         }
       }
+   }
+   let mut outer_arrs = TokenStream::new();
+   let mut outer_arr_enters = TokenStream::new();
+   let mut inner_arrs = TokenStream::new();
+   let mut seen_arrs: std::collections::HashSet<Ident> = std::collections::HashSet::new();
+   let body_only_rel_names: std::collections::HashSet<String> =
+      scc.body_only_relations.keys().map(|r| r.name.to_string()).collect();
+   let rel_iter = scc
+      .body_only_relations
+      .iter()
+      .chain(scc.dynamic_relations.iter())
+      .sorted_by_cached_key(|(rel, _)| rel.name.to_string());
+   for (rel_ident, ir_rels) in rel_iter {
+      let is_body_only = body_only_rel_names.contains(&rel_ident.name.to_string());
+      for ir_rel in ir_rels.iter().sorted_by_cached_key(|r| r.ir_name()) {
+         let arr_name = shared_arr_ident(ir_rel);
+         if !used_arr_names.contains(&arr_name) {
+            continue;
+         }
+         if !seen_arrs.insert(arr_name.clone()) {
+            continue;
+         }
+         if is_body_only {
+            outer_arrs.extend(emit_shared_arrangement_binding(ir_rel));
+            outer_arr_enters.extend(quote! {
+               let #arr_name = #arr_name.enter(inner);
+            });
+         } else {
+            inner_arrs.extend(emit_shared_arrangement_binding(ir_rel));
+         }
+      }
+   }
+
+   // 5. Rule productions. Split into NON-recursive (body touches no dyn_rel
+   //    of this SCC) and RECURSIVE (body touches ≥1 dyn_rel). FlowLog pattern:
+   //    non-recursive rules lowered OUTSIDE `scope.iterative` — they fire
+   //    ONCE on outer-scope `__<rel>_coll`, producing stable base contributions.
+   //    Recursive rules lowered INSIDE — they feed the Variable/threshold loop.
+   //    Without this split, non-recursive rules re-fire every iteration
+   //    producing identical tuples that `threshold_semigroup` has to dedup —
+   //    O(iter × EDB-size) wasted work that cascades with recursive growth.
+   let dyn_names_set: std::collections::HashSet<String> = dyn_rels.iter().map(|r| r.name.to_string()).collect();
+   let is_rule_recursive = |rule: &MirRule| -> bool {
+      use crate::ascent_mir::MirBodyItem;
+      rule.body_items.iter().any(|item| match item {
+         MirBodyItem::Clause(cl) => dyn_names_set.contains(&cl.rel.relation.name.to_string()),
+         MirBodyItem::Agg(agg) => dyn_names_set.contains(&agg.rel.relation.name.to_string()),
+         MirBodyItem::Cond(_) | MirBodyItem::Generator(_) => false,
+      })
    };
+
+   // Non-recursive rules: emit on outer-scope `__<rel>_coll`. Head goes to
+   // the outer coll via `relation_coll_var`. These fire once; their output
+   // is what the scope.iterative's `inner_dyn_seed_bindings` pulls in.
+   let non_rec_rules: Vec<&MirRule> = scc.rules.iter().filter(|r| !is_rule_recursive(r)).collect();
+   let rec_rules: Vec<&MirRule> = scc.rules.iter().filter(|r| is_rule_recursive(r)).collect();
+
+   let mut non_rec_body = TokenStream::new();
+   let mut non_rec_hoists = TokenStream::new();
+   let outer_scope = Ident::new("scope", Span::call_site());
+   let non_rec_head_target = |name: &Ident| relation_coll_var(name);
+   for rule in &non_rec_rules {
+      let summary = format!("rule [non-rec] {}", mir_rule_summary(rule));
+      non_rec_body.extend(quote! { ::ascent::internal::comment(#summary); });
+      let (body, pre) =
+         compile_rule_with_head_target(rule, &non_rec_head_target, &outer_scope, hoist_counter);
+      non_rec_body.extend(body);
+      non_rec_hoists.extend(pre);
+   }
+
+   // Recursive rules: FlowLog-style emission.
+   // Step A: emit each rule's body expression as a distinct `let __rule_N = ...;`
+   //         binding. Collect per-head-relation Vec<rule_ident>.
+   // Step B: at bind_leave, emit `let __X_next = t_0.concat(t_1)...concat(__X_seed).threshold(...);`
+   //         then `__X_var.set(__X_next.clone()); __X_next.leave()`.
+   // No `__X_acc` mutable accumulator needed — dataflow same result, structure
+   // matches FlowLog exactly (rule outputs as named bindings, chain concat at fixpoint build).
+   let inner_scope = Ident::new("inner", Span::call_site());
    let mut rules_ts = TokenStream::new();
    let mut rules_hoists = TokenStream::new();
-   let inner_scope = Ident::new("inner", Span::call_site());
-   for rule in &scc.rules {
-      let summary = format!("rule {}", mir_rule_summary(rule));
+   let mut per_head_rule_idents: std::collections::HashMap<String, Vec<Ident>> =
+      std::collections::HashMap::new();
+   for (i, rule) in rec_rules.iter().enumerate() {
+      let summary = format!("rule [rec] {}", mir_rule_summary(rule));
       rules_ts.extend(quote! { ::ascent::internal::comment(#summary); });
-      let (body, pre) = compile_rule_with_head_target(rule, &head_target, &inner_scope, hoist_counter);
-      rules_ts.extend(body);
+      let (head_exprs, pre) = compile_rule_head_exprs(rule, &inner_scope, hoist_counter);
       rules_hoists.extend(pre);
+      for (j, (head_rel, expr)) in head_exprs.into_iter().enumerate() {
+         let rule_ident = Ident::new(&format!("t_{}_{}", i, head_rel), head_rel.span());
+         let _ = j;
+         rules_ts.extend(quote! {
+            let #rule_ident = #expr;
+         });
+         per_head_rule_idents.entry(head_rel.to_string()).or_default().push(rule_ident);
+      }
    }
 
    // 6. Bind+leave tuple expression.
@@ -1892,14 +2675,40 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize) 
       dyn_rels.iter().map(|r| Ident::new(&format!("__{}_leaved", r.name), r.name.span())).collect();
    let leaved_dest_tuple = tuple_of_idents(&leaved_idents);
 
+   // FlowLog's bind-leave pattern:
+   //   let next_X = rule1.concat(rule2)...concat(in_X).threshold_semigroup(...);
+   //   var_X.set(next_X.clone());
+   //   next_X.leave()
    let mut bind_leave_exprs = vec![];
    for rel in &dyn_rels {
       let name = &rel.name;
-      let var = Ident::new(&format!("__{}_var", name), name.span());
-      let acc = Ident::new(&format!("__{}_acc", name), name.span());
-      let materialized = materialize_rel(rel, quote! { #acc });
+      let var = Ident::new(&format!("recursive_{}_var", name), name.span());
+      let seed = Ident::new(&format!("in_{}", name), name.span());
+      let next = Ident::new(&format!("next_{}", name), name.span());
+      let rule_idents =
+         per_head_rule_idents.get(&name.to_string()).cloned().unwrap_or_default();
+      // Build chain: rule_0.concat(rule_1)...concat(seed). If no rules for this
+      // head (shouldn't happen for dyn_rel in looping SCC), use seed alone.
+      // FlowLog-exact: `t_0.clone().concat(t_1.clone())...concat(in_X.clone())`.
+      let concat_chain: TokenStream = if rule_idents.is_empty() {
+         quote! { #seed.clone() }
+      } else {
+         let first = &rule_idents[0];
+         let rest: Vec<TokenStream> = rule_idents[1..]
+            .iter()
+            .map(|r| quote! { .concat(#r.clone()) })
+            .collect();
+         quote! {
+            #first.clone() #(#rest)* .concat(#seed.clone())
+         }
+      };
+      let materialized = materialize_rel(rel, concat_chain, is_batch);
       bind_leave_exprs.push(quote! {
-         #var.set(&(#materialized)).leave()
+         {
+            let #next = #materialized;
+            #var.set(#next.clone());
+            #next.leave()
+         }
       });
    }
    let bind_leave_tuple = if bind_leave_exprs.len() == 1 {
@@ -1920,18 +2729,38 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize) 
 
    let _ = scc_idx; // label generation skipped for now
 
+   // Batch mode needs a `TotalOrder` inner timestamp paired with its `()`
+   // outer so `Product<(), Iter>` satisfies `threshold_semigroup`'s bound.
+   // Incremental mode keeps `u32` outer + `u32` inner for Variable::new's
+   // arbitrary-Lattice flexibility.
+   let inner_iter_ty = if is_batch { quote! { u16 } } else { quote! { u32 } };
+   // Outer-scope non-recursive rules emitted BEFORE scope.iterative so their
+   // results become part of the seed entered into the iterative loop.
+   // Body assembly:
+   //   1. Non-recursive rules emitted BEFORE scope.iterative — their output
+   //      becomes part of the seed entered into the loop.
+   //   2. EDB arrangements (outer_arrs) ALSO before scope.iterative — built
+   //      once, amortized across all iterations via `.enter(inner)`.
+   //   3. Inside scope.iterative: enter seeds, create Variables, shadow
+   //      __<rel>_coll, enter outer arrangement handles (outer_arr_enters),
+   //      arrange recursive IDBs (inner_arrs), init accumulators, run rules,
+   //      bind-and-leave.
    let body = quote! {
-      let #leaved_dest_tuple = scope.iterative::<u32, _, _>(|inner| {
+      #non_rec_body
+      #outer_arrs
+      let #leaved_dest_tuple = scope.iterative::<#inner_iter_ty, _, _>(|inner| {
          #inner_body_only_bindings
          #inner_dyn_seed_bindings
          #var_decls
          #shadow_bindings
-         #acc_init
+         #outer_arr_enters
+         #inner_arrs
          #rules_ts
          #bind_leave_tuple
       });
       #outer_reassigns
    };
+   rules_hoists.extend(non_rec_hoists);
    (body, rules_hoists)
 }
 
@@ -1961,14 +2790,34 @@ fn unit_seed(scope_ident: &Ident) -> TokenStream {
 /// `coll_expr` evaluates to the `Collection<(K_cols..., L), isize>` holding
 /// raw rule contributions. Output is a `Collection` of the same shape with
 /// consolidated-per-key rows.
-fn materialize_rel(rel: &RelationIdentity, coll_expr: TokenStream) -> TokenStream {
+fn materialize_rel(rel: &RelationIdentity, coll_expr: TokenStream, is_batch: bool) -> TokenStream {
    if !rel.is_lattice {
-      // Set semantics: emit diff 1 iff the key's net multiplicity is > 0.
-      // After operations like antijoin (where negated semijoin contributes
-      // negative diffs), a key may end up with a zero-or-negative net diff;
-      // we must NOT emit those. Plain `.distinct()` would check this, but
-      // it requires `G::Timestamp: Ord` which fails in nested iterative
-      // scopes. `reduce` only needs `G::Timestamp: Lattice`.
+      if is_batch {
+         // Batch path: Present-diff set relation. `threshold_semigroup`
+         // on an arranged-by-self trace emits each key once, the first
+         // time it is seen — exactly the canonical DD datalog pattern
+         // (graspan1.rs). Insert-only semantics, no multiplicity math.
+         return quote! {
+            {
+               // DD 0.20: `ThresholdTotal::threshold_semigroup` is impl'd
+               // DIRECTLY on `VecCollection` (i.e. `Collection<G, Vec<...>>`)
+               // — no need to call `.arrange_by_self()` first. FlowLog emits
+               // `coll.concat(...).threshold_semigroup(...)` in exactly this
+               // form. Removing the extra `arrange_by_self` saves a whole
+               // DD arrangement operator per relation (3 per CSPA SCC).
+               use ::ascent::dd::differential_dataflow::operators::ThresholdTotal;
+               (#coll_expr)
+                  .threshold_semigroup(|_, _, old: ::std::option::Option<&::ascent::dd::BatchDiff>| {
+                     old.is_none().then_some(::ascent::dd::BATCH_DIFF_ONE)
+                  })
+            }
+         };
+      }
+      // Session path: isize-diff set relation. Emit diff 1 iff net
+      // multiplicity > 0. The `> 0` check (not just `!= 0`) is required
+      // for antijoin correctness — antijoin's per-timestamp diffs can
+      // transiently cancel without being dropped; `reduce` with explicit
+      // net check stays correct where `.distinct()` would mis-emit.
       return quote! {
          {
             (#coll_expr).map(|__x| (__x, ()))
@@ -2033,6 +2882,43 @@ fn materialize_rel(rel: &RelationIdentity, coll_expr: TokenStream) -> TokenStrea
          });
          __reduced.map(|(#key_tuple, __l)| #flat_out_tuple)
       }
+   }
+}
+
+/// Name of the shared arrangement binding for a given `IrRelation`.
+/// Matches `compile_join_clause`'s lookup — both sides must agree.
+fn shared_arr_ident(ir_rel: &crate::ascent_hir::IrRelation) -> Ident {
+   let base = ir_rel.ir_name();
+   Ident::new(&format!("__arr_{}", base), base.span())
+}
+
+/// Emits `let __arr_<ir_name> = <coll>.flat_map(|tuple| Some(((key_cols,), (val_cols,)))).arrange_by_key();`
+/// for one shared arrangement. Key columns come from `ir_rel.indices` (already
+/// sorted ascending → canonical). Value columns are every other position in
+/// natural order. Both sides of any later `join_core` must mirror this layout.
+fn emit_shared_arrangement_binding(ir_rel: &crate::ascent_hir::IrRelation) -> TokenStream {
+   let arr_ident = shared_arr_ident(ir_rel);
+   let rel_coll = relation_coll_var(&ir_rel.relation.name);
+   let arity = ir_rel.relation.field_types.len();
+   let col_idents: Vec<Ident> =
+      (0..arity).map(|i| Ident::new(&format!("__c{}", i), Span::call_site())).collect();
+   let destruct = tuple_of_idents(&col_idents);
+   let key_parts: Vec<TokenStream> =
+      ir_rel.indices.iter().map(|&i| {
+         let c = &col_idents[i];
+         quote! { #c }
+      }).collect();
+   let val_parts: Vec<TokenStream> =
+      (0..arity).filter(|i| !ir_rel.indices.contains(i)).map(|i| {
+         let c = &col_idents[i];
+         quote! { #c }
+      }).collect();
+   let key_tuple = tuple_tokens(&key_parts);
+   let val_tuple = tuple_tokens(&val_parts);
+   quote! {
+      let #arr_ident = #rel_coll.clone().flat_map(move |#destruct| {
+         ::std::option::Option::Some((#key_tuple, #val_tuple))
+      }).arrange_by_key();
    }
 }
 

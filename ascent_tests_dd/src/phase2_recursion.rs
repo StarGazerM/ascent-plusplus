@@ -18,6 +18,7 @@ ascent! {
    path(x, z) <-- edge(x, y), path(y, z);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn tc_preserves_seeded_facts() {
    let mut prog = TcWithSeed::default();
@@ -53,6 +54,7 @@ ascent! {
    cb(x, z) <-- cb(x, y), ca(y, z);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn mutual_recursion_two_dyn_rels() {
    let mut prog = MutualTc::default();

@@ -30,6 +30,7 @@ ascent! {
 /// Streaming a lattice relation: insert edges in order, watch the shortest
 /// path value tighten. Each tighter path emits `-old + new` at the lattice
 /// key — the hallmark of lattice-aware incremental output.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_lattice_tightens_over_time() {
    let mut s = ShortestPathS::session();
@@ -79,6 +80,7 @@ ascent! {
       agg s = ::ascent::aggregators::sum(v) in sample(k, v);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_aggregator_recomputes_on_input_change() {
    let mut s = GroupSumS::session();
@@ -114,6 +116,7 @@ fn session_aggregator_recomputes_on_input_change() {
 /// `timely::execute(|worker| { … })` closure — here the worker lives
 /// outside in a regular variable, so the control flow isn't trapped in
 /// a callback.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn direct_raw_dd_no_callbacks() {
    let mut s = DirectTcS::session();
@@ -162,6 +165,7 @@ ascent! {
 /// Negation round-trip — adding to the negated relation retracts derived
 /// facts; removing from it re-adds them. Exercises DD's antijoin with
 /// both positive and negative diffs.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_negation_roundtrip() {
    let mut s = HappyS::session();
@@ -200,6 +204,7 @@ fn session_negation_roundtrip() {
 /// semantics: path(1,3) has two derivations (direct via edge(1,3) and
 /// 2-hop via 1→2→3); removing edge(1,3) leaves the 2-hop derivation
 /// intact, so path(1,3) stays in the snapshot.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_retraction_alt_derivation_survives() {
    let mut s = ChanTcS::session();
@@ -229,6 +234,7 @@ fn session_retraction_alt_derivation_survives() {
 }
 
 /// Re-insertion after retraction — idempotent state.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_reinsert_after_retract() {
    let mut s = ChanTcS::session();
@@ -254,6 +260,7 @@ fn session_reinsert_after_retract() {
 /// Lattice loosens when the tight value is retracted. The shortest-path
 /// lattice should fall back to the next-best value once the winning edge
 /// is gone — proves reduce-over-lattice handles negative diffs correctly.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_lattice_loosens_on_retract() {
    let mut s = ShortestPathS::session();
@@ -286,6 +293,7 @@ fn session_lattice_loosens_on_retract() {
 /// Documented; users relying on empty-group-emits-identity must arrange
 /// for the group key itself to always be present (e.g. via a base-case
 /// contribution).
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_aggregator_empty_and_refill() {
    let mut s = GroupSumS::session();
@@ -374,6 +382,7 @@ ascent! {
 /// Note: every relation (including derived `path`) has an `InputSession`;
 /// the output frontier is the meet of all input frontiers, so you must
 /// advance ALL of them to the target time. `advance_all_to(t)` does this.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn direct_input_multi_epoch_pipelined() {
    let mut s = DirectTcS::session();
@@ -402,6 +411,7 @@ fn direct_input_multi_epoch_pipelined() {
 
 /// Show `step_until_idle` — don't name a time, just let the worker catch
 /// up to whatever each input's current time is.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn direct_input_step_until_idle() {
    let mut s = DirectTcS::session();
@@ -420,6 +430,7 @@ fn direct_input_step_until_idle() {
 }
 
 /// Demonstrates checking the probe directly for frontier observation.
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn direct_input_probe_access() {
    let mut s = DirectTcS::session();
@@ -439,6 +450,7 @@ fn direct_input_probe_access() {
    assert_eq!(s.path_snapshot(), vec![(1, 2)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_mpsc_producer_consumer() {
    let (tx, rx) = mpsc::channel::<Event>();

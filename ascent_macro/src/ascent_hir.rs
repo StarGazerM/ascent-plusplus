@@ -22,6 +22,42 @@ pub(crate) enum Backend {
    Dd,
 }
 
+/// Parses `backend(...)` argument list: bare ident or `ident, mode = "literal"`.
+struct BackendArgs {
+   backend: Ident,
+   mode: Option<String>,
+}
+
+impl syn::parse::Parse for BackendArgs {
+   fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+      let backend: Ident = input.parse()?;
+      let mut mode = None;
+      if input.peek(syn::Token![,]) {
+         input.parse::<syn::Token![,]>()?;
+         let key: Ident = input.parse()?;
+         if key != "mode" {
+            return Err(Error::new(key.span(), format!("expected `mode`, got `{key}`")));
+         }
+         input.parse::<syn::Token![=]>()?;
+         let lit: syn::LitStr = input.parse()?;
+         mode = Some(lit.value());
+      }
+      Ok(BackendArgs { backend, mode })
+   }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) enum DdMode {
+   /// Incremental/isize diff. Supports retractions, antijoin (negation),
+   /// lattice reduce. Current default — preserves existing test behavior.
+   #[default]
+   Incremental,
+   /// FlowLog-style batch: `Diff = Present`, insert-only. Pre-arranges EDB
+   /// outside iterative scope, `threshold_semigroup` distinct, `join_core`
+   /// on arranged traces. No negation, no retraction, no lattice.
+   Batch,
+}
+
 #[derive(Clone)]
 pub(crate) struct AscentConfig {
    #[allow(dead_code)]
@@ -31,6 +67,7 @@ pub(crate) struct AscentConfig {
    pub inter_rule_parallelism: bool,
    pub default_ds: DsAttributeContents,
    pub backend: Backend,
+   pub dd_mode: DdMode,
 }
 
 impl AscentConfig {
@@ -59,22 +96,48 @@ impl AscentConfig {
          .transpose()?;
 
       let backend_attr = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::BACKEND_ATTR));
-      let backend = match backend_attr {
-         None => Backend::default(),
+      let (backend, dd_mode) = match backend_attr {
+         None => (Backend::default(), DdMode::default()),
          Some(attr) => {
             let list = attr.meta.require_list()?;
-            let ident: Ident = parse2(list.tokens.clone())
-               .map_err(|e| Error::new(e.span(), format!("expected `batch` or `dd`: {e}")))?;
-            match ident.to_string().as_str() {
+            // Accept: `backend(batch)`, `backend(dd)`,
+            //        `backend(dd, mode = "batch")`, `backend(dd, mode = "incremental")`.
+            let tokens = list.tokens.clone();
+            let parsed: BackendArgs = parse2(tokens).map_err(|e| {
+               Error::new(
+                  e.span(),
+                  format!("expected `batch`, `dd`, or `dd, mode = \"batch\"|\"incremental\"`: {e}"),
+               )
+            })?;
+            let backend = match parsed.backend.to_string().as_str() {
                "batch" => Backend::Batch,
                "dd" => Backend::Dd,
                other => {
                   return Err(Error::new(
-                     ident.span(),
+                     parsed.backend.span(),
                      format!("unknown backend `{other}`; expected `batch` or `dd`"),
                   ));
                },
-            }
+            };
+            let dd_mode = match (backend, parsed.mode.as_deref()) {
+               (Backend::Dd, None) => DdMode::default(),
+               (Backend::Dd, Some("batch")) => DdMode::Batch,
+               (Backend::Dd, Some("incremental")) => DdMode::Incremental,
+               (Backend::Dd, Some(other)) => {
+                  return Err(Error::new(
+                     parsed.backend.span(),
+                     format!("unknown dd mode `{other}`; expected `batch` or `incremental`"),
+                  ));
+               },
+               (Backend::Batch, Some(_)) => {
+                  return Err(Error::new(
+                     parsed.backend.span(),
+                     "`mode` is only valid with `backend(dd, ...)`",
+                  ));
+               },
+               (Backend::Batch, None) => DdMode::default(),
+            };
+            (backend, dd_mode)
          },
       };
 
@@ -113,6 +176,7 @@ impl AscentConfig {
          generate_run_partial,
          default_ds,
          backend,
+         dd_mode,
       })
    }
 }

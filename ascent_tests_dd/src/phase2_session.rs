@@ -14,6 +14,7 @@ ascent! {
    path(x, z) <-- edge(x, y), path(y, z);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_basic_insert_then_commit() {
    let mut s = TcS::session();
@@ -27,6 +28,7 @@ fn session_basic_insert_then_commit() {
    assert_eq!(p, vec![(1, 2), (1, 3), (2, 3)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_incremental_delta_only() {
    let mut s = TcS::session();
@@ -52,6 +54,7 @@ fn session_incremental_delta_only() {
    assert_eq!(snap, vec![(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn session_retraction() {
    let mut s = TcS::session();

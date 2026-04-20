@@ -53,6 +53,7 @@ fn lam_I() -> LambdaCalcExpr { lam_lam("x", Ref(Arc::from("x"))) }
 // test unlocked.
 // ---------------------------------------------------------------------------
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_cross_join() {
    ascent_m_par! {
@@ -75,6 +76,7 @@ fn test_dl_cross_join() {
    assert!(rels_equal([(1, 2), (1, 20), (10, 2), (10, 20)], prog.bar));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_rel_empty_check() {
    ascent_m_par! {
@@ -93,6 +95,7 @@ fn test_rel_empty_check() {
    assert!(rels_equal([(1,), (2,)], p.c));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_multiple_rel_definitions() {
    ascent_m_par! {
@@ -106,6 +109,7 @@ fn test_multiple_rel_definitions() {
    assert!(rels_equal([(1,), (2,)], p.a));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run_tc() {
    fn compute_tc(edges: &[(i32, i32)]) -> Vec<(i32, i32)> {
@@ -124,6 +128,7 @@ fn test_ascent_run_tc() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], compute_tc(&[(1, 2), (2, 3)])));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_repeated_vars() {
    ascent_m_par! {
@@ -141,6 +146,7 @@ fn test_dl_repeated_vars() {
    assert!(rels_equal([(1,), (4,)], p.self_loop));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join() {
    ascent_m_par! {
@@ -163,6 +169,7 @@ fn test_ascent_simple_join() {
 // Tier 2 — patterns, generators with bound vars, conditions.
 // ---------------------------------------------------------------------------
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_patterns() {
    ascent_m_par! {
@@ -180,6 +187,7 @@ fn test_dl_patterns() {
    assert!(prog.bar.len() == 1);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_pattern_args() {
    ascent_m_par! {
@@ -197,6 +205,7 @@ fn test_dl_pattern_args() {
    assert!(prog.bar.len() == 1);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_vars_bound_in_patterns() {
    ascent_m_par! {
@@ -214,6 +223,7 @@ fn test_dl_vars_bound_in_patterns() {
    assert!(prog.bar.len() == 1);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl2() {
    ascent_m_par! {
@@ -239,6 +249,7 @@ fn test_dl2() {
    assert!(rels_equal([(1, 3), (1, 6), (10, 60), (10, 20)], prog.bar));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_generators() {
    ascent_m_par! {
@@ -256,6 +267,7 @@ fn test_dl_generators() {
    assert!(prog.bar.len() == 10);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_generators2() {
    ascent_m_par! {
@@ -269,6 +281,7 @@ fn test_dl_generators2() {
    assert_rels_eq!([(3, 4), (4, 6), (20, 21)], prog.foo);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_cross_join_nontrivial() {
    // Not strictly from upstream but demonstrates that complex 2-SCC
@@ -287,6 +300,7 @@ fn test_dl_cross_join_nontrivial() {
    assert!(p.ab.len() == 6);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_wildcards() {
    ascent_m_par! {
@@ -309,6 +323,7 @@ fn test_ascent_wildcards() {
 // cmp/partial_cmp). Fix would require breaking upstream Set's lattice order
 // or providing a separate total-ord wrapper — both invasive.
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_lattice2() {
    use ascent::Dual;
@@ -331,6 +346,7 @@ fn test_dl_lattice2() {
    // same no-assert behavior; it's primarily a parse / compile test).
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_lattice1() {
    use ascent::Dual;
@@ -358,6 +374,7 @@ fn test_dl_lattice1() {
    ]))
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_multiple_head_clauses() {
    ascent_m_par! {
@@ -374,6 +391,7 @@ fn test_dl_multiple_head_clauses() {
    assert_rels_eq!([(1,), (2,)], p.baz);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_multiple_head_clauses2() {
    ascent_m_par! {
@@ -409,6 +427,7 @@ fn test_dl_multiple_head_clauses2() {
    ));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_disjunctions() {
    ascent_m_par! {
@@ -428,6 +447,7 @@ fn test_dl_disjunctions() {
    assert_rels_eq!([(1, 10), (2, 20), (3, 30), (4, 40)], p.baz);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_disjunctions2() {
    // Upstream uses `&'static str`; ported to `Arc<str>` for DD HRTB.
@@ -451,6 +471,7 @@ fn test_dl_disjunctions2() {
 // multi-clause chains, negation.
 // ---------------------------------------------------------------------------
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_expressions_and_inits() {
    ascent_m_par! {
@@ -467,6 +488,7 @@ fn test_ascent_expressions_and_inits() {
    assert!(prog.foo.iter().contains(&(10, 20)));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run() {
    let res = ascent_run_m_par! {
@@ -480,6 +502,7 @@ fn test_ascent_run() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], res.path));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run_rel_init() {
    let res = ascent_run_m_par! {
@@ -491,6 +514,7 @@ fn test_ascent_run_rel_init() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], res.path));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_fac() {
    ascent_m_par! {
@@ -509,6 +533,7 @@ fn test_ascent_fac() {
    assert!(prog.fac.iter().any(|&(x, v)| x == 10 && v == 3628800));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_consuming_ascent_run_tc() {
    fn compute_tc(edges: &[(i32, i32)]) -> Vec<(i32, i32)> {
@@ -524,6 +549,7 @@ fn test_consuming_ascent_run_tc() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], compute_tc(&[(1, 2), (2, 3)])));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_issue3() {
    // https://github.com/s-arash/ascent/issues/3 — make sure the fix regression-proofs.
@@ -540,6 +566,7 @@ fn test_issue3() {
    assert_rels_eq!([(1,), (2,)], p.bar);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_repeated_vars_simple_joins() {
    ascent_m_par! {
@@ -557,6 +584,7 @@ fn test_repeated_vars_simple_joins() {
    assert_rels_eq!([(1,), (4,)], p.bar);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join2() {
    ascent_m_par! {
@@ -574,6 +602,7 @@ fn test_ascent_simple_join2() {
    assert!(p.path.len() == 6);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join3() {
    // Multi-clause join pattern.
@@ -598,6 +627,7 @@ fn test_ascent_simple_join3() {
 // Tier 4 — negation, generic types, nested macros.
 // ---------------------------------------------------------------------------
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_negation_simple() {
    // From upstream `test_ascent_negation` (simplified name).
@@ -616,6 +646,7 @@ fn test_ascent_negation_simple() {
    assert_rels_eq!([(1,), (3,)], p.res);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_negation() {
    // From upstream `agg_tests::test_ascent_negation`. Negation via ! (which
@@ -650,6 +681,7 @@ fn test_ascent_negation() {
    assert!(rels_equal([(0, 1), (100, 101)], res.baz2));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_negation3() {
    use ascent::aggregators::*;
@@ -677,6 +709,7 @@ fn test_ascent_negation3() {
    assert!(rels_equal([(0, 1), (10, 11), (100, 101)], res.baz));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_negation2() {
    use ascent::aggregators::*;
@@ -707,6 +740,7 @@ fn test_ascent_negation2() {
    assert!(rels_equal([(0, 1), (100, 101)], res.baz2));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_generic_ty_with_divergent_impl_generics() {
    // From `example_tests`. Struct has a generic, impl has a bound on it.
@@ -729,6 +763,7 @@ fn test_generic_ty_with_divergent_impl_generics() {
    c.run();
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_generic_ty() {
    // From `example_tests::test_generic_ty`. Generic at struct level but no
@@ -751,6 +786,7 @@ fn test_generic_ty() {
    container.run();
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run_tc_generic() {
    fn compute_tc<
@@ -769,6 +805,7 @@ fn test_ascent_run_tc_generic() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], compute_tc(&[(1, 2), (2, 3)])));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_tc_generic() {
    ascent_m_par! {
@@ -784,6 +821,7 @@ fn test_ascent_tc_generic() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], prog.tc));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_generic_tc_example() {
    fn tc<
@@ -807,6 +845,7 @@ fn test_generic_tc_example() {
    assert!(refl.iter().any(|&(a, b)| a == 4 && b == 4));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run_explicit_decl() {
    fn compute_tc<
@@ -827,6 +866,7 @@ fn test_ascent_run_explicit_decl() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], res));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascentception() {
    ascent_m_par! {
@@ -847,6 +887,7 @@ fn test_ascentception() {
    assert_rels_eq!([(10,), (20,)], i.b);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join4() {
    ascent_m_par! {
@@ -862,6 +903,7 @@ fn test_ascent_simple_join4() {
    assert_rels_eq!([(1, 3)], p.out);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join5() {
    ascent_m_par! {
@@ -879,6 +921,7 @@ fn test_ascent_simple_join5() {
 // Tier 5 — cross-file upstream tests: macros_tests.rs, example_tests.rs.
 // ---------------------------------------------------------------------------
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_macro_empty_body() {
    // Macro def with empty body — just tests parse.
@@ -892,6 +935,7 @@ fn test_macro_empty_body() {
    assert_rels_eq!([(1, 2)], p.foo1);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_macro_in_macro() {
    // Verbatim from `ascent_tests::macros_tests::test_macro_in_macro`.
@@ -925,6 +969,7 @@ fn test_macro_in_macro() {
    assert_rels_eq!(prog.quax, [(2,), (12,)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_macro_in_macro2() {
    type Var = String;
@@ -956,6 +1001,7 @@ fn test_macro_in_macro2() {
    assert!(prog.res_val.iter().any(|v| v.0 == 100));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_macro_in_macro3() {
    ascent_m_par! {
@@ -976,6 +1022,7 @@ fn test_macro_in_macro3() {
    assert_eq!(prog.edge.len(), prog.edge_rev.len());
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_macro_in_macro4() {
    ascent_m_par! {
@@ -997,6 +1044,7 @@ fn test_macro_in_macro4() {
    assert_rels_eq!(prog.bar, [(0, 1)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_macro_in_macro5() {
    // Upstream uses `&'static str`; DD needs `DeserializeOwned` (HRTB) so we
@@ -1039,6 +1087,7 @@ fn test_macro_in_macro5() {
    assert!(!prog.can_compile_to.contains(&(s("Python"), s("Rust"))));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_macro_in_macro6() {
    ascent_m_par! {
@@ -1078,6 +1127,7 @@ fn test_macro_in_macro6() {
 // default. Solvable by detecting closure-typed lets and taking a different
 // path, but not high-priority.
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_lambda() {
    ascent_m_par! {
@@ -1111,6 +1161,7 @@ fn test_dl_lambda() {
    assert!(prog.output.len() == 1);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_agg() {
    use ascent::aggregators::*;
@@ -1131,6 +1182,7 @@ fn test_ascent_agg() {
    assert_rels_eq!([(1, 2, 10)], res.baz);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_agg3() {
    fn percentile<'a, TInputIter>(p: f32) -> impl Fn(TInputIter) -> std::option::IntoIter<i32>
@@ -1160,6 +1212,7 @@ fn test_ascent_agg3() {
    assert!(rels_equal([(1, 75), (10, 750)], res.baz));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_agg_count() {
    use ascent::aggregators::count;
@@ -1179,6 +1232,7 @@ fn test_ascent_agg_count() {
    assert_eq!(res.num_paths[0].0, 6);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_agg_example() {
    // Upstream uses `avg as Grade` with `mean` returning `f64`. In DD, `f64`
@@ -1204,6 +1258,7 @@ fn test_agg_example() {
    assert_rels_eq!(&prog.avg_grade, &[(1, 70), (2, 80)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_agg4() {
    use ascent::aggregators::*;
@@ -1226,6 +1281,7 @@ fn test_ascent_agg4() {
    assert!(rels_equal([(1, 50, 100), (10, 500, 1000)], res.baz));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_agg_simple() {
    use ascent::aggregators::*;
@@ -1239,6 +1295,7 @@ fn test_ascent_agg_simple() {
    assert!(rels_equal([(5,)], res.bar));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_aggregated_lattice() {
    let res = ascent_run_m_par! {
@@ -1254,6 +1311,7 @@ fn test_aggregated_lattice() {
    assert_rels_eq!(res.bar, [(0, 9), (1, 9)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ds_attr() {
    let res = ascent_run_m_par! {
@@ -1270,6 +1328,7 @@ fn test_ds_attr() {
    assert_rels_eq!(res.bar, [(0, 1)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_tc_example() {
    // From `ascent_tests::example_tests::test_tc_example`.
@@ -1290,6 +1349,7 @@ fn test_tc_example() {
    assert!(rels_equal([(1, 1), (2, 2), (3, 3), (1, 2), (2, 3), (1, 3)], refl));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_borrowed_strings() {
    // Upstream uses `&'a str`; ported to `Arc<str>` for DD HRTB. Plain idents
@@ -1312,6 +1372,7 @@ fn test_borrowed_strings() {
    assert_eq!(prog.ancestor.len(), 3);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_borrowed_strings_2() {
    fn ancestry_fn(parent_rel: impl Iterator<Item = (Arc<str>, Arc<str>)>) -> Vec<(Arc<str>, Arc<str>)> {
@@ -1334,6 +1395,7 @@ fn test_borrowed_strings_2() {
    assert_eq!(ancestor.len(), 3);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_generators_conditions_example() {
    // Upstream uses `Rc<Vec<i32>>`; DD needs `Send`, so port to `Arc<Vec<i32>>`.

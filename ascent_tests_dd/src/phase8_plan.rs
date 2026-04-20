@@ -34,6 +34,7 @@ ascent! {
    path(x, z) <-- edge(x, y), path(y, z);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn plan_matches_default_for_tc() {
    let run = |ed: &[(i32, i32)]| -> Vec<(i32, i32)> {
@@ -73,6 +74,7 @@ ascent! {
    path(x, z) <-- edge(x, y), path(y, z);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn plan_reordered_same_results() {
    let mut d = TcDefault::default();
@@ -119,6 +121,7 @@ ascent! {
    reach(x, z) <-- reach(x, y), reach(y, z);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn plan_both_variants_for_two_idb_rule() {
    let mut d = ReachDefault::default();

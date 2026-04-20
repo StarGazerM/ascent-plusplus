@@ -21,3 +21,4 @@ itertools = "0.14"
 serde = { version = "1.0", features = ["derive", "rc"] }
 
 [dev-dependencies]
+ntest_timeout = "0.9"

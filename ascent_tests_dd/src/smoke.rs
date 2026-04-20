@@ -20,23 +20,27 @@ ascent! {
    relation path(i32, i32);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn smoke_empty_program_builds_and_runs() {
    let mut prog = Empty::default();
    prog.run();
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn smoke_program_with_relations_exposes_fields() {
    let mut prog = RelsOnly::default();
    prog.edge.push((1, 2));
    prog.edge.push((2, 3));
    prog.run();
-   // Phase 0: `run()` is a no-op, so `edge` is untouched and `path` is empty.
-   assert_eq!(prog.edge, vec![(1, 2), (2, 3)]);
+   let mut edge = prog.edge.clone();
+   edge.sort();
+   assert_eq!(edge, vec![(1, 2), (2, 3)]);
    assert!(prog.path.is_empty());
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn smoke_ascent_run_returns_struct() {
    let res = ascent::ascent_run! {

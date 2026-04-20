@@ -20,6 +20,7 @@ ascent! {
    sources(x) <-- edge(x, _);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn wildcard_column() {
    let mut p = Wildcards::default();
@@ -46,6 +47,7 @@ ascent! {
    tag7_nodes(n) <-- tagged(n, 7);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn literal_arg_filters() {
    let mut p = LiteralFilter::default();
@@ -70,6 +72,7 @@ ascent! {
    self_loop(x) <-- edge(x, x);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn repeated_var_in_clause() {
    let mut p = SelfLoops::default();
@@ -94,6 +97,7 @@ ascent! {
    big(x) <-- num(x), if *x > 10;
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn if_condition_on_clause() {
    let mut p = IfCond::default();
@@ -119,6 +123,7 @@ ascent! {
    sum(s) <-- pair(a, b), let s = a + b;
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn let_binding_extends_bound_vars() {
    let mut p = LetBinding::default();
@@ -145,6 +150,7 @@ ascent! {
    sink(x) <-- node(x), ! edge(x, _);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn negation_of_any_outgoing_edge() {
    let mut p = Negation::default();
@@ -169,6 +175,7 @@ ascent! {
    approved(x) <-- candidate(x), ! rejected(x, 7);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn negation_with_literal_arg() {
    let mut p = NegationWithLit::default();
@@ -189,6 +196,7 @@ fn negation_with_literal_arg() {
 // Ascent programs seed relations from outer-scope data.
 // ---------------------------------------------------------------------------
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn generator_from_outer_vec() {
    let data = vec![(1, 10), (2, 20), (3, 30)];
@@ -203,6 +211,7 @@ fn generator_from_outer_vec() {
    assert_eq!(s, vec![(1, 20), (2, 40), (3, 60)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn generator_with_prior_binding() {
    let range_end: i32 = 4;
@@ -220,6 +229,7 @@ fn generator_with_prior_binding() {
    assert!(got.is_empty());
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn generator_extends_via_prior_var() {
    let mut prog = AscentPrep::default();
@@ -255,6 +265,7 @@ ascent! {
    present(k, v) <-- maybe(k, opt), if let Some(v) = opt;
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn if_let_filters_and_binds() {
    let mut p = IfLetCond::default();
@@ -281,6 +292,7 @@ ascent! {
    heavy_doubled(from, dw) <-- edge(from, _), weight(from, w), if *w > 2, let dw = w * 2;
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn combined_wildcard_join_if_let() {
    let mut p = Combined::default();

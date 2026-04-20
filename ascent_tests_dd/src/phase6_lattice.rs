@@ -29,6 +29,7 @@ ascent! {
    best(k, v) <-- observation(k, v);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn lattice_max_per_key() {
    let mut p = MaxPerKey::default();
@@ -57,6 +58,7 @@ ascent! {
    shortest_path(x, z, Dual(w + l.0)) <-- edge(x, y, w), shortest_path(y, z, l);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn lattice_shortest_path_dag() {
    let mut p = ShortestPath::default();

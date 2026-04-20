@@ -182,13 +182,41 @@ impl<L: ascent_base::Lattice + Clone> differential_dataflow::difference::Multipl
 
 use std::sync::{Arc, Mutex};
 
+use differential_dataflow::difference::Present;
 use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{Collection, ExchangeData, Hashable};
+use differential_dataflow::{ExchangeData, Hashable};
+// DD 0.20: `Collection<G, C>` is 2-arg; `VecCollection<G, D, R>` is the
+// 3-arg alias over `Vec<(D, G::Timestamp, R)>`. Alias back to `Collection`
+// locally so existing signatures (`Collection<G, T, isize>`) compile.
+use differential_dataflow::VecCollection as Collection;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{ProbeHandle, Scope};
 use timely::progress::Timestamp;
 use timely::worker::Worker;
+
+/// Diff type used by the **batch** DD codegen path.
+///
+/// `Present` is a fire-and-forget semigroup — it records "at least one
+/// derivation exists" without tracking multiplicity. This matches pure
+/// datalog semantics (tuples are present or absent) and lets DD's
+/// arrangements skip the multiplicity-accounting overhead that isize
+/// incurs. `ThresholdSemigroup` + `threshold_semigroup` replace the
+/// `map().reduce().map()` distinct dance; `SemigroupVariable` replaces
+/// `Variable` for Present-typed recursive state.
+///
+/// `Present` cannot represent negative diffs, so it is NOT used on the
+/// **session** path (which supports `remove(tuple)` via isize diffs).
+pub type BatchDiff = Present;
+pub const BATCH_DIFF_ONE: BatchDiff = Present;
+
+/// Re-export for codegen convenience so we don't have to spell the DD
+/// module path in generated code.
+// DD 0.20: `VecVariable<G, D, R>` is the 3-arg alias over `Variable<G, C>`
+// with `C = Vec<(D, G::Timestamp, R)>`. Alias it back to `Variable` /
+// `SemigroupVariable` so codegen's existing 3-arg usages compile.
+pub use differential_dataflow::operators::iterate::VecVariable as Variable;
+pub use differential_dataflow::operators::iterate::VecVariable as SemigroupVariable;
 
 /// Shorthand for the root scope type we hand to user build closures.
 /// Dataflow root scope used by `execute_batch`. Parameterised by `Generic`
@@ -297,7 +325,9 @@ impl<T: Clone + Send + 'static> Sink<T> {
       T: ExchangeData + Hashable,
    {
       let buf = self.buf.clone();
+      // DD 0.20: `.inspect` takes self by value — clone the `&Collection`.
       collection
+         .clone()
          .inspect(move |(d, _t, r)| {
             buf.lock().unwrap().push((d.clone(), *r));
          })
@@ -391,6 +421,158 @@ pub fn dd_worker_count() -> usize {
    }
    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
+
+// ---------------------------------------------------------------------------
+// Batch runtime (Present-typed): used by generated `run()` for DD backend.
+// ---------------------------------------------------------------------------
+
+/// Present-typed input handle. Each worker gets its own, but only
+/// worker 0 feeds data (DD's arrange hash-partitions downstream).
+///
+/// Outer timestamp is `()` — FlowLog's trick. `Product<(), Iter>` is
+/// `TotalOrder`, which `ThresholdTotal::threshold_semigroup` requires.
+/// `u32` outer (session path) gives `Product<u32, Iter>` — NOT total —
+/// so batch-mode threshold wouldn't compile.
+pub type BatchSessionInput<T> = InputSession<(), T, BatchDiff>;
+
+trait BatchSealable {
+   fn seal(self: Box<Self>);
+}
+impl<D: ExchangeData> BatchSealable for InputSession<(), D, BatchDiff> {
+   fn seal(mut self: Box<Self>) {
+      // `()` timestamp: nothing to advance to — flush buffered inserts and
+      // drop the session so the probe's frontier can retire past `()`.
+      // Without the drop, the session keeps the outer frontier open and
+      // `step_while(probe.less_than(&()))` would spin forever.
+      self.flush();
+      drop(self);
+   }
+}
+
+/// Batch-mode sealer: mirrors `Sealer` but returns `Collection`s with
+/// `Present` diff over `()` timestamp. Same worker-0-loads-only semantics.
+pub struct BatchSealer {
+   sessions: Vec<Box<dyn BatchSealable + 'static>>,
+   worker_index: usize,
+}
+
+impl BatchSealer {
+   fn new(worker_index: usize) -> Self { Self { sessions: Vec::new(), worker_index } }
+
+   pub fn input<T, G>(&mut self, scope: &mut G, data: Vec<T>) -> Collection<G, T, BatchDiff>
+   where
+      T: ExchangeData,
+      G: Scope<Timestamp = ()> + Input,
+   {
+      // Use `scope.new_collection_from_raw(empty)` instead of
+      // `InputSession::new() + to_collection()`. The InputSession::new()
+      // path creates a DIFFERENT timely operator graph that breaks DD's
+      // fixpoint convergence under `Present` diff at scale (confirmed via
+      // hand-written side-by-side: `new_collection_from_raw` scales
+      // linearly to n=10000+; `InputSession::new()+to_collection()` hangs
+      // at n=1025). Root cause: `scope.new_input()` vs `scope.input_from()`
+      // register the input differently with the scope's progress tracker.
+      let (mut session, coll) = scope.new_collection_from_raw::<T, BatchDiff, _>(
+         ::std::iter::empty::<(T, (), BatchDiff)>(),
+      );
+      if self.worker_index == 0 {
+         for t in data {
+            session.update(t, BATCH_DIFF_ONE);
+         }
+      }
+      self.sessions.push(Box::new(session));
+      coll
+   }
+
+   fn seal_all(&mut self) {
+      // `std::mem::take` drains the Vec so we can pass ownership of each
+      // Box to `seal()`, which drops the session after flushing.
+      for s in std::mem::take(&mut self.sessions) {
+         s.seal();
+      }
+   }
+}
+
+/// Present-typed output sink. Each worker shares the same Arc-backed
+/// buffer; all derivations land as `(tuple, Present)` entries.
+pub struct BatchSink<T: Clone + Send + 'static> {
+   buf: Arc<Mutex<Vec<T>>>,
+}
+
+impl<T: Clone + Send + 'static> Default for BatchSink<T> {
+   fn default() -> Self { Self::new() }
+}
+
+impl<T: Clone + Send + 'static> Clone for BatchSink<T> {
+   fn clone(&self) -> Self { Self { buf: self.buf.clone() } }
+}
+
+impl<T: Clone + Send + 'static> BatchSink<T> {
+   pub fn new() -> Self { Self { buf: Arc::new(Mutex::new(Vec::new())) } }
+
+   pub fn attach<G>(&self, collection: &Collection<G, T, BatchDiff>, probe: &mut ProbeHandle<G::Timestamp>)
+   where
+      G: Scope,
+      G::Timestamp: Lattice + Timestamp,
+      T: ExchangeData + Hashable,
+   {
+      let buf = self.buf.clone();
+      collection
+         .clone()
+         .inspect(move |(d, _t, _present)| {
+            buf.lock().unwrap().push(d.clone());
+         })
+         .probe_with(probe);
+   }
+
+   /// Drain accumulated tuples. Present semantics: each tuple appears
+   /// exactly once (no multiplicity tracking needed).
+   pub fn into_vec(self) -> Vec<T> { std::mem::take(&mut *self.buf.lock().unwrap()) }
+}
+
+/// Present-typed parallel batch runner. Mirrors `execute_batch` but uses
+/// `Present` diffs so arrangements / joins skip multiplicity accounting,
+/// and `()` outer timestamp so `Product<(), Iter>` satisfies `TotalOrder`
+/// (required by `threshold_semigroup` inside iterative scopes).
+/// Used by generated `run()` in the DD backend's batch mode.
+pub fn execute_batch_present<F>(build: F)
+where F: for<'a> Fn(&mut BatchRootScope<'a>, &mut BatchSealer, &mut ProbeHandle<()>) + Send + Sync + 'static {
+   let workers = dd_worker_count();
+   let config = if workers == 1 { timely::Config::thread() } else { timely::Config::process(workers) };
+   let build = Arc::new(build);
+   timely::execute::execute(config, move |worker| {
+      let build = build.clone();
+      let worker_index = worker.index();
+      let (mut sealer, probe) = worker.dataflow::<(), _, _>(|scope| {
+         let mut sealer = BatchSealer::new(worker_index);
+         let mut probe = ProbeHandle::new();
+         build(scope, &mut sealer, &mut probe);
+         (sealer, probe)
+      });
+      // Drop sessions (frontier retires past `()`), then step to quiescence.
+      // For `()` timestamps, `probe.less_than(&())` is already false at the
+      // start (frontier `[()]` — `()` not `< ()`), so the incremental-style
+      // frontier-chasing loop would 0-step. Correct batch idiom: drive
+      // until `worker.step()` reports no pending activations.
+      sealer.seal_all();
+      while worker.step() {}
+      let _ = probe;
+   })
+   .unwrap()
+   .join();
+}
+
+/// Outer-scope alias for batch mode: `()` timestamp. Mirrors `RootScope` but
+/// with `TotalOrder`-friendly timestamp for `threshold_semigroup`.
+pub type BatchRootScope<'a> = timely::dataflow::scopes::Child<
+   'a,
+   timely::worker::Worker<timely::communication::Allocator>,
+   (),
+>;
+
+// ---------------------------------------------------------------------------
+// Session runtime (isize-typed): used by `<Name>Session::commit()`.
+// ---------------------------------------------------------------------------
 
 pub fn execute_batch<F>(build: F)
 where F: for<'a> Fn(&mut RootScope<'a>, &mut Sealer, &mut ProbeHandle<u32>) + Send + Sync + 'static {

@@ -57,6 +57,7 @@ fn U() -> LambdaCalcExpr { lam("x", app(Ref("x"), Ref("x"))) }
 #[allow(non_snake_case)]
 fn I() -> LambdaCalcExpr { lam("x", Ref("x")) }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_lambda() {
    ascent_m_par! {
@@ -176,6 +177,7 @@ fn _test_dl_lambda2() {
    // println!("eval: {}\n", prog.eval.iter().map(|(e,v)| format!("{:?} ===> {:?}", e, v)).join("\n"));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_patterns() {
    // ascent!{
@@ -195,6 +197,7 @@ fn test_dl_patterns() {
    assert!(prog.bar.len() == 1);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_pattern_args() {
    ascent_m_par! {
@@ -213,6 +216,7 @@ fn test_dl_pattern_args() {
    assert!(prog.bar.len() == 1);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl2() {
    ascent_m_par! {
@@ -238,6 +242,7 @@ fn test_dl2() {
    assert!(rels_equal([(1, 3), (1, 6), (10, 60), (10, 20)], prog.bar));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_expressions_and_inits() {
    ascent_m_par! {
@@ -259,6 +264,7 @@ fn test_ascent_expressions_and_inits() {
    assert!(rels_equal([(1, 2, 6), (2, 3, 10)], prog.baz));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_cross_join() {
    ascent_m_par! {
@@ -278,6 +284,7 @@ fn test_dl_cross_join() {
    assert_eq!(prog.baz.len(), prog.foo.len() * prog.bar.len());
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_vars_bound_in_patterns() {
    ascent_m_par! {
@@ -302,6 +309,7 @@ fn test_dl_vars_bound_in_patterns() {
    assert!(rels_equal([(3, 5, 10), (4, 10, 20)], prog.baz));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_generators() {
    ascent! {
@@ -319,6 +327,7 @@ fn test_dl_generators() {
    assert_eq!(prog.foo.len(), 45);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_generators2() {
    ascent! {
@@ -337,6 +346,7 @@ fn test_dl_generators2() {
    assert!(rels_equal([(3,)], prog.bar));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_multiple_head_clauses() {
    ascent_m_par! {
@@ -361,6 +371,7 @@ fn test_dl_multiple_head_clauses() {
    assert!(rels_equal([(vec![4, 5],), (vec![20],)], prog.foo2));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_multiple_head_clauses2() {
    ascent_m_par! {
@@ -397,6 +408,7 @@ fn test_dl_multiple_head_clauses2() {
    ));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_disjunctions() {
    ascent! {
@@ -418,6 +430,7 @@ fn test_dl_disjunctions() {
    assert_rels_eq!([(3, 30), (2, 20)], prog.bar);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_disjunctions2() {
    let res = ascent_run! {
@@ -434,6 +447,7 @@ fn test_dl_disjunctions2() {
    assert!(res.connected.contains(&("A", "D")));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_repeated_vars() {
    ascent_m_par! {
@@ -468,6 +482,7 @@ fn test_dl_repeated_vars() {
    assert!(rels_equal([(10,)], prog.bar3_res));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_lattice1() {
    ascent_m_par! {
@@ -497,6 +512,7 @@ fn test_dl_lattice1() {
    ]))
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_dl_lattice2() {
    ascent! {
@@ -518,6 +534,7 @@ fn test_dl_lattice2() {
    println!("shortest_path ({} tuples):\n{:?}", prog.shortest_path.len(), prog.shortest_path);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run() {
    let foo_contents = (0..10).flat_map(|x| (x + 1..10).map(move |y| (x, y))).collect_vec();
@@ -539,6 +556,7 @@ fn test_ascent_run() {
    assert_eq!(res.foo.len(), 45);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run_rel_init() {
    let foo_contents = (0..10).flat_map(|x| (x + 1..10).map(move |y| (x, y))).collect_vec();
@@ -553,6 +571,7 @@ fn test_ascent_run_rel_init() {
    assert_eq!(res.foo.len(), 45);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascentception() {
    let res = ascent_run! {
@@ -572,6 +591,7 @@ fn test_ascentception() {
    assert_eq!(res.funny.len(), 20);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run_tc() {
    fn compute_tc(inp: Vec<(i32, i32)>) -> Vec<(i32, i32)> {
@@ -588,6 +608,7 @@ fn test_ascent_run_tc() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], compute_tc(vec![(1, 2), (2, 3)])));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run_tc_generic() {
    fn compute_tc<
@@ -606,6 +627,7 @@ fn test_ascent_run_tc_generic() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], compute_tc(&[(1, 2), (2, 3)])));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_tc_generic() {
    ascent! {
@@ -621,6 +643,7 @@ fn test_ascent_tc_generic() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], prog.tc));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 #[ignore = "dd: lattice + Set — Phase 6"]
 fn test_ascent_negation_through_lattices() {
@@ -646,6 +669,7 @@ fn test_ascent_negation_through_lattices() {
    assert!(rels_equal([(1, 3)], res.res));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_run_explicit_decl() {
    fn compute_tc<
@@ -668,6 +692,7 @@ fn test_ascent_run_explicit_decl() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], res));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_fac() {
    ascent_m_par! {
@@ -691,6 +716,7 @@ fn test_ascent_fac() {
    assert!(prog.fac.iter().contains(&(5, 120)));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_consuming_ascent_run_tc() {
    fn compute_tc(inp: impl Iterator<Item = (i32, i32)>) -> Vec<(i32, i32)> {
@@ -709,6 +735,7 @@ fn test_consuming_ascent_run_tc() {
    assert!(rels_equal([(1, 2), (2, 3), (1, 3)], compute_tc([(1, 2), (2, 3)].into_iter())));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join() {
    let res = ascent_run_m_par! {
@@ -727,6 +754,7 @@ fn test_ascent_simple_join() {
    assert!(rels_equal([(1, 3)], res.baz));
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join2() {
    let res = ascent_run_m_par! {
@@ -746,6 +774,7 @@ fn test_ascent_simple_join2() {
    assert_rels_eq!([(1, 3)], res.baz);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join3() {
    let res = ascent_run_m_par! {
@@ -767,6 +796,7 @@ fn test_ascent_simple_join3() {
    assert_rels_eq!([(1, 3)], res.baz);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join4() {
    #[derive(Default, Clone, Copy)]
@@ -808,6 +838,7 @@ fn test_ascent_simple_join4() {
    }
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_simple_join5() {
    let res = ascent_run_m_par! {
@@ -830,6 +861,7 @@ fn test_ascent_simple_join5() {
    assert_rels_eq!(res.baz, [(1, 2), (2, 3), (1, 3)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_ascent_wildcards() {
    let res = ascent_run_m_par! {
@@ -855,6 +887,7 @@ fn min<'a>(inp: impl Iterator<Item = (&'a i32,)>) -> impl Iterator<Item = i32> {
    inp.map(|tuple| tuple.0).min().cloned().into_iter()
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 #[ignore = "dd: general aggregation — Phase 5"]
 fn test_ascent_agg() {
@@ -877,6 +910,7 @@ fn test_ascent_agg() {
    assert_rels_eq!([(1, 2, 10)], res.baz);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 #[ignore = "dd: run_timeout feature — Phase 8"]
 fn test_run_timeout() {
@@ -896,6 +930,7 @@ fn test_run_timeout() {
    assert!(!run_timeout_res);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 #[ignore = "dd: bounded-set lattice — Phase 6"]
 fn test_ascent_bounded_set() {
@@ -918,6 +953,7 @@ fn test_ascent_bounded_set() {
    }
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_issue3() {
    #![allow(non_snake_case)]
@@ -942,6 +978,7 @@ fn test_issue3() {
    assert_rels_eq!(prog.h__, [(38, 88, 18), (76, 18, 65), (86, 73, 91), (98, 26, 91), (76, 10, 14)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_repeated_vars_simple_joins() {
    ascent_m_par! {
@@ -963,6 +1000,7 @@ fn test_repeated_vars_simple_joins() {
    assert_rels_eq!(prog.bar, [(1, 2)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 #[ignore = "dd: lattice + general agg — Phase 5/6"]
 fn test_aggregated_lattice() {
@@ -979,6 +1017,7 @@ fn test_aggregated_lattice() {
    assert_rels_eq!(res.bar, [(0, 9), (1, 9)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 #[ignore = "dd: custom ds attribute — not supported under DD"]
 fn test_ds_attr() {
@@ -997,6 +1036,7 @@ fn test_ds_attr() {
    assert_rels_eq!(res.bar, [(0, 1)]);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_rel_empty_check() {
    let res = ascent_run_m_par! {
@@ -1017,6 +1057,7 @@ fn test_rel_empty_check() {
    assert_eq!(res.path.len(), 9 * 10 / 2);
 }
 
+#[ntest_timeout::timeout(1000)]
 #[test]
 fn test_multiple_rel_definitions() {
    // When there are multiple definitions of a relation that agree on arity and column types,
