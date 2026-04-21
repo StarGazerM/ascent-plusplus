@@ -1592,11 +1592,12 @@ fn emit_closure_body(
       body.extend(init_coll(rel));
    }
    // `__unit_scope` seeds generator-only rules. Its diff type must match
-   // the rest of the dataflow's diff (isize incremental, Present batch).
+   // the rest of the dataflow's diff (i32 incremental, Present batch —
+   // FlowLog parity).
    let unit_seed_ty = if is_batch {
       quote! { ::ascent::dd::BatchDiff }
    } else {
-      quote! { isize }
+      quote! { i32 }
    };
    // `__unit_scope` seeds generator-only rules. `new_collection_from` is
    // hardcoded to `isize` diff; batch mode uses `new_collection_from_raw`
@@ -1632,18 +1633,36 @@ fn emit_closure_body(
       body.extend(b);
       hoists.extend(h);
    }
+   // Rels already deduped upstream never need sink-level materialize:
+   //   - Recursive IDBs are thresholded at bind-leave inside scope.iterative.
+   //   - Rels that feed a looping SCC pass through pre_loop_threshold.
+   // Compute the set of "already clean" rel names so we can skip the
+   // sink-attach threshold for them. FlowLog-parity — matches FlowLog's
+   // output wiring which only thresholds before printsize (for set rels),
+   // not twice.
+   let prededuped: std::collections::HashSet<String> = {
+      let mut s = std::collections::HashSet::new();
+      for scc in mir.sccs.iter() {
+         if scc.is_looping {
+            for r in scc.dynamic_relations.keys() { s.insert(r.name.to_string()); }
+            for r in scc.body_only_relations.keys() { s.insert(r.name.to_string()); }
+         }
+      }
+      s
+   };
    for rel in sorted_rels {
       let coll = relation_coll_var(&rel.name);
       let sink_id = sink_ident(rel);
-      // FlowLog pattern: after scope.iterative returns, a recursive IDB
-      // collection is already threshold'd inside the loop; re-thresholding
-      // via `materialize_rel` is pure wasted work. A non-recursive collection
-      // may have concat-duplicates; `consolidate` handles that cheaply.
-      // Lattices still need reduce (handled inside materialize_rel).
-      // Attach sink WITHOUT additional consolidate/materialize in batch mode.
-      // Recursive IDBs are already threshold'd inside `scope.iterative`;
-      // non-recursive collections are consolidated at input. FlowLog-style.
+      // FlowLog pattern: recursive IDBs threshold at bind-leave inside
+      // `scope.iterative` — re-thresholding via `materialize_rel` is pure
+      // wasted work. Lattices still need reduce (handled inside
+      // materialize_rel). Batch's `threshold_semigroup` is a distinct
+      // operator that must run here (first-seen accounting); for inc,
+      // only lattice or non-pre-deduped set rels need a materialize step.
+      let already_clean = !rel.is_lattice && prededuped.contains(&rel.name.to_string());
       let final_expr = if is_batch && !rel.is_lattice {
+         quote! { (#coll).clone() }
+      } else if !is_batch && already_clean {
          quote! { (#coll).clone() }
       } else {
          materialize_rel(rel, quote! { #coll }, is_batch)
@@ -1694,11 +1713,11 @@ fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStream {
          // Batch init: create the Collection from the input Vec via Sealer.
          let coll = relation_coll_var(&rel.name);
          let in_var = relation_input_var(&rel.name);
-         // `.clone()` because `execute_batch`'s build closure is `Fn` (may
-         // be invoked per-worker under multi-worker DD). Each invocation
-         // gets its own Vec; DD's arrange operators hash-partition so
-         // redundant-load-all-workers is correct.
-         quote! { let mut #coll = sealer.input(scope, #in_var.clone()); }
+         // Pass `&in_var` — Sealer::input takes `&[T]`. All 24 workers share
+         // one Vec; each worker hash-partitions and inserts only its 1/peers
+         // slice. Avoids 24× Vec<T> clones the `Fn` build closure previously
+         // triggered.
+         quote! { let mut #coll = sealer.input(scope, &#in_var); }
       },
       |rel| {
          // Batch attach target: inner sink clone moved into the closure.
@@ -2058,19 +2077,20 @@ fn emit_session(mir: &AscentMir) -> TokenStream {
          pub #sink_field: ::ascent::dd::Sink<#tup_ty>,
       });
       state_fields.push(quote! {
-         #state_field: ::std::collections::HashMap<#tup_ty, isize>,
+         #state_field: ::std::collections::HashMap<#tup_ty, i32>,
       });
       last_delta_fields.push(quote! {
-         #last_delta_field: ::std::vec::Vec<(#tup_ty, isize)>,
+         #last_delta_field: ::std::vec::Vec<(#tup_ty, i32)>,
       });
 
       per_rel_methods.push(quote! {
-         /// Shorthand for `sess.<rel>.insert(tuple)` — DD's `InputSession`
+         /// Shorthand for `sess.<rel>.update(tuple, +1)` — DD's `InputSession`
          /// method. Use the field directly for `advance_to`, `flush`,
-         /// `update_at`, `time`, etc.
-         pub fn #insert_m(&mut self, tuple: #tup_ty) { self.#input_field.insert(tuple); }
-         /// Shorthand for `sess.<rel>.remove(tuple)`.
-         pub fn #remove_m(&mut self, tuple: #tup_ty) { self.#input_field.remove(tuple); }
+         /// `update_at`, `time`, etc. (`.insert` exists only on `isize`-diff
+         /// sessions; FlowLog-parity i32-diff needs explicit `+1` / `-1`.)
+         pub fn #insert_m(&mut self, tuple: #tup_ty) { self.#input_field.update(tuple, 1); }
+         /// Shorthand for `sess.<rel>.update(tuple, -1)` — retract one.
+         pub fn #remove_m(&mut self, tuple: #tup_ty) { self.#input_field.update(tuple, -1); }
          /// Snapshot of net-positive tuples, built from the running state
          /// map. Only reflects deltas that have been drained from the sink
          /// (via `commit()` or `refresh_deltas()`).
@@ -2080,7 +2100,7 @@ fn emit_session(mir: &AscentMir) -> TokenStream {
          /// Deltas captured on the last `commit()` / `refresh_deltas()`.
          /// Positive diff = insertion, negative = retraction. Reads are
          /// non-destructive and return a clone.
-         pub fn #deltas_m(&self) -> ::std::vec::Vec<(#tup_ty, isize)> {
+         pub fn #deltas_m(&self) -> ::std::vec::Vec<(#tup_ty, i32)> {
             self.#last_delta_field.clone()
          }
       });
@@ -2434,20 +2454,47 @@ fn compile_nonlooping_scc(scc: &MirScc, hoist_counter: &mut usize, is_batch: boo
       out.extend(body);
       hoists.extend(pre);
    }
-   // FlowLog pattern (batch mode only): consolidate each non-looping SCC's
-   // head `__<rel>_coll` after the rules have concat'd into it. Multiple
-   // rules emitting the same tuple (e.g. CSPA's
-   // `value_flow(x,x) <-- assign(_,x)` + `value_flow(x,x) <-- assign(x,_)`)
-   // produce duplicates; without consolidation they propagate into the
-   // looping SCC's seed as redundant diffs that every iteration's
-   // `threshold_semigroup` has to dedupe — O(iter × duplicates) wasted work.
-   // Incremental/session path handles this through Variable/isize semantics.
-   // Note: FlowLog consolidates ONCE per relation after ALL non-recursive
-   // rules producing it have concat'd. Ascent's MIR splits rules into
-   // separate SCCs, so consolidating in every non-looping SCC would emit
-   // N consolidates per relation. Downstream (looping-SCC threshold /
-   // sink-attach) dedups anyway — skip per-SCC consolidate.
-   let _ = is_batch;
+   // FlowLog parity (incremental): threshold each head `__<rel>_coll`
+   // WHEN multiple rules in this SCC contribute to the same head —
+   // that's when duplicates are likely (e.g. CSPA's
+   //   value_flow(x,x) <-- assign(_,x);
+   //   value_flow(x,x) <-- assign(x,_);
+   // ). Without this, duplicates propagate into downstream looping SCCs
+   // as fat diffs, bloating inner-scope arrangements until bind-leave
+   // threshold normalizes at iteration boundaries.
+   //
+   // Single-rule-per-head heads are skipped: the body can still produce
+   // duplicates via cross-products, but that's rarer and threshold
+   // isn't free (it's an arrangement).
+   //
+   // Batch mode consolidates in the seed-enter path instead (see
+   // compile_looping_scc); threshold here would interact awkwardly with
+   // Present-diff `threshold_semigroup` first-seen accounting.
+   if !is_batch {
+      use std::collections::{HashMap, HashSet};
+      let mut head_rule_count: HashMap<String, usize> = HashMap::new();
+      for rule in &scc.rules {
+         for hcl in &rule.head_clause {
+            *head_rule_count.entry(hcl.rel.name.to_string()).or_insert(0) += 1;
+         }
+      }
+      let mut seen_heads: HashSet<String> = HashSet::new();
+      for rule in &scc.rules {
+         for hcl in &rule.head_clause {
+            let name_str = hcl.rel.name.to_string();
+            if head_rule_count.get(&name_str).copied().unwrap_or(0) < 2 {
+               continue;
+            }
+            if !seen_heads.insert(name_str) {
+               continue;
+            }
+            let coll = relation_coll_var(&hcl.rel.name);
+            out.extend(quote! {
+               #coll = #coll.threshold(|_, __w: &i32| if *__w > 0 { 1i32 } else { 0 });
+            });
+         }
+      }
+   }
    (out, hoists)
 }
 
@@ -2460,6 +2507,30 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
    let dyn_rels: Vec<&RelationIdentity> = scc.dynamic_relations.keys().sorted_by_key(|r| &r.name).collect();
    let body_only_rels: Vec<&RelationIdentity> =
       scc.body_only_relations.keys().sorted_by_key(|r| &r.name).collect();
+
+   // FlowLog-parity (incremental): threshold all outer-scope input collections
+   // BEFORE entering the iterative scope. Ascent's MIR splits non-recursive
+   // rules into separate SCCs — each with 1 rule per head — so the per-SCC
+   // `head_rule_count >= 2` threshold in `compile_nonlooping_scc` misses the
+   // case where multiple non-looping SCCs contribute to the same head (e.g.
+   // CSPA's 3 rules for `value_flow`, each in its own SCC). Without this,
+   // duplicates propagate into the loop as fat diffs, bloat inner-scope
+   // arrangement traces, and the bind-leave threshold only normalizes at
+   // iteration boundaries.
+   //
+   // Threshold once per rel here IS the FlowLog-equivalent single-threshold-
+   // per-non-recursive-stratum; ascent's SCC split makes it the right level.
+   // Batch mode is excluded — consolidate-before-enter already does the
+   // necessary Present-diff compaction there.
+   let mut pre_loop_threshold = TokenStream::new();
+   if !is_batch {
+      for rel in body_only_rels.iter().chain(dyn_rels.iter()) {
+         let coll = relation_coll_var(&rel.name);
+         pre_loop_threshold.extend(quote! {
+            #coll = #coll.threshold(|_, __w: &i32| if *__w > 0 { 1i32 } else { 0 });
+         });
+      }
+   }
 
    // 1. FlowLog naming: `in_<rel>` for entered non-recursive Collections,
    //    `in_<arr>` for entered arrangements. Consolidate before entering:
@@ -2474,7 +2545,19 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
    // dead rel.
    let used_colls = crate::analyses::UsedCollections::of(scc);
    let inner_scope_ident = Ident::new("inner", Span::call_site());
-   let enter_seed = dfg::DataflowOp::ConsolidateEnter { inner_scope: inner_scope_ident.clone() };
+   // FlowLog-parity seed entry:
+   //   - Batch (Present diffs): MUST consolidate before entering the iterative
+   //     scope. Batch-mode `threshold_semigroup` is "first-seen" accounting;
+   //     unconsolidated duplicate diffs would fake repeated new tuples.
+   //   - Incremental (isize diffs): plain `.enter(inner)`. Duplicates become
+   //     higher multiplicities, which the bind-leave `.threshold(w>0?1:0)`
+   //     cleanly normalizes. Matches FlowLog's incremental codegen
+   //     (`source.enter(inner)` — no consolidate).
+   let enter_seed = if is_batch {
+      dfg::DataflowOp::ConsolidateEnter { inner_scope: inner_scope_ident.clone() }
+   } else {
+      dfg::DataflowOp::Enter { scope: inner_scope_ident.clone() }
+   };
    let mut inner_body_only_bindings = TokenStream::new();
    for rel in &body_only_rels {
       let name = &rel.name;
@@ -2698,11 +2781,13 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
 
    let _ = scc_idx; // label generation skipped for now
 
-   // Batch mode needs a `TotalOrder` inner timestamp paired with its `()`
-   // outer so `Product<(), Iter>` satisfies `threshold_semigroup`'s bound.
-   // Incremental mode keeps `u32` outer + `u32` inner for Variable::new's
-   // arbitrary-Lattice flexibility.
-   let inner_iter_ty = if is_batch { quote! { u16 } } else { quote! { u32 } };
+   // Batch mode: `()` outer + `u16` inner. `Product<(), Iter>` is TotalOrder
+   // so `threshold_semigroup` compiles.
+   // Incremental: `u32` outer + `u16` inner (was u32). FlowLog-parity —
+   // `u16` is a Timestamp and halves inner-scope trace-entry size. 65535
+   // iterations is plenty for practical fixpoint convergence; DD panics
+   // cleanly if exceeded (unlike silent wraparound).
+   let inner_iter_ty = quote! { u16 };
    // Outer-scope non-recursive rules emitted BEFORE scope.iterative so their
    // results become part of the seed entered into the iterative loop.
    // Body assembly:
@@ -2716,6 +2801,7 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
    //      bind-and-leave.
    let body = quote! {
       #non_rec_body
+      #pre_loop_threshold
       #outer_arrs
       let #leaved_dest_tuple = scope.iterative::<#inner_iter_ty, _, _>(|inner| {
          #inner_body_only_bindings

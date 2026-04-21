@@ -60,14 +60,21 @@ pub(crate) enum DataflowOp {
       key_tuple: TokenStream,
       val_tuple: TokenStream,
    },
-   /// Set-dedup via reduce on `isize` diffs. Emits
-   /// `.map(|x| (x, ())).reduce(net-positive -> ((), 1)).map(|(k, ())| k)`.
-   /// Used for session-path set relations at bind-leave and sink-attach.
+   /// Set-dedup via `.threshold(|_, w| if *w > 0 { 1 } else { 0 })` on
+   /// `isize` diffs. FlowLog-parity: one operator (`KeySpine`-backed) that
+   /// maintains set semantics. Used for session-path set relations at
+   /// bind-leave and sink-attach.
    ///
-   /// Why not `.distinct()`: the `> 0` net check (not `!= 0`) is required
-   /// for antijoin correctness — antijoin's per-timestamp diffs can
-   /// transiently cancel without being dropped; `.distinct()` would
-   /// mis-emit in that window. See materialize_rel note in lib.rs.
+   /// Why `.threshold` over `.map → .reduce → .map`: DD 0.20's `.threshold`
+   /// is a specialized `reduce_abelian` with a *key-only* trace
+   /// (`KeySpine`) — no value payload, smaller per-record, cheaper
+   /// lookups. Our prior 3-op chain built a `(K, ())` key-value trace
+   /// (`ValSpine`) and paid for wrap/unwrap map operators around it.
+   ///
+   /// Why not `.distinct()`: `.distinct()` ignores multiplicity sign and
+   /// always emits 1 when a key is present — wrong for antijoin
+   /// correctness, where per-timestamp diffs can transiently go negative.
+   /// The `> 0` net check here handles that window.
    SetDedupReduce,
    /// Batch-path set-dedup via `threshold_semigroup`. Emits each key
    /// the first time it's seen — insert-only Present-diff semantics
@@ -198,10 +205,13 @@ pub(crate) fn lower_variable_decl(var: &Ident, read: &Ident, tup_ty: &TokenStrea
          ) = ::ascent::dd::SemigroupVariable::new(inner, Product::new(Default::default(), 1));
       }
    } else {
+      // FlowLog parity: `i32` diff (was `isize`). Halves per-trace-entry size
+      // across all arrangements downstream. i32 is Abelian + Semigroup so
+      // Variable::new is fine.
       quote! {
          let (#var, #read): (
-            Variable<_, #tup_ty, isize>,
-            ::ascent::dd::differential_dataflow::VecCollection<_, #tup_ty, isize>,
+            Variable<_, #tup_ty, i32>,
+            ::ascent::dd::differential_dataflow::VecCollection<_, #tup_ty, i32>,
          ) = Variable::new(inner, Product::new(Default::default(), 1));
       }
    }
@@ -405,13 +415,15 @@ pub(crate) fn lower_antijoin(
 /// pre-allocated `Mutex<Vec<T>>` slot (see `BatchSink`) — avoids Mutex
 /// contention at high worker counts.
 pub(crate) fn lower_sink_attach(
-   sink_id: TokenStream, final_expr: TokenStream, probe_expr: TokenStream, is_batch: bool,
+   sink_id: TokenStream, final_expr: TokenStream, probe_expr: TokenStream, worker_index_expr: TokenStream,
 ) -> TokenStream {
-   if is_batch {
-      quote! { #sink_id.attach(sealer.worker_index(), &(#final_expr), #probe_expr); }
-   } else {
-      quote! { #sink_id.attach(&(#final_expr), #probe_expr); }
-   }
+   // Both batch and inc use per-worker slots (perf profiling showed the
+   // single Arc<Mutex<Vec>> caused 250× more context-switches than FlowLog
+   // on CSPA httpd @ 24 workers — see Sink/BatchSink doc comments).
+   // `worker_index_expr` is the expression yielding this worker's index:
+   //   - inc `run()` / batch `run()`: `sealer.worker_index()`
+   //   - Session mode: literal `0` (single-worker).
+   quote! { #sink_id.attach(#worker_index_expr, &(#final_expr), #probe_expr); }
 }
 
 /// `let __unit_scope = …;` — singleton `()`-row Collection seeded at the
@@ -439,10 +451,16 @@ pub(crate) fn lower_unit_scope_decl(is_batch: bool) -> TokenStream {
          };
       }
    } else {
+      // FlowLog parity: `i32` diff (was `isize`). `new_collection_from` is
+      // hardcoded to `isize`, so we go through `new_collection_from_raw`
+      // with an explicit `(data, time, diff)` initial tuple. Incremental
+      // outer timestamp is `u32` → middle slot is `0u32` at seed time.
       quote! {
-         let __unit_scope: ::ascent::dd::differential_dataflow::VecCollection<_, (), isize> = {
+         let __unit_scope: ::ascent::dd::differential_dataflow::VecCollection<_, (), i32> = {
             use ::ascent::dd::differential_dataflow::input::Input;
-            let (mut __s, __c) = scope.new_collection_from(::std::iter::once(()));
+            let (mut __s, __c) = scope.new_collection_from_raw::<(), i32, _>(
+               ::std::iter::once(((), 0u32, 1i32))
+            );
             __s.advance_to(1);
             __s.flush();
             __c
@@ -483,12 +501,7 @@ pub(crate) fn lower(op: &DataflowOp, upstream: TokenStream) -> TokenStream {
          }).arrange_by_key()
       },
       DataflowOp::SetDedupReduce => quote! {
-         (#upstream).map(|__x| (__x, ()))
-            .reduce(|_k, __input, __output| {
-               let __net: isize = __input.iter().map(|(_, d)| *d).sum();
-               if __net > 0 { __output.push(((), 1)); }
-            })
-            .map(|(__k, ())| __k)
+         (#upstream).threshold(|_, __w: &i32| if *__w > 0 { 1i32 } else { 0 })
       },
       DataflowOp::ThresholdSemigroupPresent => quote! {
          {

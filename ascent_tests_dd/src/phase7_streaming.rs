@@ -10,6 +10,7 @@
 
 use std::sync::mpsc;
 
+use ascent::dd::InputSessionI32Ext;
 use ascent::{Dual, ascent};
 
 // ---------------------------------------------------------------------------
@@ -228,7 +229,7 @@ fn session_retraction_alt_derivation_survives() {
 
    // The delta for this commit should be *empty* for path (no net change)
    // because the cancelled derivation was rebalanced by the other one.
-   let net_diff_for_1_3: isize =
+   let net_diff_for_1_3: i32 =
       s.path_deltas().iter().filter(|(t, _)| *t == (1, 3)).map(|(_, d)| *d).sum();
    assert_eq!(net_diff_for_1_3, 0, "path(1,3) shouldn't churn in deltas");
 }
@@ -344,9 +345,9 @@ enum Event {
 /// Drive the session from a `Receiver<Event>`. Each `Commit` event flushes
 /// the dataflow and collects deltas. Returns all observed path deltas in
 /// order of appearance (one Vec per commit).
-fn drive_stream(rx: mpsc::Receiver<Event>) -> Vec<Vec<((i32, i32), isize)>> {
+fn drive_stream(rx: mpsc::Receiver<Event>) -> Vec<Vec<((i32, i32), i32)>> {
    let mut s = ChanTcS::session();
-   let mut batches: Vec<Vec<((i32, i32), isize)>> = Vec::new();
+   let mut batches: Vec<Vec<((i32, i32), i32)>> = Vec::new();
    for ev in rx {
       match ev {
          Event::Insert(a, b) => s.edge_insert((a, b)),

@@ -232,7 +232,11 @@ pub type SessionRootScope<'a> = Child<'a, Worker<timely::communication::allocato
 pub type SessionWorker = Worker<timely::communication::allocator::thread::Thread>;
 
 /// Shorthand for a single-relation input session.
-pub type SessionInput<T> = InputSession<u32, T, isize>;
+// FlowLog-parity: `i32` diff (was `isize`). Incremental `run()` and Session
+// both use i32 so the shared codegen emits one diff type. User-facing
+// `session.rel_deltas()` returns `Vec<(T, i32)>` — positive diff = insertion,
+// negative = retraction, same as before but 4 bytes vs 8.
+pub type SessionInput<T> = InputSession<u32, T, i32>;
 
 /// Anything that knows how to advance its frontier to a given time and flush.
 /// Erased behind `dyn` so a single [`Sealer`] can hold inputs of heterogeneous
@@ -246,11 +250,27 @@ pub trait Sealable {
    fn seal(&mut self, time: u32);
 }
 
-impl<D: ExchangeData> Sealable for InputSession<u32, D, isize> {
+// FlowLog parity: `i32` diff (was `isize`). Halves per-trace-entry memory
+// across all arrangements; matches FlowLog's `type Diff = i32`.
+impl<D: ExchangeData> Sealable for InputSession<u32, D, i32> {
    fn seal(&mut self, time: u32) {
       self.advance_to(time);
       self.flush();
    }
+}
+
+/// Extension trait: restore `.insert(t)` / `.remove(t)` on `i32`-diff input
+/// sessions so user code doesn't have to rewrite to `.update(t, 1)`/`-1)`.
+/// DD's `InputSession` only impls these on `isize`-diff; we mirror them for
+/// i32 so the Session-mode API reads identically to the old isize version.
+pub trait InputSessionI32Ext<D> {
+   fn insert(&mut self, element: D);
+   fn remove(&mut self, element: D);
+}
+
+impl<D: ExchangeData> InputSessionI32Ext<D> for InputSession<u32, D, i32> {
+   fn insert(&mut self, element: D) { self.update(element, 1); }
+   fn remove(&mut self, element: D) { self.update(element, -1); }
 }
 
 /// Registry of input sessions that `execute_batch` drives to the closed time
@@ -264,28 +284,57 @@ impl<D: ExchangeData> Sealable for InputSession<u32, D, isize> {
 pub struct Sealer {
    sessions: Vec<Box<dyn Sealable + 'static>>,
    worker_index: usize,
+   peers: usize,
 }
 
 impl Sealer {
-   fn new(worker_index: usize) -> Self { Self { sessions: Vec::new(), worker_index } }
+   fn new(worker_index: usize, peers: usize) -> Self {
+      Self { sessions: Vec::new(), worker_index, peers }
+   }
 
-   /// Register a `Vec<T>` as an input relation. Data is inserted at time 0
-   /// on worker 0 only; other workers get an empty InputSession. DD's
-   /// arrange operators redistribute tuples by key-hash — no data is lost.
-   /// The session is sealed to time 1 after dataflow construction.
-   pub fn input<T, G>(&mut self, scope: &mut G, data: Vec<T>) -> Collection<G, T, isize>
+   /// Worker index. Exposed so generated code can route per-worker sink writes.
+   pub fn worker_index(&self) -> usize { self.worker_index }
+
+   /// Register a `Vec<T>` as an input relation. Data is **hash-partitioned
+   /// across workers at ingest time** (FlowLog parity): each worker inserts
+   /// only the tuples whose hash mod `peers` equals its own index. This
+   /// puts tuples on the right worker *before* DD's arrange operator runs
+   /// — `arrange_by_key`'s exchange becomes a near-no-op instead of having
+   /// to shuffle all 7M tuples from worker 0 across the network.
+   ///
+   /// FlowLog does the same thing via `shard_int(first_col, peers, index)`
+   /// in its `relops.rs::apply_file`. We use a generic `Hashable`-driven
+   /// hash so any tuple type works uniformly.
+   ///
+   /// Diff type is `i32` (4 bytes) to match FlowLog; halves per-trace-entry
+   /// memory vs `isize`.
+   pub fn input<T, G>(&mut self, scope: &mut G, data: &[T]) -> Collection<G, T, i32>
    where
-      T: ExchangeData,
+      T: ExchangeData + Hashable,
       G: Scope<Timestamp = u32> + Input,
    {
-      let mut session: InputSession<u32, T, isize> = InputSession::new();
-      let coll = session.to_collection(scope);
-      if self.worker_index == 0 {
-         for t in data {
-            session.insert(t);
+      // `scope.new_collection_from_raw(empty)` (not `InputSession::new() +
+      // to_collection()`) — the latter breaks DD's fixpoint convergence
+      // at scale (BatchSealer's comment calls out "hangs at n=1025").
+      let (mut session, coll) = scope.new_collection_from_raw::<T, i32, _>(
+         ::std::iter::empty::<(T, u32, i32)>(),
+      );
+      // Parallel partition at ingest. Use `Hashable::hashed()` to match
+      // DD's OWN hash on the tuple — each arrange's exchange uses a per-
+      // key hash derived from the tuple's Hashable impl. If we partition
+      // by hash(tuple) % peers, our worker-local data is a prefix-slice
+      // of what DD's hash_partition would produce for EACH arrange's key.
+      // That's not perfect alignment, but it distributes ingest across
+      // workers (24-way parallel) rather than making worker 0 the choke
+      // point.
+      let peers = self.peers.max(1);
+      let my = self.worker_index;
+      for t in data {
+         let h: u64 = t.hashed().into();
+         if (h as usize) % peers == my {
+            session.update(t.clone(), 1);
          }
       }
-      // drop `data` on non-zero workers.
       self.sessions.push(Box::new(session));
       coll
    }
@@ -299,11 +348,26 @@ impl Sealer {
 
 /// Captures deltas emitted by a DD `Collection` into a `Vec<T>`.
 ///
+/// Two flavors differ only in diff type:
+///   - [`Sink<T>`]: `isize` diff — used by Session mode's `SessionInput`.
+///   - [`Sink32<T>`]: `i32` diff — used by incremental `run()` via
+///     `execute_batch` + `Sealer`. Matches FlowLog's `type Diff = i32` and
+///     halves per-sink-entry memory.
+///
 /// Always clone the sink *before* moving it into the `execute_batch` build
-/// closure; keep the outer clone to drain results via [`Sink::into_vec`] after
+/// closure; keep the outer clone to drain results via `.into_vec()` after
 /// `execute_batch` returns.
+/// Output sink for inc-mode `run()` + Session mode. Uses **per-worker
+/// slots** (same as `BatchSink`) to avoid mutex contention on the hot
+/// inspect path — previously a single `Arc<Mutex<Vec>>` caused 251× more
+/// context-switches than FlowLog's equivalent inspect (measured via
+/// `perf stat`: 21.5M context-switches for ours vs 85k for FlowLog on
+/// CSPA httpd @ 24 workers, accounting for ~470s of kernel sys time).
+///
+/// Each worker writes to its own slot, so the mutex is uncontested in
+/// the hot path. Drain concatenates all slots at the end.
 pub struct Sink<T: Clone + Send + 'static> {
-   buf: Arc<Mutex<Vec<(T, isize)>>>,
+   bufs: Arc<Vec<Mutex<Vec<(T, i32)>>>>,
 }
 
 impl<T: Clone + Send + 'static> Default for Sink<T> {
@@ -311,35 +375,55 @@ impl<T: Clone + Send + 'static> Default for Sink<T> {
 }
 
 impl<T: Clone + Send + 'static> Clone for Sink<T> {
-   fn clone(&self) -> Self { Self { buf: self.buf.clone() } }
+   fn clone(&self) -> Self { Self { bufs: self.bufs.clone() } }
 }
 
 impl<T: Clone + Send + 'static> Sink<T> {
-   pub fn new() -> Self { Self { buf: Arc::new(Mutex::new(Vec::new())) } }
+   pub fn new() -> Self {
+      let n = dd_worker_count();
+      let mut bufs = Vec::with_capacity(n);
+      for _ in 0..n {
+         bufs.push(Mutex::new(Vec::new()));
+      }
+      Self { bufs: Arc::new(bufs) }
+   }
 
-   /// Hook this sink onto `collection` and wire the progress probe.
-   pub fn attach<G>(&self, collection: &Collection<G, T, isize>, probe: &mut ProbeHandle<G::Timestamp>)
-   where
+   /// Hook this sink onto `collection`. Takes worker index so each
+   /// worker writes to its own slot — uncontended mutex on hot path.
+   pub fn attach<G>(
+      &self, worker_index: usize, collection: &Collection<G, T, i32>, probe: &mut ProbeHandle<G::Timestamp>,
+   ) where
       G: Scope,
       G::Timestamp: Lattice + Timestamp,
       T: ExchangeData + Hashable,
    {
-      let buf = self.buf.clone();
-      // DD 0.20: `.inspect` takes self by value — clone the `&Collection`.
+      let bufs = self.bufs.clone();
       collection
          .clone()
          .inspect(move |(d, _t, r)| {
-            buf.lock().unwrap().push((d.clone(), *r));
+            bufs[worker_index].lock().unwrap().push((d.clone(), *r));
          })
          .probe_with(probe);
    }
 
    /// Drain into a flat `Vec<T>`, expanding positive diffs and dropping rows
-   /// with net-negative multiplicity.
+   /// with net-negative multiplicity. Concatenates all per-worker slots.
    pub fn into_vec(self) -> Vec<T> {
-      let buf = std::mem::take(&mut *self.buf.lock().unwrap());
-      let mut out = Vec::with_capacity(buf.len());
-      for (t, diff) in buf {
+      let mut raw: Vec<(T, i32)> = Vec::new();
+      match Arc::try_unwrap(self.bufs) {
+         Ok(vec) => {
+            for m in vec {
+               raw.append(&mut m.into_inner().unwrap());
+            }
+         }
+         Err(arc) => {
+            for m in arc.iter() {
+               raw.append(&mut std::mem::take(&mut *m.lock().unwrap()));
+            }
+         }
+      }
+      let mut out = Vec::with_capacity(raw.len());
+      for (t, diff) in raw {
          if diff > 0 {
             for _ in 0..diff {
                out.push(t.clone());
@@ -351,12 +435,20 @@ impl<T: Clone + Send + 'static> Sink<T> {
 
    /// Drain the raw delta log — `(value, diff)` pairs — since the last call
    /// to any drain method. Positive diff = insertion, negative = retraction.
-   ///
-   /// This is the incremental-output primitive: after a `Session::commit()`
-   /// this returns only the changes since the prior commit, not the full
-   /// collection state.
-   pub fn drain_deltas(&self) -> Vec<(T, isize)> { std::mem::take(&mut *self.buf.lock().unwrap()) }
+   /// Concatenates all per-worker slots.
+   pub fn drain_deltas(&self) -> Vec<(T, i32)> {
+      let mut out = Vec::new();
+      for m in self.bufs.iter() {
+         out.append(&mut std::mem::take(&mut *m.lock().unwrap()));
+      }
+      out
+   }
 }
+
+// FlowLog-parity complete: `Sink<T>` above uses `i32` diffs. Incremental
+// `run()` and Session both go through this same `Sink<T>` now — generated
+// code emits one diff type across the board. Previously we had a parallel
+// `Sink32<T>` during the transition; removed once Session was also switched.
 
 /// Runs a single-worker, single-dataflow batch computation to completion.
 ///
@@ -636,8 +728,9 @@ where F: for<'a> Fn(&mut RootScope<'a>, &mut Sealer, &mut ProbeHandle<u32>) + Se
    timely::execute::execute(config, move |worker| {
       let build = build.clone();
       let worker_index = worker.index();
+      let peers = worker.peers();
       let (mut sealer, probe) = worker.dataflow::<u32, _, _>(|scope| {
-         let mut sealer = Sealer::new(worker_index);
+         let mut sealer = Sealer::new(worker_index, peers);
          let mut probe = ProbeHandle::new();
          build(scope, &mut sealer, &mut probe);
          (sealer, probe)
@@ -726,7 +819,7 @@ mod tests {
       let path_sink_for_build = path_sink.clone();
 
       let (mut worker, (mut edge, mut probe)) = build_session_worker(move |scope| {
-         let mut edge: InputSession<u32, (i32, i32), isize> = InputSession::new();
+         let mut edge: InputSession<u32, (i32, i32), i32> = InputSession::new();
          let edge_coll = edge.to_collection(scope);
          let mut probe: ProbeHandle<u32> = ProbeHandle::new();
 
@@ -736,8 +829,8 @@ mod tests {
             // The Variable itself is consumed by `.set(...)`; we read the
             // companion Collection directly (no `*var` deref any more).
             let (path_var, path_coll): (
-               Variable<_, (i32, i32), isize>,
-               VecCollection<_, (i32, i32), isize>,
+               Variable<_, (i32, i32), i32>,
+               VecCollection<_, (i32, i32), i32>,
             ) = Variable::new(inner, Product::new(Default::default(), 1));
 
             let rule1 = edge_inner.clone();
@@ -761,7 +854,7 @@ mod tests {
       // Helper: advance all inputs to `next_epoch` and drive the worker to
       // that frontier, then return the deltas the path sink saw.
       let mut epoch: u32 = 0;
-      let mut step_to = |edge: &mut InputSession<u32, (i32, i32), isize>,
+      let mut step_to = |edge: &mut InputSession<u32, (i32, i32), i32>,
                          probe: &mut ProbeHandle<u32>,
                          worker: &mut timely::worker::Worker<_>,
                          epoch: &mut u32| {
@@ -775,12 +868,12 @@ mod tests {
       };
 
       // Commit 1: insert 1→2, 2→3. Expect path {(1,2), (2,3), (1,3)}.
-      edge.insert((1, 2));
-      edge.insert((2, 3));
+      edge.update((1, 2), 1);
+      edge.update((2, 3), 1);
       step_to(&mut edge, &mut probe, &mut worker, &mut epoch);
 
       // Running net multiplicity state (what Session::*_snapshot builds on).
-      let mut path_state: std::collections::HashMap<(i32, i32), isize> = Default::default();
+      let mut path_state: std::collections::HashMap<(i32, i32), i32> = Default::default();
       for (t, d) in path_sink.drain_deltas() {
          *path_state.entry(t).or_insert(0) += d;
       }
@@ -789,7 +882,7 @@ mod tests {
       assert_eq!(snap, vec![(1, 2), (1, 3), (2, 3)]);
 
       // Commit 2: add 3→4. Incrementally expect (1,4), (2,4), (3,4) added.
-      edge.insert((3, 4));
+      edge.update((3, 4), 1);
       step_to(&mut edge, &mut probe, &mut worker, &mut epoch);
       let incremental = path_sink.drain_deltas();
       for (t, d) in &incremental {
@@ -800,7 +893,7 @@ mod tests {
       assert_eq!(added, vec![(1, 4), (2, 4), (3, 4)]);
 
       // Commit 3: retract 2→3. Expect (1,3), (2,3), (2,4) all retracted, (1,4) survives via 1→2→…→4.
-      edge.remove((2, 3));
+      edge.update((2, 3), -1);
       step_to(&mut edge, &mut probe, &mut worker, &mut epoch);
       for (t, d) in path_sink.drain_deltas() {
          *path_state.entry(t).or_insert(0) += d;
