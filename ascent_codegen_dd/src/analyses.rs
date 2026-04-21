@@ -114,3 +114,77 @@ impl RelationPlacement {
 /// the codegen can keep using `proc_macro2::Ident` without importing `Span`.
 #[allow(dead_code)]
 pub(crate) fn ident_here(name: &str) -> Ident { Ident::new(name, Span::call_site()) }
+
+/// Relation names whose `__<rel>_coll` (Collection form, not arrangement)
+/// is actually referenced by this SCC's rule-body code generation. Used to
+/// skip emitting dead `let in_<rel> = …consolidate().enter(inner);` bindings
+/// for body-only relations whose reads all go through shared arrangements.
+///
+/// A rel's Collection gets referenced by `compile_*` in these cases:
+///   1. Sole clause of a rule (single-clause body).
+///   2. First clause of a 2+ clause rule whose first join CAN'T take the
+///      LHS-shared path (so `compile_first_clause`'s `flat_map(rel_coll)`
+///      result survives into the final token stream).
+///   3. Aggregated relation in an `agg` body item.
+///
+/// LHS-shared kicks in when `simple_join_start_index == Some(0)`, the first
+/// clause has non-empty `indices` + no `cond_clauses` (so `prior_rel` is
+/// preserved), and the second clause has non-empty `indices` + no cond
+/// clauses. Conservative — may keep a few unnecessary `in_<rel>` bindings
+/// in edge cases; never drops a needed one.
+pub(crate) struct UsedCollections {
+   names: HashSet<Ident>,
+}
+
+impl UsedCollections {
+   pub fn of(scc: &MirScc) -> Self {
+      let mut names = HashSet::new();
+      for rule in &scc.rules {
+         // (3) Agg clauses always read rel_coll for their aggregated relation.
+         for it in &rule.body_items {
+            if let MirBodyItem::Agg(agg) = it {
+               names.insert(agg.rel.relation.name.clone());
+            }
+         }
+
+         // Collect just the clause items (skip generators / conds / aggs).
+         let clauses: Vec<_> = rule
+            .body_items
+            .iter()
+            .filter_map(|it| if let MirBodyItem::Clause(cl) = it { Some(cl) } else { None })
+            .collect();
+
+         if clauses.is_empty() {
+            continue;
+         }
+
+         // (1) Single-clause rule: the sole clause's Collection drives the flat_map.
+         if clauses.len() == 1 {
+            names.insert(clauses[0].rel.relation.name.clone());
+            continue;
+         }
+
+         // (2) Multi-clause: check if the first join can take LHS-shared.
+         //     Matches the conditions in `compile_join_clause`:
+         //       - simple_join_start_index == Some(0)
+         //       - first clause: non-empty indices + no cond_clauses (so
+         //         `prior_rel` remains Some through the ccl-handling loop)
+         //       - second clause: non-empty indices + no cond_clauses
+         //         (so `can_use_shared` and no post-join filter overrides it)
+         let lhs_shared_ok = rule.simple_join_start_index == Some(0)
+            && !clauses[0].rel.indices.is_empty()
+            && clauses[0].cond_clauses.is_empty()
+            && !clauses[1].rel.indices.is_empty()
+            && clauses[1].cond_clauses.is_empty();
+
+         if !lhs_shared_ok {
+            // First clause's `compile_first_clause` flat_map survives into the
+            // output — Collection IS referenced.
+            names.insert(clauses[0].rel.relation.name.clone());
+         }
+      }
+      Self { names }
+   }
+
+   pub fn contains(&self, name: &Ident) -> bool { self.names.contains(name) }
+}

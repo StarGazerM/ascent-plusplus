@@ -20,12 +20,13 @@
 extern crate proc_macro;
 
 mod analyses;
+mod dfg;
 
 use itertools::Itertools;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use syn::Expr;
 use syn::spanned::Spanned;
+use syn::{Expr, Type};
 
 use ascent_mir::syn_utils::{expr_get_vars, pattern_get_vars};
 use ascent_mir::utils::{expr_to_ident, is_wild_card, tuple, tuple_type};
@@ -45,12 +46,80 @@ use ascent_mir::{
 /// `::ascent_codegen_dd::compile_mir! { mir_v1 { … } }` verbatim. This macro
 /// then parses the MIR, delegates to `compile_mir_dd`, and returns the final
 /// generated code.
+///
+/// # Debug dump
+///
+/// Set `ASCENT_DD_DUMP_RUST=<path>` to append every expansion's output
+/// Rust to that file. Useful for auditing codegen quality (closure count,
+/// clone count, generic instantiations) without re-running the macro by
+/// hand. Value `-` prints to stderr. No effect on compiled output.
 #[proc_macro]
 pub fn compile_mir(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
    match ::ascent_mir::parse_mir(input.into()) {
-      Ok((mir, is_ascent_run)) => compile_mir_dd(&mir, is_ascent_run).into(),
+      Ok((mir, is_ascent_run)) => {
+         let code = compile_mir_dd(&mir, is_ascent_run);
+         maybe_dump_generated_rust(&mir, &code);
+         code.into()
+      },
       Err(err) => err.to_compile_error().into(),
    }
+}
+
+/// If `ASCENT_DD_DUMP_RUST` is set, append the generated Rust to the file
+/// (or stderr when `-`). Prefixes with the program's struct name and a
+/// short MIR summary so multi-program projects are greppable.
+fn maybe_dump_generated_rust(mir: &AscentMir, code: &TokenStream) {
+   let Ok(target) = std::env::var("ASCENT_DD_DUMP_RUST") else { return };
+
+   let backend_path_str = {
+      let p = &mir.config.backend_path;
+      quote! { #p }.to_string()
+   };
+   let header = format!(
+      "// === {struct_name} :: {n_rels} rels / {n_sccs} SCCs / \
+       {n_rules} rules (backend_path={backend_path_str}) ===\n",
+      struct_name = mir.signatures.declaration.ident,
+      n_rels = mir.relations_ir_relations.len(),
+      n_sccs = mir.sccs.len(),
+      n_rules = mir.sccs.iter().map(|s| s.rules.len()).sum::<usize>(),
+   );
+
+   // Try to pretty-print via rustfmt subprocess; fall back to raw tokens.
+   let pretty = rustfmt_tokenstream(code).unwrap_or_else(|_| code.to_string());
+   let out = format!("{header}{pretty}\n\n");
+
+   if target == "-" {
+      eprint!("{out}");
+      return;
+   }
+   use std::io::Write;
+   if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&target) {
+      let _ = f.write_all(out.as_bytes());
+   }
+}
+
+/// Spawn rustfmt and pipe the tokens through it. Returns `Err` if rustfmt
+/// is missing, errors, or the tokens don't form a valid file.
+fn rustfmt_tokenstream(code: &TokenStream) -> std::io::Result<String> {
+   use std::io::Write;
+   use std::process::{Command, Stdio};
+   // Wrap in a dummy fn — the code may be either a block (ascent_run!) or
+   // a sequence of items (ascent!). Wrapping in a block covers both cases
+   // so rustfmt always sees something parseable.
+   let wrapped = format!("fn __dd_generated() {{\n{}\n}}\n", code);
+   let mut child = Command::new("rustfmt")
+      .arg("--edition=2021")
+      .arg("--emit=stdout")
+      .stdin(Stdio::piped())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::null())
+      .spawn()?;
+   child.stdin.as_mut().unwrap().write_all(wrapped.as_bytes())?;
+   let out = child.wait_with_output()?;
+   if !out.status.success() {
+      return Err(std::io::Error::new(std::io::ErrorKind::Other, "rustfmt failed"));
+   }
+   Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +507,38 @@ fn plan_clause(
    (plans, shared_in_clause_order, new_in_clause_order, filters, computed_keys)
 }
 
+/// Emit a single-clause body projection — the `Collection → Collection`
+/// operator that takes the clause's rel_coll and projects one head tuple
+/// per input tuple (when no filters) or optionally per input tuple (when
+/// there are filters).
+///
+/// Without filters, emits `.map(…)` — cheaper than `.flat_map(… Some(…))`
+/// at both compile and runtime (no Option allocation / unwrap per row).
+/// With filters, keeps the `.flat_map(… if filter { Some(…) } else { None })`
+/// shape since the filter can dynamically reject rows.
+fn emit_single_clause_projection(
+   rel_coll: &Ident, destruct: &TokenStream, row_ty: &Type, var_rebinds: &[TokenStream], filters: &[TokenStream],
+   head_expr_tuple: &TokenStream,
+) -> TokenStream {
+   let op = if filters.is_empty() {
+      dfg::DataflowOp::MapProject {
+         destructure: destruct.clone(),
+         row_ty: row_ty.clone(),
+         var_rebinds: var_rebinds.to_vec(),
+         head_expr: head_expr_tuple.clone(),
+      }
+   } else {
+      dfg::DataflowOp::FilterMapProject {
+         destructure: destruct.clone(),
+         row_ty: row_ty.clone(),
+         var_rebinds: var_rebinds.to_vec(),
+         filters: filters.to_vec(),
+         head_expr: head_expr_tuple.clone(),
+      }
+   };
+   dfg::lower(&op, quote! { #rel_coll.clone() })
+}
+
 fn destructure_pattern(plans: &[ColPlan]) -> TokenStream {
    let parts: Vec<TokenStream> = plans
       .iter()
@@ -614,108 +715,54 @@ fn compile_join_clause(
       },
       _ => None,
    };
-   let tokens = if can_use_shared && lhs_shared_arr.is_some() {
-      let lhs_arr = lhs_shared_arr.unwrap();
-      if let Some((head_row_ty, head_expr_tuple)) = fused_head.as_ref() {
-         // Bind lv/rv/k as refs (via match ergonomics: `let (x,) = &(1,);`
-         // gives x: &T). Head expressions like `*x` and `Convert::convert(x)`
-         // both work uniformly with Ref-kind vars — matching what the
-         // non-fused `.map(|__b| { #destr; head })` path does via
-         // `emit_user_destructure(&__b)`.
-         quote! {
-            {
-               #lhs_arr.clone().join_core(#shared_arr_name.clone(), |__k, __lv, __rv| {
-                  let (#accum_vals_tuple, #new_vars_tuple) = (__lv, __rv);
-                  let #join_key_pattern = __k;
-                  ::std::option::Option::Some::<#head_row_ty>(#head_expr_tuple)
-               })
-            }
-         }
-      } else {
-         quote! {
-            {
-               #lhs_arr.clone().join_core(#shared_arr_name.clone(), |__k, __lv, __rv| {
-                  let (#accum_vals_tuple, #new_vars_tuple) = (__lv.clone(), __rv.clone());
-                  let #join_key_pattern = __k.clone();
-                  ::std::option::Option::Some::<_>(#out_tuple)
-               })
-            }
-         }
-      }
-   } else if can_use_shared {
-      if let Some((head_row_ty, head_expr_tuple)) = fused_head.as_ref() {
-         quote! {
-            {
-               let __l = (#accum).map(move |__b| {
-                  #destr_accum
-                  (#accum_key_tuple, #accum_vals_cloned)
-               }).arrange_by_key();
-               __l.join_core(#shared_arr_name.clone(), |__k, __lv, __rv| {
-                  let (#accum_vals_tuple, #new_vars_tuple) = (__lv, __rv);
-                  let #join_key_pattern = __k;
-                  ::std::option::Option::Some::<#head_row_ty>(#head_expr_tuple)
-               })
-            }
-         }
-      } else {
-         quote! {
-            {
-               let __l = (#accum).map(move |__b| {
-                  #destr_accum
-                  (#accum_key_tuple, #accum_vals_cloned)
-               }).arrange_by_key();
-               __l.join_core(#shared_arr_name.clone(), |__k, __lv, __rv| {
-                  let (#accum_vals_tuple, #new_vars_tuple) = (__lv.clone(), __rv.clone());
-                  let #join_key_pattern = __k.clone();
-                  ::std::option::Option::Some::<_>(#out_tuple)
-               })
-            }
-         }
-      }
-   } else if let Some((head_row_ty, head_expr_tuple)) = fused_head.as_ref() {
-      quote! {
-         {
-            let __l = (#accum).map(move |__b| {
-               #destr_accum
-               (#accum_key_tuple, #accum_vals_cloned)
-            }).arrange_by_key();
-            let __r = #rel_coll.clone().flat_map(move |#destruct| {
-               if #filter_pred {
-                  ::std::option::Option::Some((#clause_key_tuple, #new_vars_cols_tuple))
-               } else {
-                  ::std::option::Option::None
-               }
-            }).arrange_by_key();
-            __l.join_core(__r, |__k, __lv, __rv| {
-               let (#accum_vals_tuple, #new_vars_tuple) = (__lv, __rv);
-               let #join_key_pattern = __k;
-               ::std::option::Option::Some::<#head_row_ty>(#head_expr_tuple)
-            })
-         }
-      }
-   } else {
-      // Fallback: per-clause arrangement (filters or no-key clause).
-      quote! {
-         {
-            let __l = (#accum).map(move |__b| {
-               #destr_accum
-               (#accum_key_tuple, #accum_vals_cloned)
-            }).arrange_by_key();
-            let __r = #rel_coll.clone().flat_map(move |#destruct| {
-               if #filter_pred {
-                  ::std::option::Option::Some((#clause_key_tuple, #new_vars_cols_tuple))
-               } else {
-                  ::std::option::Option::None
-               }
-            }).arrange_by_key();
-            __l.join_core(__r, |__k, __lv, __rv| {
-               let (#accum_vals_tuple, #new_vars_tuple) = (__lv.clone(), __rv.clone());
-               let #join_key_pattern = __k.clone();
-               ::std::option::Option::Some::<_>(#out_tuple)
-            })
-         }
-      }
+   // Pick the join's emission style — fused (terminal clause) or pass-through.
+   let emit = match fused_head.as_ref() {
+      Some((head_row_ty, head_expr_tuple)) => dfg::JoinEmit::Fused {
+         head_row_ty: head_row_ty.clone(),
+         head_expr_tuple: head_expr_tuple.clone(),
+      },
+      None => dfg::JoinEmit::PassThrough { out_tuple: out_tuple.clone() },
    };
+
+   // LHS arrangement: either the shared arr from a prior clause (LHS-shared
+   // fast path) OR a per-rule `(accum).map(...).arrange_by_key()`.
+   let (lhs_arr_expr, lhs_prelude) = match &lhs_shared_arr {
+      Some(lhs_arr) if can_use_shared => (quote! { #lhs_arr.clone() }, TokenStream::new()),
+      _ => {
+         let lhs_build = dfg::lower_map_arrange_lhs(
+            accum,
+            destr_accum,
+            accum_key_tuple,
+            accum_vals_cloned,
+         );
+         (quote! { __l }, quote! { let __l = #lhs_build; })
+      },
+   };
+
+   // RHS arrangement: shared trace if the clause has no per-use filter and
+   // has indices; otherwise a per-clause `flat_map(filter + reshape).arrange`.
+   let (rhs_arr_expr, rhs_prelude) = if can_use_shared {
+      (quote! { #shared_arr_name.clone() }, TokenStream::new())
+   } else {
+      let rhs_build = dfg::lower_flatmap_filter_arrange(
+         &rel_coll,
+         destruct,
+         filter_pred,
+         clause_key_tuple,
+         new_vars_cols_tuple,
+      );
+      (quote! { __r }, quote! { let __r = #rhs_build; })
+   };
+
+   let join = dfg::lower_join_core(&dfg::JoinCore {
+      lhs_arr_expr,
+      rhs_arr_expr,
+      accum_vals_tuple,
+      new_vars_tuple,
+      join_key_pattern,
+      emit,
+   });
+   let tokens = quote! { { #lhs_prelude #rhs_prelude #join } };
 
    (out_bound, tokens)
 }
@@ -1186,17 +1233,11 @@ fn compile_rule_head_exprs(
       let head_expr_tuple = build_expr_tuple(&hcl.args);
       let row_ty = tuple_type(&hcl.rel.field_types);
       let destruct = destructure_pattern(&plans);
-      let filter_pred = if filters.is_empty() { quote! { true } } else { quote! { #( ( #filters ) )&&* } };
       let var_rebinds: Vec<TokenStream> = plans
          .iter()
          .filter_map(|p| p.var_binding.as_ref().map(|(v, c)| quote! { let #v = &#c; }))
          .collect();
-      let expr = quote! {
-         #rel_coll.clone().flat_map(move |#destruct| -> ::std::option::Option<#row_ty> {
-            #(#var_rebinds)*
-            if #filter_pred { ::std::option::Option::Some(#head_expr_tuple) } else { ::std::option::Option::None }
-         })
-      };
+      let expr = emit_single_clause_projection(&rel_coll, &destruct, &row_ty, &var_rebinds, &filters, &head_expr_tuple);
       return (vec![(hcl.rel.name.clone(), expr)], TokenStream::new());
    }
 
@@ -1275,7 +1316,6 @@ fn compile_rule_with_head_target(
       let head_expr_tuple = build_expr_tuple(&hcl.args);
       let row_ty = tuple_type(&hcl.rel.field_types);
       let destruct = destructure_pattern(&plans);
-      let filter_pred = if filters.is_empty() { quote! { true } } else { quote! { #( ( #filters ) )&&* } };
       // plan_clause's destructure binds col idents (`__c0, __c1`). `build_expr_tuple`
       // emits user var names. Add `let user_var = &col_ident;` rebindings so the
       // head expression can reference user var names (as refs, matching the
@@ -1284,13 +1324,12 @@ fn compile_rule_with_head_target(
          .iter()
          .filter_map(|p| p.var_binding.as_ref().map(|(v, c)| quote! { let #v = &#c; }))
          .collect();
+      let projection =
+         emit_single_clause_projection(&rel_coll, &destruct, &row_ty, &var_rebinds, &filters, &head_expr_tuple);
       return (
          quote! {
             {
-               let __prod = #rel_coll.clone().flat_map(move |#destruct| -> ::std::option::Option<#row_ty> {
-                  #(#var_rebinds)*
-                  if #filter_pred { ::std::option::Option::Some(#head_expr_tuple) } else { ::std::option::Option::None }
-               });
+               let __prod = #projection;
                #head_target_ident = #head_target_ident.concat(__prod);
             }
          },
@@ -2526,13 +2565,24 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
    //    their equivalent chain (`valueflow = t1.concat(t2).concat(t3).consolidate()`).
    //    Without consolidate, duplicates enter the iterative scope and cause
    //    threshold_semigroup's "first-seen" accounting to loop more iterations.
+   // Pre-compute which body-only rels have their Collection actually read
+   // (vs only reached through shared arrangements). Dead `in_<rel>` saves
+   // both generated code size AND a runtime `consolidate()` operator per
+   // dead rel.
+   let used_colls = crate::analyses::UsedCollections::of(scc);
+   let inner_scope_ident = Ident::new("inner", Span::call_site());
+   let enter_seed = dfg::DataflowOp::ConsolidateEnter { inner_scope: inner_scope_ident.clone() };
    let mut inner_body_only_bindings = TokenStream::new();
    for rel in &body_only_rels {
       let name = &rel.name;
+      if !used_colls.contains(name) {
+         continue;
+      }
       let coll = relation_coll_var(name);
       let seed = Ident::new(&format!("in_{}", name), name.span());
+      let rhs = dfg::lower(&enter_seed, quote! { #coll.clone() });
       inner_body_only_bindings.extend(quote! {
-         let #seed = #coll.clone().consolidate().enter(inner);
+         let #seed = #rhs;
       });
    }
    let mut inner_dyn_seed_bindings = TokenStream::new();
@@ -2540,8 +2590,9 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
       let name = &rel.name;
       let coll = relation_coll_var(name);
       let seed = Ident::new(&format!("in_{}", name), name.span());
+      let rhs = dfg::lower(&enter_seed, quote! { #coll.clone() });
       inner_dyn_seed_bindings.extend(quote! {
-         let #seed = #coll.clone().consolidate().enter(inner);
+         let #seed = #rhs;
       });
    }
 
@@ -2551,8 +2602,12 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
    let mut var_decls = TokenStream::new();
    // Enter the outer unit collection into this iterative scope so fact /
    // generator-first rules inside the SCC can seed from it.
+   let unit_enter = dfg::lower(
+      &dfg::DataflowOp::Enter { scope: inner_scope_ident.clone() },
+      quote! { __unit_scope.clone() },
+   );
    var_decls.extend(quote! {
-      let __unit_inner = __unit_scope.clone().enter(inner);
+      let __unit_inner = #unit_enter;
    });
    // DD 0.20 API change: `Variable::new` returns `(Variable, Collection)` —
    // no more `Deref`. Unpack here so downstream shadow bindings can read
@@ -2587,6 +2642,9 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
    let mut shadow_bindings = TokenStream::new();
    for rel in &body_only_rels {
       let name = &rel.name;
+      if !used_colls.contains(name) {
+         continue;
+      }
       let coll = relation_coll_var(name);
       let seed = Ident::new(&format!("in_{}", name), name.span());
       shadow_bindings.extend(quote! {
@@ -2644,8 +2702,12 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
          }
          if is_body_only {
             outer_arrs.extend(emit_shared_arrangement_binding(ir_rel));
+            let arr_enter = dfg::lower(
+               &dfg::DataflowOp::Enter { scope: inner_scope_ident.clone() },
+               quote! { #arr_name },
+            );
             outer_arr_enters.extend(quote! {
-               let #arr_name = #arr_name.enter(inner);
+               let #arr_name = #arr_enter;
             });
          } else {
             inner_arrs.extend(emit_shared_arrangement_binding(ir_rel));
@@ -2723,18 +2785,9 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
       // Build chain: rule_0.concat(rule_1)...concat(seed). If no rules for this
       // head (shouldn't happen for dyn_rel in looping SCC), use seed alone.
       // FlowLog-exact: `t_0.clone().concat(t_1.clone())...concat(in_X.clone())`.
-      let concat_chain: TokenStream = if rule_idents.is_empty() {
-         quote! { #seed.clone() }
-      } else {
-         let first = &rule_idents[0];
-         let rest: Vec<TokenStream> = rule_idents[1..]
-            .iter()
-            .map(|r| quote! { .concat(#r.clone()) })
-            .collect();
-         quote! {
-            #first.clone() #(#rest)* .concat(#seed.clone())
-         }
-      };
+      let mut chain_sources = rule_idents.clone();
+      chain_sources.push(seed.clone());
+      let concat_chain = dfg::lower_concat_chain(&chain_sources);
       let materialized = materialize_rel(rel, concat_chain, is_batch);
       bind_leave_exprs.push(quote! {
          {
@@ -2827,40 +2880,18 @@ fn materialize_rel(rel: &RelationIdentity, coll_expr: TokenStream, is_batch: boo
    if !rel.is_lattice {
       if is_batch {
          // Batch path: Present-diff set relation. `threshold_semigroup`
-         // on an arranged-by-self trace emits each key once, the first
-         // time it is seen — exactly the canonical DD datalog pattern
-         // (graspan1.rs). Insert-only semantics, no multiplicity math.
-         return quote! {
-            {
-               // DD 0.20: `ThresholdTotal::threshold_semigroup` is impl'd
-               // DIRECTLY on `VecCollection` (i.e. `Collection<G, Vec<...>>`)
-               // — no need to call `.arrange_by_self()` first. FlowLog emits
-               // `coll.concat(...).threshold_semigroup(...)` in exactly this
-               // form. Removing the extra `arrange_by_self` saves a whole
-               // DD arrangement operator per relation (3 per CSPA SCC).
-               use ::ascent::dd::differential_dataflow::operators::ThresholdTotal;
-               (#coll_expr)
-                  .threshold_semigroup(|_, _, old: ::std::option::Option<&::ascent::dd::BatchDiff>| {
-                     old.is_none().then_some(::ascent::dd::BATCH_DIFF_ONE)
-                  })
-            }
-         };
+         // emits each key once, the first time it is seen — the canonical
+         // DD datalog pattern (graspan1.rs). Removing the `.arrange_by_self`
+         // prelude saves one DD arrangement operator per relation.
+         return dfg::lower(&dfg::DataflowOp::ThresholdSemigroupPresent, coll_expr);
       }
       // Session path: isize-diff set relation. Emit diff 1 iff net
       // multiplicity > 0. The `> 0` check (not just `!= 0`) is required
       // for antijoin correctness — antijoin's per-timestamp diffs can
       // transiently cancel without being dropped; `reduce` with explicit
       // net check stays correct where `.distinct()` would mis-emit.
-      return quote! {
-         {
-            (#coll_expr).map(|__x| (__x, ()))
-               .reduce(|_k, __input, __output| {
-                  let __net: isize = __input.iter().map(|(_, d)| *d).sum();
-                  if __net > 0 { __output.push(((), 1)); }
-               })
-               .map(|(__k, ())| __k)
-         }
-      };
+      let body = dfg::lower(&dfg::DataflowOp::SetDedupReduce, coll_expr);
+      return quote! { { #body } };
    }
    // Lattice relation: non-lattice cols = key, last col = value.
    let arity = rel.field_types.len();
@@ -2894,28 +2925,16 @@ fn materialize_rel(rel: &RelationIdentity, coll_expr: TokenStream, is_batch: boo
    // type (many lattices — e.g. `Dual<u32>` — don't derive `Default`; we
    // already know there's at least one contribution because `reduce` only
    // fires for keys with non-empty input).
-   quote! {
-      {
-         let __keyed = (#coll_expr).map(|#destruct| (#key_tuple, #lat_ident));
-         let __reduced = __keyed.reduce(|_key, __input, __output| {
-            let mut __acc: ::std::option::Option<#last_ty> = ::std::option::Option::None;
-            for (__v, __d) in __input.iter() {
-               if *__d > 0 {
-                  match &mut __acc {
-                     ::std::option::Option::None => { __acc = ::std::option::Option::Some((*__v).clone()); }
-                     ::std::option::Option::Some(__a) => {
-                        <#last_ty as ::ascent::Lattice>::join_mut(__a, (*__v).clone());
-                     }
-                  }
-               }
-            }
-            if let ::std::option::Option::Some(__l) = __acc {
-               __output.push((__l, 1));
-            }
-         });
-         __reduced.map(|(#key_tuple, __l)| #flat_out_tuple)
-      }
-   }
+   dfg::lower(
+      &dfg::DataflowOp::LatticeReduce {
+         destructure: destruct,
+         key_tuple,
+         lat_ident,
+         lat_ty: last_ty.clone(),
+         flat_out_tuple,
+      },
+      coll_expr,
+   )
 }
 
 /// Name of the shared arrangement binding for a given `IrRelation`.
@@ -2946,13 +2965,15 @@ fn emit_shared_arrangement_binding(ir_rel: &ascent_mir::IrRelation) -> TokenStre
          let c = &col_idents[i];
          quote! { #c }
       }).collect();
-   let key_tuple = tuple_tokens(&key_parts);
-   let val_tuple = tuple_tokens(&val_parts);
-   quote! {
-      let #arr_ident = #rel_coll.clone().flat_map(move |#destruct| {
-         ::std::option::Option::Some((#key_tuple, #val_tuple))
-      }).arrange_by_key();
-   }
+   let rhs = dfg::lower(
+      &dfg::DataflowOp::ArrangeByKeyReshape {
+         destructure: destruct,
+         key_tuple: tuple_tokens(&key_parts),
+         val_tuple: tuple_tokens(&val_parts),
+      },
+      quote! { #rel_coll.clone() },
+   );
+   quote! { let #arr_ident = #rhs; }
 }
 
 fn relation_input_var(name: &Ident) -> Ident { Ident::new(&format!("__{}_in", name), name.span()) }
