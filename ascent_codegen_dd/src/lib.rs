@@ -783,12 +783,7 @@ fn tuple_tokens_as_pattern(entries: &[TokenStream]) -> TokenStream { tuple_token
 /// vars as owned `T`.
 fn emit_filter(accum: TokenStream, bound_vars: &[Ident], var_kinds: &[VarKind], cond: &syn::Expr) -> TokenStream {
    let destr = emit_user_destructure(bound_vars, var_kinds, quote! { __b });
-   quote! {
-      (#accum).filter(move |__b| {
-         #destr
-         #cond
-      })
-   }
+   dfg::lower_filter(accum, destr, quote! { #cond })
 }
 
 /// Detect Ascent's negation aggregator so we can lower `!R(args)` (or an
@@ -859,22 +854,11 @@ fn emit_negation(
       quote! { #( ( #filters ) )&&* }
    };
 
-   quote! {
-      {
-         let __r_keys = #rel_coll.clone().flat_map(move |#destruct| {
-            if #filter_pred {
-               ::std::option::Option::Some(#clause_key_tuple)
-            } else {
-               ::std::option::Option::None
-            }
-         });
-         let __accum_keyed = (#accum).map(move |__b| {
-            #destr_accum
-            (#accum_key_tuple, #accum_vals_cloned)
-         });
-         __accum_keyed.antijoin(__r_keys).map(|(#join_key_pattern, #accum_vals_tuple)| #accum_bound_tuple)
-      }
-   }
+   dfg::lower_antijoin(
+      accum, destr_accum, accum_key_tuple, accum_vals_cloned,
+      &rel_coll, destruct, filter_pred, clause_key_tuple,
+      join_key_pattern, accum_vals_tuple, accum_bound_tuple,
+   )
 }
 
 /// Lower an `agg pat = <fn>(bound_args...) in rel(rel_args...)` body item.
@@ -1031,43 +1015,12 @@ fn emit_agg(
       }
    };
 
-   let tokens = quote! {
-      {
-         // DD 0.20: `reduce` is inherent on Collection — no trait import.
-         // Arrange rel_coll as Collection<(GroupKey, FullRelTuple)>.
-         let __agg_input = #rel_coll.clone().flat_map(move |#agg_destruct| {
-            if #filter_pred {
-               ::std::option::Option::Some((#clause_key_tuple, #rel_full_value))
-            } else {
-               ::std::option::Option::None
-            }
-         });
-         // reduce: per-key, feed the consolidated values to the user's
-         // aggregator function and emit each yielded result. `AggResult`
-         // lifts non-`Ord` outputs (e.g. `f64` → `OrderedFloat<f64>`) so
-         // they satisfy DD's `Data` bound; we unwrap on the other side.
-         let __agg_result = __agg_input.reduce(|_k, __input, __output| {
-            let __items = __input.iter()
-               .filter(|(_, __d)| *__d > 0)
-               .map(|(__v, _)| #ref_tuple_for_agg);
-            for __res in (#aggregator)(__items) {
-               __output.push((::ascent::dd::AggResult::into_dd(__res), 1));
-            }
-         });
-         let __l = (#accum).map(move |__b| {
-            #destr_accum
-            (#accum_key_tuple, #accum_vals_cloned)
-         });
-         __l.join(__agg_result).map(|(#join_key_pattern, (#accum_vals_tuple, __agg_out))| {
-            // `__agg_out` is the DD-storable form. For `Ord` agg outputs
-            // (integers, strings, tuples of these) this is the original type.
-            // For `f64` / `f32` it's `OrderedFloat<T>` — user code sees the
-            // wrapped form and should `.into_inner()` / `*v` to unwrap.
-            let #pat = __agg_out;
-            #out_tuple
-         })
-      }
-   };
+   let tokens = dfg::lower_agg_clause(
+      accum, destr_accum, accum_key_tuple, accum_vals_cloned,
+      &rel_coll, agg_destruct, filter_pred, clause_key_tuple,
+      rel_full_value, ref_tuple_for_agg, quote! { #aggregator },
+      join_key_pattern, accum_vals_tuple, quote! { #pat }, out_tuple,
+   );
 
    (out_bound, out_kinds, tokens)
 }
@@ -1088,14 +1041,7 @@ fn emit_let(
    // into the owned destructure (would otherwise trigger E0515).
    let expr_as_owned = let_rhs_to_owned(expr, &bound_vars, var_kinds);
 
-   let tokens = quote! {
-      (#accum).map(move |__b| {
-         let __pat_val = { #destr #expr_as_owned };
-         let #prior_tuple = __b;
-         let #pat = __pat_val;
-         #new_tuple
-      })
-   };
+   let tokens = dfg::lower_let(accum, destr, expr_as_owned, prior_tuple, quote! { #pat }, new_tuple);
    (new_bound, tokens)
 }
 
@@ -1131,16 +1077,7 @@ fn emit_if_let(
    let owned_tuple = own_values_tuple(&new_bound, &new_kinds);
    let destr = emit_user_destructure(&bound_vars, var_kinds, quote! { &__b });
 
-   let tokens = quote! {
-      (#accum).flat_map(move |__b| {
-         #destr
-         if let #pat = (#expr) {
-            ::std::option::Option::Some(#owned_tuple)
-         } else {
-            ::std::option::Option::None
-         }
-      })
-   };
+   let tokens = dfg::lower_if_let(accum, destr, quote! { #pat }, quote! { #expr }, owned_tuple);
    (new_bound, tokens)
 }
 
@@ -1172,17 +1109,7 @@ fn emit_generator(
    let all_owned: Vec<TokenStream> = prior_owned_parts.into_iter().chain(new_owned_parts).collect();
    let out_tuple = tuple_tokens(&all_owned);
 
-   let tokens = quote! {
-      (#accum).flat_map(move |__b| {
-         let mut __out: ::std::vec::Vec<_> = ::std::vec::Vec::new();
-         #destr
-         for __item in (#expr) {
-            let #pat = __item;
-            __out.push(#out_tuple);
-         }
-         __out
-      })
-   };
+   let tokens = dfg::lower_generator(accum, destr, quote! { #expr }, quote! { #pat }, out_tuple);
    (new_bound, tokens)
 }
 
@@ -1212,7 +1139,7 @@ fn compile_rule_head_exprs(
       let mut out = Vec::new();
       for hcl in &rule.head_clause {
          let head_tuple = build_expr_tuple(&hcl.args);
-         out.push((hcl.rel.name.clone(), quote! { (#seed).map(move |()| #head_tuple) }));
+         out.push((hcl.rel.name.clone(), dfg::lower_unit_seed_map(seed.clone(), head_tuple)));
       }
       return (out, TokenStream::new());
    }
@@ -1369,12 +1296,18 @@ fn compile_rule_with_head_target(
       let head_expr_tuple = build_expr_tuple(&hcl.args);
       let row_ty = tuple_type(&hcl.rel.field_types);
       let destr = emit_user_destructure(&bound_vars, &var_kinds, quote! { &__b });
+      let mapped = dfg::lower(
+         &dfg::DataflowOp::MapProject {
+            destructure: quote! { __b },
+            row_ty,
+            var_rebinds: vec![destr],
+            head_expr: head_expr_tuple,
+         },
+         quote! { #rule_body_var.clone() },
+      );
       out.extend(quote! {
          {
-            let __prod = #rule_body_var.clone().map(move |__b| -> #row_ty {
-               #destr
-               #head_expr_tuple
-            });
+            let __prod = #mapped;
             #head_target_ident = #head_target_ident.concat(__prod);
          }
       });
@@ -1677,28 +1610,7 @@ fn emit_closure_body(
       use ::ascent::dd::timely::order::Product;
       use ::ascent::dd::timely::dataflow::Scope;
    });
-   if is_batch {
-      body.extend(quote! {
-         let __unit_scope: ::ascent::dd::differential_dataflow::VecCollection<_, (), ::ascent::dd::BatchDiff> = {
-            use ::ascent::dd::differential_dataflow::input::Input;
-            let (mut __s, __c) = scope.new_collection_from_raw::<(), ::ascent::dd::BatchDiff, _>(
-               ::std::iter::once(((), (), ::ascent::dd::BATCH_DIFF_ONE))
-            );
-            __s.flush();
-            __c
-         };
-      });
-   } else {
-      body.extend(quote! {
-         let __unit_scope: ::ascent::dd::differential_dataflow::VecCollection<_, (), isize> = {
-            use ::ascent::dd::differential_dataflow::input::Input;
-            let (mut __s, __c) = scope.new_collection_from(::std::iter::once(()));
-            __s.advance_to(1);
-            __s.flush();
-            __c
-         };
-      });
-   }
+   body.extend(dfg::lower_unit_scope_decl(is_batch));
    let _ = unit_seed_ty;
    let mut hoists = TokenStream::new();
    let mut hoist_counter: usize = 0;
@@ -1739,16 +1651,7 @@ fn emit_closure_body(
       // Batch `BatchSink::attach` takes `(worker_index, &coll, &mut probe)`
       // for per-worker slot writes (avoids Mutex contention at high worker
       // counts). Incremental `Sink::attach` keeps its 2-arg signature.
-      let attach_stmt = if is_batch {
-         quote! {
-            #sink_id.attach(sealer.worker_index(), &(#final_expr), #probe_expr);
-         }
-      } else {
-         quote! {
-            #sink_id.attach(&(#final_expr), #probe_expr);
-         }
-      };
-      body.extend(attach_stmt);
+      body.extend(dfg::lower_sink_attach(sink_id, final_expr, probe_expr.clone(), is_batch));
    }
    (body, hoists, hoist_counter)
 }
@@ -2618,21 +2521,7 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
       let var = Ident::new(&format!("recursive_{}_var", name), name.span());
       let read = Ident::new(&format!("recursive_{}", name), name.span());
       let tup_ty = tuple_type(&rel.field_types);
-      if is_batch {
-         var_decls.extend(quote! {
-            let (#var, #read): (
-               ::ascent::dd::SemigroupVariable<_, #tup_ty, ::ascent::dd::BatchDiff>,
-               ::ascent::dd::differential_dataflow::VecCollection<_, #tup_ty, ::ascent::dd::BatchDiff>,
-            ) = ::ascent::dd::SemigroupVariable::new(inner, Product::new(Default::default(), 1));
-         });
-      } else {
-         var_decls.extend(quote! {
-            let (#var, #read): (
-               Variable<_, #tup_ty, isize>,
-               ::ascent::dd::differential_dataflow::VecCollection<_, #tup_ty, isize>,
-            ) = Variable::new(inner, Product::new(Default::default(), 1));
-         });
-      }
+      var_decls.extend(dfg::lower_variable_decl(&var, &read, &quote! { #tup_ty }, is_batch));
    }
 
    // 3. Shadow `__<rel>_coll` inside the scope so rule bodies keep their
@@ -2789,13 +2678,7 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
       chain_sources.push(seed.clone());
       let concat_chain = dfg::lower_concat_chain(&chain_sources);
       let materialized = materialize_rel(rel, concat_chain, is_batch);
-      bind_leave_exprs.push(quote! {
-         {
-            let #next = #materialized;
-            #var.set(#next.clone());
-            #next.leave()
-         }
-      });
+      bind_leave_exprs.push(dfg::lower_bind_leave(&var, &next, materialized));
    }
    let bind_leave_tuple = if bind_leave_exprs.len() == 1 {
       let e = &bind_leave_exprs[0];
