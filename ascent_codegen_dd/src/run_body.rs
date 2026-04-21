@@ -248,7 +248,7 @@ fn phase1_run_body_batch(mir: &AscentMir, target: &TokenStream) -> TokenStream {
          // create redundant per-iteration maintenance work inside the
          // iterative scope.
          quote! {
-            let mut #coll = sealer.input(scope, #in_var.clone()).consolidate();
+            let mut #coll = sealer.input(scope, &#in_var).consolidate();
          }
       },
       |rel, final_expr| {

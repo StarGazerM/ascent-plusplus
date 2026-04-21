@@ -572,7 +572,7 @@ impl BatchSealer {
    /// Worker index. Exposed so generated code can route per-worker sink writes.
    pub fn worker_index(&self) -> usize { self.worker_index }
 
-   pub fn input<T, G>(&mut self, scope: &mut G, data: Vec<T>) -> Collection<G, T, BatchDiff>
+   pub fn input<T, G>(&mut self, scope: &mut G, data: &[T]) -> Collection<G, T, BatchDiff>
    where
       T: ExchangeData + Hashable,
       G: Scope<Timestamp = ()> + Input,
@@ -593,7 +593,7 @@ impl BatchSealer {
       for t in data {
          let h: u64 = t.hashed().into();
          if (h as usize) % peers == my {
-            session.update(t, BATCH_DIFF_ONE);
+            session.update(t.clone(), BATCH_DIFF_ONE);
          }
       }
       self.sessions.push(Box::new(session));
