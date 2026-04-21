@@ -43,7 +43,7 @@ ascent! {
 #[ntest_timeout::timeout(2000)]
 #[test]
 fn compose_two_programs_via_build_in_scope() {
-   let reach_sink: Sink<(i32, i32)> = Sink::new();
+   let reach_sink: Sink<(i32, i32)> = Sink::new_with_workers(1);
    let reach_sink_for_build = reach_sink.clone();
 
    let (mut worker, (mut edge_input, probe)) = build_session_worker(move |scope| {
@@ -90,7 +90,7 @@ fn compose_two_programs_via_build_in_scope() {
 #[ntest_timeout::timeout(2000)]
 #[test]
 fn compose_retraction_propagates_through_pipeline() {
-   let reach_sink: Sink<(i32, i32)> = Sink::new();
+   let reach_sink: Sink<(i32, i32)> = Sink::new_with_workers(1);
    let reach_sink_for_build = reach_sink.clone();
 
    let (mut worker, (mut edge_input, mut probe)) = build_session_worker(move |scope| {
@@ -151,7 +151,7 @@ ascent! {
 #[ntest_timeout::timeout(2000)]
 #[test]
 fn mixed_input_output_relation() {
-   let vals_sink: Sink<(i32,)> = Sink::new();
+   let vals_sink: Sink<(i32,)> = Sink::new_with_workers(1);
    let vals_sink_for_build = vals_sink.clone();
 
    let (mut worker, (mut vals_input, mut dsrc_input, probe)) = build_session_worker(move |scope| {
@@ -268,7 +268,7 @@ fn compose_under_execute_batch_multi_worker() {
 #[ntest_timeout::timeout(10000)]
 #[test]
 fn compose_session_scale_smoke() {
-   let reach_sink: Sink<(i32, i32)> = Sink::new();
+   let reach_sink: Sink<(i32, i32)> = Sink::new_with_workers(1);
    let reach_sink_for_build = reach_sink.clone();
 
    let (mut worker, (mut edge_input, probe)) = build_session_worker(move |scope| {
