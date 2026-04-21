@@ -470,6 +470,48 @@ fn compose_with_aggregation_downstream() {
    assert_eq!(got, vec![(1, 3), (10, 2)]);
 }
 
+// ---------------------------------------------------------------------------
+// Compose with a LATTICE output. ProgE takes `observation(key, val)` as
+// input and exposes a lattice `best(key, val)` (max-per-key) as output.
+// Verifies the embed.rs codegen routes lattices through the same final-
+// dedup logic as session/run paths.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd)]
+   pub struct ProgE;
+   #[input] relation observation(i32, u32);
+   #[output] lattice best(i32, u32);
+   best(k, v) <-- observation(k, v);
+}
+
+#[ntest_timeout::timeout(2000)]
+#[test]
+fn compose_with_lattice_output() {
+   let best_sink: Sink<(i32, u32)> = Sink::new_with_workers(1);
+   let best_sink_for_build = best_sink.clone();
+
+   let obs = vec![(1, 5_u32), (1, 10), (1, 3), (2, 7), (2, 2), (3, 100)];
+
+   execute_batch_with_workers(1, move |scope, sealer, probe| {
+      let wi = sealer.worker_index();
+      let obs_coll = sealer.input::<(i32, u32), _>(scope, &obs);
+      let e_out = ProgE::build_in_scope(scope, ProgEComposeInputs { observation: obs_coll });
+      best_sink_for_build.attach(wi, &e_out.best, probe);
+   });
+
+   let mut state: ::std::collections::HashMap<(i32, u32), i32> = Default::default();
+   for (t, d) in best_sink.drain_deltas() {
+      *state.entry(t).or_insert(0) += d;
+   }
+   let mut got: Vec<_> = state.iter().filter(|(_, c)| **c > 0).map(|(k, _)| *k).collect();
+   got.sort();
+
+   // Lattice (u32, join=max): per-key max of observations.
+   assert_eq!(got, vec![(1, 10), (2, 7), (3, 100)]);
+}
+
+
 
 
 
