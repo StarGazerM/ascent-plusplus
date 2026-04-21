@@ -370,5 +370,107 @@ fn three_emissions_produce_identical_output() {
    assert_eq!(scope_path, expected, "build_in_scope produced wrong output");
 }
 
+// ---------------------------------------------------------------------------
+// Compose with negation. ProgA produces `path` (TC). ProgB takes it as
+// `link` and computes `unreachable(x)` — nodes that are NOT reachable
+// from any source. Verifies negation in a downstream program works
+// against an upstream program's output `Collection`.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd)]
+   pub struct ProgC;
+   #[input] relation node(i32);
+   #[input] relation link(i32, i32);
+   #[output] relation unreachable(i32);
+   // No incoming edge → unreachable. (Non-recursive — keeps the test
+   // crisp; we're verifying negation through compose, not recursion
+   // through compose, which is already exercised elsewhere.)
+   unreachable(x) <-- node(x), ! link(_, x);
+}
+
+#[ntest_timeout::timeout(2000)]
+#[test]
+fn compose_with_negation_downstream() {
+   let unreach_sink: Sink<(i32,)> = Sink::new_with_workers(1);
+   let unreach_sink_for_build = unreach_sink.clone();
+
+   let edges = vec![(1, 2), (2, 3), (3, 4), (5, 6)];
+   let nodes = vec![(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)];
+
+   execute_batch_with_workers(1, move |scope, sealer, probe| {
+      let wi = sealer.worker_index();
+      let edge_coll = sealer.input::<(i32, i32), _>(scope, &edges);
+      let node_coll = sealer.input::<(i32,), _>(scope, &nodes);
+      // A computes TC of edge → path.
+      let a_out = ProgA::build_in_scope(scope, ProgAComposeInputs { edge: edge_coll });
+      // C consumes A.path as link, plus a separate node input, computes
+      // unreachable via negation.
+      let c_out =
+         ProgC::build_in_scope(scope, ProgCComposeInputs { node: node_coll, link: a_out.path });
+      unreach_sink_for_build.attach(wi, &c_out.unreachable, probe);
+   });
+
+   let mut state: ::std::collections::HashMap<(i32,), i32> = Default::default();
+   for (t, d) in unreach_sink.drain_deltas() {
+      *state.entry(t).or_insert(0) += d;
+   }
+   let mut got: Vec<_> = state.iter().filter(|(_, c)| **c > 0).map(|(k, _)| *k).collect();
+   got.sort();
+
+   // Reachable in path: {2, 3, 4, 6} (each appears as an edge target,
+   // also chained from earlier nodes). Unreachable: {1, 5, 7, 8} —
+   // 1 and 5 are sources (no incoming), 7 and 8 are isolated.
+   assert_eq!(got, vec![(1,), (5,), (7,), (8,)]);
+}
+
+// ---------------------------------------------------------------------------
+// Compose with aggregation. ProgD takes A's `path` as `link` and counts
+// how many destinations each source reaches. Verifies an aggregator
+// `agg c = count() in link(x, _)` works against an upstream Collection.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd)]
+   pub struct ProgD;
+   #[input] relation source(i32);
+   #[input] relation link(i32, i32);
+   #[output] relation reach_count(i32, usize);
+   reach_count(x, c) <-- source(x), agg c = ::ascent::aggregators::count() in link(x, _);
+}
+
+#[ntest_timeout::timeout(2000)]
+#[test]
+fn compose_with_aggregation_downstream() {
+   let count_sink: Sink<(i32, usize)> = Sink::new_with_workers(1);
+   let count_sink_for_build = count_sink.clone();
+
+   let edges = vec![(1, 2), (2, 3), (3, 4), (10, 11), (10, 12)];
+   let sources = vec![(1,), (10,)];
+
+   execute_batch_with_workers(1, move |scope, sealer, probe| {
+      let wi = sealer.worker_index();
+      let edge_coll = sealer.input::<(i32, i32), _>(scope, &edges);
+      let src_coll = sealer.input::<(i32,), _>(scope, &sources);
+      let a_out = ProgA::build_in_scope(scope, ProgAComposeInputs { edge: edge_coll });
+      let d_out =
+         ProgD::build_in_scope(scope, ProgDComposeInputs { source: src_coll, link: a_out.path });
+      count_sink_for_build.attach(wi, &d_out.reach_count, probe);
+   });
+
+   let mut state: ::std::collections::HashMap<(i32, usize), i32> = Default::default();
+   for (t, d) in count_sink.drain_deltas() {
+      *state.entry(t).or_insert(0) += d;
+   }
+   let mut got: Vec<_> = state.iter().filter(|(_, c)| **c > 0).map(|(k, _)| *k).collect();
+   got.sort();
+
+   // path from source 1: {2, 3, 4} → 3 reachable.
+   // path from source 10: {11, 12} → 2 reachable.
+   assert_eq!(got, vec![(1, 3), (10, 2)]);
+}
+
+
+
 
 
