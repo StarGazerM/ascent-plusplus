@@ -15,6 +15,32 @@
 //! to a noop so the struct still compiles — tests for unsupported features
 //! stay `#[ignore]`'d rather than block the build.
 //!
+//! # Attribute surface
+//!
+//! **DD-specific (rejected under other backends):**
+//! - `#![dd(mode = incremental|batch, ...)]` — DD config namespace. Default
+//!   `incremental`. Batch mode is still in progress.
+//! - `#[input]` / `#[output]` on relation decls — gate which relations
+//!   appear in `<Name>ComposeInputs` / `<Name>ComposeOutputs`. Unannotated
+//!   relations are internal to the program.
+//!
+//! **Shared with batch, honored:**
+//! - `#![backend(dd)]` — dispatch (sets DD as the active backend).
+//! - `#[plan(variant(delta=N, order=[..]))]` on rules — DD honors
+//!   `order=[..]` as the body-atom permutation. `delta=N` is a no-op
+//!   (DD does semi-naive at the operator level via `Variable`). Extra
+//!   variants beyond index 0 are ignored (DD has no variant-expansion
+//!   slot — `join_core` handles all deltas in a single operator).
+//!
+//! **Shared with batch, silently ignored by DD** (honored by batch):
+//! - `#![measure_rule_times]` — no rule-time profiling hook in DD.
+//! - `#![generate_run_timeout]` — DD has no partial-run abort path.
+//! - `#[ds(...)]` on relation — DD is always `Vec<Tup>`-backed; no
+//!   alternate data-structure providers.
+//!
+//! Silent ignore preserves backend-swap-ability — a program can toggle
+//! between `#![backend(batch)]` and `#![backend(dd)]` without edits.
+//!
 //! # Module layout
 //!
 //! The bulk of lowering sits in sibling modules; this file only owns the

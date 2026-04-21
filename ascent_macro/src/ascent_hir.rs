@@ -85,11 +85,17 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
    let mut rel_identities = prog.relations.iter().map(|rel| (rel, RelationIdentity::from(rel))).collect_vec();
    dedup_all_keep_last_by(&mut rel_identities, |x, y| RelationIdentity::eq(&x.1, &y.1));
 
+   // DD detection: `backend_operator_semi_naive` is set by the `dd` shorthand
+   // in `AscentConfig::new`. If the user rolled their own backend, we allow
+   // `#[input]`/`#[output]` through (the custom backend may consume them).
+   let is_dd_backend = config.backend_operator_semi_naive;
+
    for (rel, rel_identity) in rel_identities {
       let ds_attribute = get_ds_attr(&rel.attrs)?;
       // `#[input]` / `#[output]` markers for the DD backend's compose API.
       // Path-only — reject `#[input(...)]` with an arg list so typos like
-      // `#[input(edge)]` don't silently get ignored.
+      // `#[input(edge)]` don't silently get ignored. Also DD-only —
+      // rejecting on batch keeps the attribute surface honest.
       let mut is_compose_input = false;
       let mut is_compose_output = false;
       for attr in &rel.attrs {
@@ -101,10 +107,22 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
             if !matches!(attr.meta, syn::Meta::Path(_)) {
                return Err(Error::new(attr.meta.span(), "`#[input]` takes no arguments"));
             }
+            if !is_dd_backend {
+               return Err(Error::new(
+                  attr.meta.span(),
+                  "`#[input]` is specific to the DD backend's compose API. Add `#![backend(dd)]` or remove the attribute.",
+               ));
+            }
             is_compose_input = true;
          } else if ident == REL_OUTPUT_ATTR {
             if !matches!(attr.meta, syn::Meta::Path(_)) {
                return Err(Error::new(attr.meta.span(), "`#[output]` takes no arguments"));
+            }
+            if !is_dd_backend {
+               return Err(Error::new(
+                  attr.meta.span(),
+                  "`#[output]` is specific to the DD backend's compose API. Add `#![backend(dd)]` or remove the attribute.",
+               ));
             }
             is_compose_output = true;
          }
