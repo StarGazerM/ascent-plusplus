@@ -773,6 +773,24 @@ where F: for<'a> Fn(&mut RootScope<'a>, &mut Sealer, &mut ProbeHandle<u32>) + Se
 // constructed by `build_session_worker` below. Users call `.commit()` to
 // advance time and drive the worker to the new frontier.
 
+/// Create an `(InputSession, VecCollection)` pair for a session-mode scope
+/// via `scope.new_collection_from_raw(empty)`. **Always prefer this over
+/// `InputSession::new() + .to_collection(scope)`** — the two paths register
+/// the input with different timely operators (`scope.input_from` vs
+/// `scope.new_input`), and commit ffb88e1 confirmed the `new_input` path
+/// breaks fixpoint convergence at scale under `execute_batch`.
+///
+/// Session mode uses a single-worker `Thread` allocator and hasn't been
+/// observed to exhibit the hang empirically, but keeping the operator-graph
+/// shape consistent between session and batch paths is defensive.
+pub fn scope_input_session<S, D>(scope: &mut S) -> (InputSession<u32, D, i32>, Collection<S, D, i32>)
+where
+   S: timely::dataflow::Scope<Timestamp = u32> + differential_dataflow::input::Input,
+   D: ExchangeData,
+{
+   scope.new_collection_from_raw::<D, i32, _>(::std::iter::empty::<(D, u32, i32)>())
+}
+
 /// Builds a single-worker inline (no thread spawn) and runs the user build
 /// closure inside `worker.dataflow`. Returns both the worker and the value
 /// produced by `build` (typically a tuple of input sessions, sinks, and a

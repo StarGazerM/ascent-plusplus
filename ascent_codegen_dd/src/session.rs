@@ -359,9 +359,24 @@ fn emit_session_build_body(mir: &AscentMir, sorted_rels: &[&RelationIdentity]) -
       let input = name.clone();
       let sink = Ident::new(&format!("{}_sink", name), name.span());
       let coll = relation_coll_var(name);
+      // Use `scope.new_collection_from_raw(empty)` instead of
+      // `InputSession::new() + to_collection()`. Matches the pattern that
+      // commit ffb88e1 fixed in the `execute_batch` path — the two
+      // timely operators (`scope.new_input` vs `scope.input_from`)
+      // register differently with the scope's progress tracker, and the
+      // `new_input`-based path breaks fixpoint convergence at scale under
+      // `execute_batch`. Session uses a single-worker `Thread` allocator
+      // and hasn't been observed to exhibit the hang empirically — but
+      // keeping sessions and batch on the same operator-graph shape is
+      // defensive and avoids surprises if someone later wires session
+      // output into a multi-worker scope.
       setup.extend(quote! {
-         let mut #input: ::ascent::dd::SessionInput<#tup_ty> = ::ascent::dd::differential_dataflow::input::InputSession::new();
-         let #coll = #input.to_collection(scope);
+         let (mut #input, #coll): (::ascent::dd::SessionInput<#tup_ty>, _) = {
+            use ::ascent::dd::differential_dataflow::input::Input;
+            scope.new_collection_from_raw::<#tup_ty, i32, _>(
+               ::std::iter::empty::<(#tup_ty, u32, i32)>(),
+            )
+         };
          let #sink: ::ascent::dd::Sink<#tup_ty> = ::ascent::dd::Sink::new();
       });
    }

@@ -11,10 +11,9 @@
 //! compile error, and wiring mismatched tuple types fails to typecheck.
 
 use ascent::ascent;
-use ascent::dd::build_session_worker;
-use ascent::dd::differential_dataflow::input::{Input, InputSession};
+use ascent::dd::differential_dataflow::input::InputSession;
 use ascent::dd::timely::dataflow::ProbeHandle;
-use ascent::dd::{execute_batch_with_workers, Sink};
+use ascent::dd::{Sink, build_session_worker, execute_batch_with_workers, scope_input_session};
 
 // ---------------------------------------------------------------------------
 // Two programs. A takes `edge` as input and exposes `path` (TC) as output.
@@ -48,8 +47,7 @@ fn compose_two_programs_via_build_in_scope() {
    let reach_sink_for_build = reach_sink.clone();
 
    let (mut worker, (mut edge_input, probe)) = build_session_worker(move |scope| {
-      let mut edge_input: InputSession<u32, (i32, i32), i32> = InputSession::new();
-      let edge_coll = edge_input.to_collection(scope);
+      let (mut edge_input, edge_coll) = scope_input_session::<_, (i32, i32)>(scope);
 
       // No `path_empty` / `link_empty` ceremony any more — only the
       // `#[input]` fields appear in ComposeInputs. `path` on A is
@@ -96,8 +94,7 @@ fn compose_retraction_propagates_through_pipeline() {
    let reach_sink_for_build = reach_sink.clone();
 
    let (mut worker, (mut edge_input, mut probe)) = build_session_worker(move |scope| {
-      let mut edge_input: InputSession<u32, (i32, i32), i32> = InputSession::new();
-      let edge_coll = edge_input.to_collection(scope);
+      let (mut edge_input, edge_coll) = scope_input_session::<_, (i32, i32)>(scope);
       let a_out = ProgA::build_in_scope(scope, ProgAComposeInputs { edge: edge_coll });
       let b_out = ProgB::build_in_scope(scope, ProgBComposeInputs { link: a_out.path });
       let mut probe: ProbeHandle<u32> = ProbeHandle::new();
@@ -158,10 +155,8 @@ fn mixed_input_output_relation() {
    let vals_sink_for_build = vals_sink.clone();
 
    let (mut worker, (mut vals_input, mut dsrc_input, probe)) = build_session_worker(move |scope| {
-      let mut vals_in: InputSession<u32, (i32,), i32> = InputSession::new();
-      let mut dsrc_in: InputSession<u32, (i32,), i32> = InputSession::new();
-      let vals_coll = vals_in.to_collection(scope);
-      let dsrc_coll = dsrc_in.to_collection(scope);
+      let (mut vals_in, vals_coll) = scope_input_session::<_, (i32,)>(scope);
+      let (mut dsrc_in, dsrc_coll) = scope_input_session::<_, (i32,)>(scope);
 
       let out = MixedProg::build_in_scope(
          scope,
@@ -257,4 +252,51 @@ fn compose_under_execute_batch_multi_worker() {
 
    assert_eq!(snap, expected, "multi-worker compose missing or extra pairs — worker topology bug?");
 }
+
+// ---------------------------------------------------------------------------
+// Scale smoke: session-mode compose with a non-trivial workload. Catches
+// pathological slowdowns (e.g. a future regression that reintroduces the
+// Sealer-style operator-graph bug fixed in commit ffb88e1, which caused
+// fixpoint divergence at n~1025+ in the `execute_batch` path).
+//
+// N=100 → 5k TC pairs, comfortable under both debug (~5 s) and release
+// (~0.05 s). Catches a hang regression without chewing 30 s of CI time.
+// Bigger N values are valid (release: N=1000 in ~15 s) but make the test
+// fragile under load — bump only if you have a specific scale concern.
+// ---------------------------------------------------------------------------
+
+#[ntest_timeout::timeout(10000)]
+#[test]
+fn compose_session_scale_smoke() {
+   let reach_sink: Sink<(i32, i32)> = Sink::new();
+   let reach_sink_for_build = reach_sink.clone();
+
+   let (mut worker, (mut edge_input, probe)) = build_session_worker(move |scope| {
+      let (mut edge_input, edge_coll) = scope_input_session::<_, (i32, i32)>(scope);
+      let a_out = ProgA::build_in_scope(scope, ProgAComposeInputs { edge: edge_coll });
+      let b_out = ProgB::build_in_scope(scope, ProgBComposeInputs { link: a_out.path });
+      let mut probe: ProbeHandle<u32> = ProbeHandle::new();
+      reach_sink_for_build.attach(0, &b_out.reach, &mut probe);
+      (edge_input, probe)
+   });
+
+   const N: i32 = 100;
+   for i in 0..N {
+      edge_input.update((i, i + 1), 1);
+   }
+   edge_input.advance_to(1);
+   edge_input.flush();
+   while probe.less_than(&1) {
+      worker.step();
+   }
+
+   let mut state: ::std::collections::HashMap<(i32, i32), i32> = Default::default();
+   for (t, d) in reach_sink.drain_deltas() {
+      *state.entry(t).or_insert(0) += d;
+   }
+   let reached_count = state.values().filter(|c| **c > 0).count();
+   // TC of a length-N chain is N*(N+1)/2 pairs. TC-of-TC is the same set.
+   assert_eq!(reached_count, (N as usize) * (N as usize + 1) / 2, "missing pairs at scale");
+}
+
 
