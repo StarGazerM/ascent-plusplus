@@ -622,10 +622,14 @@ impl<T: Clone + Send + 'static> Clone for BatchSink<T> {
 }
 
 impl<T: Clone + Send + 'static> BatchSink<T> {
-   pub fn new() -> Self {
-      // Pre-allocate one slot per worker. `dd_worker_count()` resolves the
-      // env var / CPU-count fallback that `execute_batch_present` will use.
-      let n = dd_worker_count();
+   pub fn new() -> Self { Self::new_with_workers(dd_worker_count()) }
+
+   /// Explicit-worker-count variant — pair with
+   /// [`execute_batch_present_with_workers`] for tests that need a
+   /// deterministic parallel topology without contending for the
+   /// `ASCENT_DD_WORKERS` env var.
+   pub fn new_with_workers(n: usize) -> Self {
+      let n = n.max(1);
       let mut bufs = Vec::with_capacity(n);
       for _ in 0..n {
          bufs.push(Mutex::new(Vec::new()));
@@ -685,8 +689,15 @@ impl<T: Clone + Send + 'static> BatchSink<T> {
 /// Used by generated `run()` in the DD backend's batch mode.
 pub fn execute_batch_present<F>(build: F)
 where F: for<'a> Fn(&mut BatchRootScope<'a>, &mut BatchSealer, &mut ProbeHandle<()>) + Send + Sync + 'static {
-   let workers = dd_worker_count();
-   let config = if workers == 1 { timely::Config::thread() } else { timely::Config::process(workers) };
+   execute_batch_present_with_workers(dd_worker_count(), build)
+}
+
+/// Like [`execute_batch_present`] but with explicit worker count — bypasses
+/// the `ASCENT_DD_WORKERS` env-var lookup. Pair with
+/// [`BatchSink::new_with_workers`] so Sink slot count matches worker count.
+pub fn execute_batch_present_with_workers<F>(workers: usize, build: F)
+where F: for<'a> Fn(&mut BatchRootScope<'a>, &mut BatchSealer, &mut ProbeHandle<()>) + Send + Sync + 'static {
+   let config = if workers <= 1 { timely::Config::thread() } else { timely::Config::process(workers) };
    let build = Arc::new(build);
    timely::execute::execute(config, move |worker| {
       let build = build.clone();
