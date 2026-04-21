@@ -799,10 +799,11 @@ mod tests {
       let sink_for_closure = sink.clone();
 
       execute_batch(move |scope, sealer, probe| {
-         let a = sealer.input::<i32, _>(scope, vec![1, 2]).map(|x| ((), x));
-         let b = sealer.input::<i32, _>(scope, vec![10, 20]).map(|x| ((), x));
+         let wi = sealer.worker_index();
+         let a = sealer.input::<i32, _>(scope, &[1, 2]).map(|x| ((), x));
+         let b = sealer.input::<i32, _>(scope, &[10, 20]).map(|x| ((), x));
          let ab = a.join(b).map(|(_, (x, y))| (x, y));
-         sink_for_closure.attach(&ab, probe);
+         sink_for_closure.attach(wi, &ab, probe);
       });
 
       let mut got = sink.into_vec();
@@ -842,12 +843,18 @@ mod tests {
             // 0.20: `.concat()` consumes both sides; `.set(...)` consumes the
             // Variable and takes an owned Collection (returns `()`). Keep a
             // clone for `.leave()` to carry the final Collection out of scope.
-            let next = rule1.concat(rule2).distinct();
+            // Use `.threshold(w>0?1:0)` instead of `.distinct()` — the latter
+            // returns `isize` diff, but the whole pipeline (InputSession,
+            // Variable, Sink) is i32 (FlowLog parity).
+            let next = rule1
+               .concat(rule2)
+               .threshold(|_, __w: &i32| if *__w > 0 { 1i32 } else { 0 });
             path_var.set(next.clone());
             next.leave()
          });
 
-         path_sink_for_build.attach(&path, &mut probe);
+         // build_session_worker is single-worker; worker_index = 0.
+         path_sink_for_build.attach(0, &path, &mut probe);
          (edge, probe)
       });
 
@@ -911,8 +918,9 @@ mod tests {
       let sink: Sink<i32> = Sink::new();
       let s2 = sink.clone();
       execute_batch(move |scope, sealer, probe| {
-         let out = sealer.input::<i32, _>(scope, vec![7, 8, 9]);
-         s2.attach(&out, probe);
+         let wi = sealer.worker_index();
+         let out = sealer.input::<i32, _>(scope, &[7, 8, 9]);
+         s2.attach(wi, &out, probe);
       });
       let mut got = sink.into_vec();
       got.sort();
