@@ -40,6 +40,47 @@ pub(crate) fn compose_outputs_name(base: &Ident) -> Ident {
    Ident::new(&format!("{}ComposeOutputs", base), base.span())
 }
 
+/// Build a markdown-table doc that lists every relation in the program
+/// alongside its compose status. Same content for both Inputs and Outputs
+/// structs — the user can see ALL relations at a glance and figure out
+/// which one they wanted to wire up.
+fn compose_roster_doc(
+   sorted_rels: &[&ascent_mir::RelationIdentity],
+   input_rels: &[&ascent_mir::RelationIdentity],
+   output_rels: &[&ascent_mir::RelationIdentity],
+   for_inputs: bool,
+) -> String {
+   let mut s = String::new();
+   s.push_str("# Program relations\n\n");
+   s.push_str("| relation | status | in this struct? |\n");
+   s.push_str("|----------|--------|------------------|\n");
+   for rel in sorted_rels {
+      let is_in = input_rels.iter().any(|r| r.name == rel.name);
+      let is_out = output_rels.iter().any(|r| r.name == rel.name);
+      let status = match (is_in, is_out) {
+         (true, true) => "`#[input]` `#[output]` (mixed bus)",
+         (true, false) => "`#[input]`",
+         (false, true) => "`#[output]`",
+         (false, false) => "internal (unannotated)",
+      };
+      let here = if (for_inputs && is_in) || (!for_inputs && is_out) { "yes" } else { "no" };
+      s.push_str(&format!("| `{}` | {} | {} |\n", rel.name, status, here));
+   }
+   s.push('\n');
+   if for_inputs {
+      s.push_str(
+         "*If you tried to wire a relation that doesn't appear above as a `yes`, \
+          add `#[input]` to its `relation` declaration to expose it here.*\n",
+      );
+   } else {
+      s.push_str(
+         "*If you expected to read a relation that doesn't appear above as a `yes`, \
+          add `#[output]` to its `relation` declaration to expose it here.*\n",
+      );
+   }
+   s
+}
+
 pub(crate) fn emit_compose(mir: &AscentMir) -> TokenStream {
    let ty_signature = &mir.signatures.declaration;
    let base_name = &ty_signature.ident;
@@ -113,18 +154,33 @@ pub(crate) fn emit_compose(mir: &AscentMir) -> TokenStream {
 
    let body = emit_compose_body(mir, &sorted_rels, &input_rels, &output_rels, &outputs_name);
 
+   // Build a "relation roster" doc — surfaces ALL of the program's
+   // relations and their compose status. Helps users diagnose the
+   // common "missing field" error: when the user wires a relation by
+   // name into `<Name>ComposeInputs { foo: ... }` and gets `no field
+   // foo on _ComposeInputs`, the doc here lists `foo` as `internal`
+   // and tells them to add `#[input]` to expose it.
+   let inputs_roster = compose_roster_doc(&sorted_rels, &input_rels, &output_rels, /*for_inputs=*/ true);
+   let outputs_roster = compose_roster_doc(&sorted_rels, &input_rels, &output_rels, /*for_inputs=*/ false);
+   let inputs_summary = format!(
+      "Input collections for `{}::build_in_scope`. Only relations marked `#[input]` appear here.",
+      base_name
+   );
+   let outputs_summary = format!(
+      "Output collections returned by `{}::build_in_scope`. Only relations marked `#[output]` appear here.",
+      base_name
+   );
+
    quote! {
-      /// Input `Collection` per relation — every relation has one, pass an
-      /// empty `Collection` for relations the caller doesn't drive directly.
-      /// Rules that derive into a relation will `.concat()` into whatever
-      /// Collection you pass here (so the input acts as a seed, not a
-      /// replacement).
+      #[doc = #inputs_summary]
+      ///
+      #[doc = #inputs_roster]
       pub struct #inputs_name<S: ::ascent::dd::timely::dataflow::Scope<Timestamp = u32>> {
          #(#input_fields)*
       }
-      /// Output `Collection` per relation — deduped (via `.threshold` / lattice
-      /// `reduce`) and ready to feed into a downstream program or an external
-      /// sink.
+      #[doc = #outputs_summary]
+      ///
+      #[doc = #outputs_roster]
       pub struct #outputs_name<S: ::ascent::dd::timely::dataflow::Scope<Timestamp = u32>> {
          #(#output_fields)*
       }
