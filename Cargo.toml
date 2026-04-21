@@ -8,6 +8,7 @@ members = [
    "ascent_mir",
    "ascent_codegen_dd",
    "ascent_codegen_batch",
+   "ascent_tests_dd",
 ]
 exclude = ["ascent_tests", "ascent_tests_dd", "wasm-tests", "benches"]
 resolver = "2"

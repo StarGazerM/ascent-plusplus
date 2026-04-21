@@ -397,6 +397,15 @@ pub struct RelationMetadata {
    pub attributes: Rc<Vec<Attribute>>,
    /// Will be `Some()` iff the relation is not a lattice.
    pub ds_attr: Option<DsAttributeContents>,
+   /// `#[input]` present on the relation decl — relation appears in the
+   /// DD backend's `<Name>ComposeInputs` struct and the caller must supply
+   /// a seed Collection for it. Consumed only by the DD backend's compose
+   /// emission; ignored by batch / `run()` / `session()`.
+   pub is_compose_input: bool,
+   /// `#[output]` present on the relation decl — relation appears in the
+   /// DD backend's `<Name>ComposeOutputs` struct. Consumed only by the
+   /// DD backend's compose emission.
+   pub is_compose_output: bool,
 }
 
 #[derive(Clone)]

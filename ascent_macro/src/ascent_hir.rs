@@ -61,7 +61,14 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
 //
 // `REL_DS_ATTR` moved too; this file keeps the local typo-named constant for
 // historical call sites inside `compile_ascent_program_to_hir`.
-const RECOGNIIZED_REL_ATTRS: [&str; 1] = [REL_DS_ATTR];
+//
+// `input` / `output` are recognized on relation decls and consumed by the
+// DD backend's compose emission. They are path-only (no arguments) and
+// MUST NOT leak through as derive-style attrs on the generated struct
+// field — hence the filter at line 114.
+const REL_INPUT_ATTR: &str = "input";
+const REL_OUTPUT_ATTR: &str = "output";
+const RECOGNIIZED_REL_ATTRS: [&str; 3] = [REL_DS_ATTR, REL_INPUT_ATTR, REL_OUTPUT_ATTR];
 
 pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: bool) -> syn::Result<AscentIr> {
    let ir_rules: Vec<(IrRule, Vec<IrRelation>)> =
@@ -80,6 +87,28 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
 
    for (rel, rel_identity) in rel_identities {
       let ds_attribute = get_ds_attr(&rel.attrs)?;
+      // `#[input]` / `#[output]` markers for the DD backend's compose API.
+      // Path-only — reject `#[input(...)]` with an arg list so typos like
+      // `#[input(edge)]` don't silently get ignored.
+      let mut is_compose_input = false;
+      let mut is_compose_output = false;
+      for attr in &rel.attrs {
+         let ident = match attr.meta.path().get_ident() {
+            Some(i) => i,
+            None => continue,
+         };
+         if ident == REL_INPUT_ATTR {
+            if !matches!(attr.meta, syn::Meta::Path(_)) {
+               return Err(Error::new(attr.meta.span(), "`#[input]` takes no arguments"));
+            }
+            is_compose_input = true;
+         } else if ident == REL_OUTPUT_ATTR {
+            if !matches!(attr.meta, syn::Meta::Path(_)) {
+               return Err(Error::new(attr.meta.span(), "`#[output]` takes no arguments"));
+            }
+            is_compose_output = true;
+         }
+      }
 
       if rel.is_lattice {
          let indices = (0..rel_identity.field_types.len() - 1).collect_vec();
@@ -117,6 +146,8 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
                .collect_vec(),
          ),
          ds_attr,
+         is_compose_input,
+         is_compose_output,
       });
    }
    for (ir_rule, extra_relations) in ir_rules.iter() {

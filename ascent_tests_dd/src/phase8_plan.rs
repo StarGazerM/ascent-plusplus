@@ -141,3 +141,56 @@ fn plan_both_variants_for_two_idb_rule() {
 
    assert_eq!(dr, pr);
 }
+
+// ---------------------------------------------------------------------------
+// 4. `delta=N` is documented as a no-op under DD. Verify: two plans that
+//    differ ONLY in `delta` (same `order`) produce identical results,
+//    confirming DD ignores the delta hint.
+// ---------------------------------------------------------------------------
+
+// Rule `reach(x, z) <-- reach(x, y), reach(y, z)` has TWO dynamic atoms,
+// so delta can legitimately be 0 OR 1. Under batch these would expand to
+// TWO different MIR rules (one delta'd per atom). Under DD both plans must
+// produce the same output — DD collapses all deltas into a single join_core
+// that sees deltas from either side automatically.
+
+ascent! {
+   #![backend(dd)]
+   pub struct ReachDeltaA;
+   relation seed(i32, i32);
+   relation reach(i32, i32);
+   reach(x, y) <-- seed(x, y);
+   #[plan(variant(delta = 0, order = [0, 1]))]
+   reach(x, z) <-- reach(x, y), reach(y, z);
+}
+
+ascent! {
+   #![backend(dd)]
+   pub struct ReachDeltaB;
+   relation seed(i32, i32);
+   relation reach(i32, i32);
+   reach(x, y) <-- seed(x, y);
+   // Same order, different delta. Under DD this must still match A.
+   #[plan(variant(delta = 1, order = [0, 1]))]
+   reach(x, z) <-- reach(x, y), reach(y, z);
+}
+
+#[ntest_timeout::timeout(1000)]
+#[test]
+fn plan_delta_is_noop_under_dd() {
+   let seeds = vec![(1, 2), (2, 3), (3, 4), (5, 6)];
+
+   let mut a = ReachDeltaA::default();
+   a.seed = seeds.clone();
+   a.run();
+   let mut ar = a.reach;
+   ar.sort();
+
+   let mut b = ReachDeltaB::default();
+   b.seed = seeds;
+   b.run();
+   let mut br = b.reach;
+   br.sort();
+
+   assert_eq!(ar, br);
+}

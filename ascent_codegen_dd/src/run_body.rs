@@ -24,13 +24,13 @@ pub(crate) fn emit_closure_body(
    mir: &AscentMir,
    sorted_rels: &[&RelationIdentity],
    init_coll: impl Fn(&RelationIdentity) -> TokenStream,
-   sink_ident: impl Fn(&RelationIdentity) -> TokenStream,
-   probe_expr: TokenStream,
+   // How to consume each relation's clean final Collection. For sink-backed
+   // modes (run / session) this emits `sink.attach(worker_idx, &coll, probe)`.
+   // For embed / compose mode, this binds `__<rel>_out = coll` for the
+   // caller to read afterwards. Called once per relation, in `sorted_rels`
+   // iteration order, AFTER all SCCs are built.
+   finalize: impl Fn(&RelationIdentity, TokenStream) -> TokenStream,
    is_batch: bool,
-   // Expression for "this worker's index" in the enclosing scope.
-   // `run()` path (batch or inc): `sealer.worker_index()`.
-   // Session path (single-worker Session dataflow): literal `0`.
-   worker_index_expr: TokenStream,
 ) -> (TokenStream, TokenStream, usize) {
    let mut body = TokenStream::new();
    // DD 0.20: `join`, `reduce`, `arrange_by_*`, `consolidate` are inherent
@@ -104,7 +104,6 @@ pub(crate) fn emit_closure_body(
    };
    for rel in sorted_rels {
       let coll = relation_coll_var(&rel.name);
-      let sink_id = sink_ident(rel);
       // FlowLog pattern: recursive IDBs threshold at bind-leave inside
       // `scope.iterative` — re-thresholding via `materialize_rel` is pure
       // wasted work. Lattices still need reduce (handled inside
@@ -119,9 +118,7 @@ pub(crate) fn emit_closure_body(
       } else {
          materialize_rel(rel, quote! { #coll }, is_batch)
       };
-      // Both batch and inc Sink types take (worker_index, &coll, probe):
-      // per-worker slot writes avoid mutex contention at high worker counts.
-      body.extend(dfg::lower_sink_attach(sink_id, final_expr, probe_expr.clone(), worker_index_expr.clone()));
+      body.extend(finalize(rel, final_expr));
    }
    (body, hoists, hoist_counter)
 }
@@ -170,14 +167,11 @@ pub(crate) fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStr
          // triggered.
          quote! { let mut #coll = sealer.input(scope, &#in_var); }
       },
-      |rel| {
-         // Batch attach target: inner sink clone moved into the closure.
+      |rel, final_expr| {
          let sink_inner = relation_sink_inner(&rel.name);
-         quote! { #sink_inner }
+         dfg::lower_sink_attach(quote! { #sink_inner }, final_expr, quote! { probe }, quote! { sealer.worker_index() })
       },
-      quote! { probe },
       false,
-      quote! { sealer.worker_index() },
    );
 
    // Parallel-DD Fn compliance: for every `__hoist_gen_N` bound OUTSIDE
@@ -252,13 +246,11 @@ fn phase1_run_body_batch(mir: &AscentMir, target: &TokenStream) -> TokenStream {
             let mut #coll = sealer.input(scope, #in_var.clone()).consolidate();
          }
       },
-      |rel| {
+      |rel, final_expr| {
          let sink_inner = relation_sink_inner(&rel.name);
-         quote! { #sink_inner }
+         dfg::lower_sink_attach(quote! { #sink_inner }, final_expr, quote! { probe }, quote! { sealer.worker_index() })
       },
-      quote! { probe },
       true,
-      quote! { sealer.worker_index() },
    );
 
    let hoist_rebinds: TokenStream = (1..=hoist_count)

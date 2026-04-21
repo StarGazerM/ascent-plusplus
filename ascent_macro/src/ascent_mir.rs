@@ -227,14 +227,18 @@ fn compile_hir_rule_to_mir_rules(
    // Each produced variant is a Vec<(permuted_body_index, Option<version>)>
    // — permuted so codegen's left-to-right walk matches the requested plan.
    //
-   // For the DD backend (`dd_no_variants`), we emit exactly one variant per
-   // source rule with all `Option<version>` = None. DD's iterative scope
-   // with `Variable`/`SemigroupVariable` does semi-naive AT THE OPERATOR
-   // LEVEL — the arrange + join operators process only the per-iteration
-   // delta batch on each input, so manual variant expansion (as batch needs)
-   // would produce redundant work. Confirmed against the canonical DD
-   // datalog example (differential-dataflow/experiments/src/bin/graspan1.rs),
-   // which emits exactly one `join_core` per recursive rule.
+   // DD backend (`dd_no_variants`): always emit exactly one MIR rule per
+   // source rule, all `Option<version>` = None. DD's iterative scope with
+   // `Variable` does semi-naive AT THE OPERATOR LEVEL — `join_core` sees
+   // deltas on either side and produces output deltas without needing
+   // N variant copies of the join. User-supplied `#[plan]` is still
+   // honored for `order=[...]` (permute body items so codegen's left-to-
+   // right walk emits the requested join order); `delta=N` is a no-op
+   // under DD (no Delta/Total versions flow into codegen); extra variants
+   // beyond index 0 are ignored (DD has no variant-expansion slot).
+   // Validation (delta-is-dynamic) still runs for cross-backend
+   // consistency so a plan authored for one backend doesn't silently
+   // pass under the other.
    let plan_variants: Vec<Vec<(usize, Option<MirRelationVersion>)>> = match &rule.plan {
       None if dd_no_variants => {
          // One variant, natural order, all versions = None (no delta markers).
@@ -262,12 +266,10 @@ fn compile_hir_rule_to_mir_rules(
             .collect()
       },
       Some(user_variants) => {
-         let mut out = Vec::with_capacity(user_variants.len());
+         // Delta-is-dynamic validation on EVERY variant, regardless of backend.
+         // Keeps a plan authored under one backend from silently passing under
+         // the other (e.g. swapping dd ↔ batch without re-checking the plan).
          for (vi, pv) in user_variants.iter().enumerate() {
-            // SCC-context validation: the delta clause must be dynamic
-            // (i.e., in an IDB relation within this SCC). Static/EDB
-            // clauses have no delta stream; rejecting here gives a clear
-            // error rather than silently producing wrong output.
             let is_dynamic = match &rule.body_items[pv.delta] {
                IrBodyItem::Clause(cl) => dynamic_relations.contains(&cl.rel.relation),
                _ => false,
@@ -287,35 +289,50 @@ fn compile_hir_rule_to_mir_rules(
                   ),
                ));
             }
-
-            // Build version assignment for this variant in the permuted
-            // order. Mirrors `versions_base`'s semantics:
-            //   - in the permuted order, the delta clause position is Delta.
-            //   - clauses before the delta position are TotalDelta.
-            //   - clauses after are Total.
-            // (Only dynamic clauses get a version; others stay None.)
-            let delta_pos_in_order =
-               pv.order.iter().position(|&i| i == pv.delta).expect("structural validator guarantees this");
-            let mut assignment: Vec<(usize, Option<MirRelationVersion>)> = Vec::with_capacity(pv.order.len());
-            for (pos_in_order, &orig_i) in pv.order.iter().enumerate() {
-               let is_dyn = match &rule.body_items[orig_i] {
-                  IrBodyItem::Clause(cl) => dynamic_relations.contains(&cl.rel.relation),
-                  _ => false,
-               };
-               let version = if !is_dyn {
-                  None
-               } else if pos_in_order < delta_pos_in_order {
-                  Some(MirRelationVersion::TotalDelta)
-               } else if pos_in_order == delta_pos_in_order {
-                  Some(MirRelationVersion::Delta)
-               } else {
-                  Some(MirRelationVersion::Total)
-               };
-               assignment.push((orig_i, version));
-            }
-            out.push(assignment);
          }
-         out
+
+         if dd_no_variants {
+            // DD: take the first variant's `order` as the body-item permutation;
+            // no version markers (DD derives deltas at runtime via Variable).
+            // Extra variants (if any) describe alternate orders that batch would
+            // run as separate .concat() branches; DD's single join handles all
+            // deltas automatically, so there's nowhere for them to land.
+            let order = &user_variants[0].order;
+            vec![order.iter().map(|&orig_i| (orig_i, None)).collect()]
+         } else {
+            // Batch: expand each variant into its own MIR rule with
+            // Delta/TotalDelta/Total version markers stamped per clause.
+            let mut out = Vec::with_capacity(user_variants.len());
+            for pv in user_variants.iter() {
+               // Build version assignment for this variant in the permuted
+               // order. Mirrors `versions_base`'s semantics:
+               //   - in the permuted order, the delta clause position is Delta.
+               //   - clauses before the delta position are TotalDelta.
+               //   - clauses after are Total.
+               // (Only dynamic clauses get a version; others stay None.)
+               let delta_pos_in_order =
+                  pv.order.iter().position(|&i| i == pv.delta).expect("structural validator guarantees this");
+               let mut assignment: Vec<(usize, Option<MirRelationVersion>)> = Vec::with_capacity(pv.order.len());
+               for (pos_in_order, &orig_i) in pv.order.iter().enumerate() {
+                  let is_dyn = match &rule.body_items[orig_i] {
+                     IrBodyItem::Clause(cl) => dynamic_relations.contains(&cl.rel.relation),
+                     _ => false,
+                  };
+                  let version = if !is_dyn {
+                     None
+                  } else if pos_in_order < delta_pos_in_order {
+                     Some(MirRelationVersion::TotalDelta)
+                  } else if pos_in_order == delta_pos_in_order {
+                     Some(MirRelationVersion::Delta)
+                  } else {
+                     Some(MirRelationVersion::Total)
+                  };
+                  assignment.push((orig_i, version));
+               }
+               out.push(assignment);
+            }
+            out
+         }
       },
    };
 

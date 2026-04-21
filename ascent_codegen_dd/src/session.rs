@@ -385,14 +385,12 @@ fn emit_session_build_body(mir: &AscentMir, sorted_rels: &[&RelationIdentity]) -
          let coll = relation_coll_var(&rel.name);
          quote! { let mut #coll = #coll; }
       },
-      |rel| {
+      |rel, final_expr| {
          let sink = Ident::new(&format!("{}_sink", rel.name), rel.name.span());
-         quote! { #sink }
+         // Session is single-worker: literal 0 (Sink has only one slot here).
+         crate::dfg::lower_sink_attach(quote! { #sink }, final_expr, quote! { &mut probe }, quote! { 0usize })
       },
-      quote! { &mut probe },
       false,
-      // Session is single-worker: literal 0 (Sink has only one slot here).
-      quote! { 0usize },
    );
    setup.extend(hoists);
    setup.extend(body);

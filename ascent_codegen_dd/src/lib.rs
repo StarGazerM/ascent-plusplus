@@ -35,6 +35,7 @@ extern crate proc_macro;
 
 mod analyses;
 mod dfg;
+mod embed;
 mod rule_body;
 mod rule_fn;
 mod run_body;
@@ -299,6 +300,11 @@ fn compile_mir_dd_incremental(mir: &AscentMir, is_ascent_run: bool) -> TokenStre
    let emit_session_for_this_program = blocker.is_none() && !is_ascent_run && !has_generics;
    let session_items =
       if emit_session_for_this_program { session::emit_session(mir) } else { TokenStream::new() };
+   // `build_in_scope` shares session-mode's envelope — same blocker rules,
+   // same no-generics limitation. Emitted regardless of whether the user
+   // calls it; dead code elides.
+   let compose_items =
+      if emit_session_for_this_program { embed::emit_compose(mir) } else { TokenStream::new() };
 
    let session_accessor = if emit_session_for_this_program {
       let session_name = session::session_struct_name(struct_name);
@@ -361,6 +367,7 @@ fn compile_mir_dd_incremental(mir: &AscentMir, is_ascent_run: bool) -> TokenStre
       #struct_and_default
       #methods
       #session_items
+      #compose_items
    };
 
    if !is_ascent_run {

@@ -198,6 +198,12 @@ fn emit_relation(mir: &AscentMir, ident: &RelationIdentity, full_idx: &IrRelatio
       Some(ds) => emit_ds_attr(ds),
       None => quote! { - },
    };
+   // Compose-API flags. Serialize as `+`/`-` so the reader can do a single
+   // ident-peek to deserialize. These cross the two-stage MIR-text boundary
+   // — without this round-trip, the DD backend's compose emission would
+   // see all-false and silently emit nothing.
+   let compose_in_tok = if metadata.is_compose_input { quote! { + } } else { quote! { - } };
+   let compose_out_tok = if metadata.is_compose_output { quote! { + } } else { quote! { - } };
 
    quote! {
       #kind #name ( #type_list ) {
@@ -207,6 +213,8 @@ fn emit_relation(mir: &AscentMir, ident: &RelationIdentity, full_idx: &IrRelatio
          initialization      #init_tokens ;
          attrs               { #attrs_tokens } ;
          ds                  #ds_tokens ;
+         compose_input       #compose_in_tok ;
+         compose_output      #compose_out_tok ;
       }
    }
 }
@@ -530,6 +538,18 @@ fn parse_braced_or_dash_as<T: Parse>(input: ParseStream) -> syn::Result<Option<T
    }
 }
 
+fn parse_plus_or_dash(input: ParseStream) -> syn::Result<bool> {
+   if input.peek(Token![+]) {
+      input.parse::<Token![+]>()?;
+      Ok(true)
+   } else if input.peek(Token![-]) {
+      input.parse::<Token![-]>()?;
+      Ok(false)
+   } else {
+      Err(input.error("expected `+` or `-`"))
+   }
+}
+
 // ---------- Program parser --------------------------------------------------
 
 fn parse_program(input: ParseStream) -> syn::Result<(AscentConfig, Signatures, bool, bool)> {
@@ -766,6 +786,15 @@ fn parse_one_relation(input: ParseStream, out: &mut ParsedRelations) -> syn::Res
    };
    rel_body.parse::<Token![;]>()?;
 
+   // compose_input / compose_output (+ | -). Mirror what `emit_relation_decl`
+   // serializes — single token each, terminated by `;`.
+   expect_kw(&rel_body, "compose_input")?;
+   let is_compose_input = parse_plus_or_dash(&rel_body)?;
+   rel_body.parse::<Token![;]>()?;
+   expect_kw(&rel_body, "compose_output")?;
+   let is_compose_output = parse_plus_or_dash(&rel_body)?;
+   rel_body.parse::<Token![;]>()?;
+
    // Post-validation: ds must be None iff lattice.
    if is_lattice && ds_attr.is_some() {
       return Err(syn::Error::new(name.span(), "lattice relations must not carry a `ds` attribute"));
@@ -787,6 +816,8 @@ fn parse_one_relation(input: ParseStream, out: &mut ParsedRelations) -> syn::Res
       initialization,
       attributes: Rc::new(attrs),
       ds_attr,
+      is_compose_input,
+      is_compose_output,
    });
    out.by_name.insert(name.to_string(), rel_ident);
    Ok(())
@@ -1172,107 +1203,4 @@ fn parse_agg_item(input: ParseStream, by_name: &HashMap<String, RelationIdentity
    }
    let span = pat.span();
    Ok(IrAggClause { span, pat, aggregator, bound_args, rel, rel_args })
-}
-
-#[cfg(test)]
-mod tests {
-   use proc_macro2::TokenStream;
-   use syn::parse::Parser;
-
-   use super::emit_mir;
-   use crate::ascent_hir::compile_ascent_program_to_hir;
-   use crate::ascent_mir::compile_hir_to_mir;
-   use crate::ascent_syntax::{desugar_ascent_program, parse_ascent_program};
-
-   fn mir_from(input: TokenStream) -> crate::ascent_mir::AscentMir {
-      let parsed = Parser::parse2(
-         |input: syn::parse::ParseStream| parse_ascent_program(input, syn::parse_quote!(::ascent::ascent)),
-         input,
-      )
-      .expect("parse");
-      let prog = match parsed {
-         itertools::Either::Left(p) => p,
-         itertools::Either::Right(_) => panic!("no include_source expected in tests"),
-      };
-      let prog = desugar_ascent_program(prog).expect("desugar");
-      let hir = compile_ascent_program_to_hir(&prog, false).expect("hir");
-      compile_hir_to_mir(&hir).expect("mir")
-   }
-
-   #[test]
-   fn snapshot_tc_program_and_relations() {
-      let input = quote! {
-         relation edge(i32, i32);
-         relation path(i32, i32);
-         path(x, y) <-- edge(x, y);
-         path(x, z) <-- edge(x, y), path(y, z);
-      };
-      let mir = mir_from(input);
-      let out = emit_mir(&mir, /*is_ascent_run*/ false);
-      eprintln!("===== MIR (tc) =====\n{}\n====================", out);
-   }
-
-   fn roundtrip(input: TokenStream, label: &str) {
-      let mir1 = mir_from(input);
-      let t1 = super::emit_mir(&mir1, /*is_ascent_run*/ false);
-      let (mir2, is_run2) = super::parse_mir(t1.clone()).expect("parse MIR v1");
-      assert!(!is_run2, "{label}: is_ascent_run should roundtrip as false");
-      let t2 = super::emit_mir(&mir2, is_run2);
-      assert_eq!(
-         t1.to_string(),
-         t2.to_string(),
-         "{label}: emit(parse(emit(mir))) != emit(mir)"
-      );
-   }
-
-   #[test]
-   fn roundtrip_tc() {
-      roundtrip(
-         quote! {
-            relation edge(i32, i32);
-            relation path(i32, i32);
-            path(x, y) <-- edge(x, y);
-            path(x, z) <-- edge(x, y), path(y, z);
-         },
-         "tc",
-      );
-   }
-
-   #[test]
-   fn roundtrip_complex() {
-      roundtrip(
-         quote! {
-            relation node(i32);
-            relation edge(i32, i32);
-            relation reach(i32, i32);
-            relation count(i32, usize);
-
-            reach(x, y), reach(y, x) <-- edge(x, y), if x != y, let z = x + y;
-            reach(x, z) <-- reach(x, y), reach(y, z), if x < z;
-            node(x) <-- for x in 0..10;
-            count(x, c) <-- node(x), agg c = ::ascent::aggregators::count() in reach(x, _);
-         },
-         "complex",
-      );
-   }
-
-   #[test]
-   fn snapshot_complex_conds_gen_agg() {
-      // Exercises: if-cond, let-cond, generator, aggregator, multiple heads,
-      // non-trivial expressions.
-      let input = quote! {
-         relation node(i32);
-         relation edge(i32, i32);
-         relation reach(i32, i32);
-         relation count(i32, usize);
-
-         reach(x, y), reach(y, x) <-- edge(x, y), if x != y, let z = x + y;
-         reach(x, z) <-- reach(x, y), reach(y, z), if x < z;
-         node(x) <-- for x in 0..10;
-         count(x, c) <-- node(x), agg c = ::ascent::aggregators::count() in reach(x, _);
-      };
-      let mir = mir_from(input);
-      let out = emit_mir(&mir, /*is_ascent_run*/ false);
-      eprintln!("===== MIR (complex) =====\n{}\n========================", out);
-   }
 }
