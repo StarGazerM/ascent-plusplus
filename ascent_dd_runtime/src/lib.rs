@@ -379,8 +379,15 @@ impl<T: Clone + Send + 'static> Clone for Sink<T> {
 }
 
 impl<T: Clone + Send + 'static> Sink<T> {
-   pub fn new() -> Self {
-      let n = dd_worker_count();
+   pub fn new() -> Self { Self::new_with_workers(dd_worker_count()) }
+
+   /// Explicit-worker-count variant — use this when driving `build_in_scope`
+   /// inside [`execute_batch_with_workers`], which bypasses the env-var
+   /// lookup. Must match the worker count of the surrounding
+   /// `execute_batch`-shaped call or `attach`'s indexed write panics OOB
+   /// on non-zero workers.
+   pub fn new_with_workers(n: usize) -> Self {
+      let n = n.max(1);
       let mut bufs = Vec::with_capacity(n);
       for _ in 0..n {
          bufs.push(Mutex::new(Vec::new()));
@@ -717,8 +724,16 @@ pub type BatchRootScope<'a> = timely::dataflow::scopes::Child<
 
 pub fn execute_batch<F>(build: F)
 where F: for<'a> Fn(&mut RootScope<'a>, &mut Sealer, &mut ProbeHandle<u32>) + Send + Sync + 'static {
-   let workers = dd_worker_count();
-   let config = if workers == 1 { timely::Config::thread() } else { timely::Config::process(workers) };
+   execute_batch_with_workers(dd_worker_count(), build)
+}
+
+/// Like [`execute_batch`] but with explicit worker count — bypasses the
+/// `ASCENT_DD_WORKERS` env-var lookup. Primarily for tests that need a
+/// deterministic parallel topology without contending for global env
+/// state with concurrent test threads.
+pub fn execute_batch_with_workers<F>(workers: usize, build: F)
+where F: for<'a> Fn(&mut RootScope<'a>, &mut Sealer, &mut ProbeHandle<u32>) + Send + Sync + 'static {
+   let config = if workers <= 1 { timely::Config::thread() } else { timely::Config::process(workers) };
    let build = Arc::new(build);
    // Each worker runs `build` independently; shared state (Sink's
    // Arc<Mutex<Vec>>) is captured by reference. Inputs are re-`.clone()`d

@@ -14,7 +14,7 @@ use ascent::ascent;
 use ascent::dd::build_session_worker;
 use ascent::dd::differential_dataflow::input::{Input, InputSession};
 use ascent::dd::timely::dataflow::ProbeHandle;
-use ascent::dd::Sink;
+use ascent::dd::{execute_batch_with_workers, Sink};
 
 // ---------------------------------------------------------------------------
 // Two programs. A takes `edge` as input and exposes `path` (TC) as output.
@@ -194,3 +194,67 @@ fn mixed_input_output_relation() {
    snap.sort();
    assert_eq!(snap, vec![(6,), (8,), (100,), (200,)]);
 }
+
+// ---------------------------------------------------------------------------
+// Multi-worker compose: drive `build_in_scope` inside `execute_batch` with
+// N=4 workers. Verifies DD's cross-worker exchange correctly handles
+// arrangements BUILT BY ONE PROGRAM AND CONSUMED BY ANOTHER within the
+// same dataflow — i.e., that the compose API isn't quietly assuming
+// single-worker semantics anywhere.
+//
+// Key is that `Sealer::input` hash-partitions the seed data across
+// workers at ingest, and DD's `join_core` across the compose boundary
+// exchanges tuples to the correct worker before joining. If anything
+// were single-worker-implicit (e.g. caching a `worker_index=0`
+// assumption), this test would produce wrong or partial output.
+// ---------------------------------------------------------------------------
+
+#[ntest_timeout::timeout(5000)]
+#[test]
+fn compose_under_execute_batch_multi_worker() {
+   const WORKERS: usize = 4;
+   // Match Sink slot count to execute-batch worker count — the two MUST
+   // agree or `attach`'s per-worker indexed write panics OOB. `Sink::new()`
+   // (no args) reads from the env var and would mismatch our explicit 4.
+   let reach_sink: Sink<(i32, i32)> = Sink::new_with_workers(WORKERS);
+   let reach_sink_for_build = reach_sink.clone();
+
+   // Enough rows that hash-partition will distribute across all 4 workers —
+   // a single-worker bug would show up as missing pairs, not as skew.
+   let edges: Vec<(i32, i32)> =
+      vec![(1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (10, 11), (11, 12), (12, 13)];
+
+   execute_batch_with_workers(WORKERS, move |scope, sealer, probe| {
+      let wi = sealer.worker_index();
+      let edge_coll = sealer.input::<(i32, i32), _>(scope, &edges);
+      let a_out = ProgA::build_in_scope(scope, ProgAComposeInputs { edge: edge_coll });
+      let b_out = ProgB::build_in_scope(scope, ProgBComposeInputs { link: a_out.path });
+      reach_sink_for_build.attach(wi, &b_out.reach, probe);
+   });
+
+   let mut state: ::std::collections::HashMap<(i32, i32), i32> = Default::default();
+   for (t, d) in reach_sink.drain_deltas() {
+      *state.entry(t).or_insert(0) += d;
+   }
+   let mut snap: Vec<_> = state.iter().filter(|(_, c)| **c > 0).map(|(k, _)| *k).collect();
+   snap.sort();
+
+   // Expected TC-of-TC on the two chains {1..7} and {10..13}:
+   //   chain (1→2→3→4→5→6→7) → all (i, j) with 1≤i<j≤7 except those crossing chains.
+   //   chain (10→11→12→13)   → all (i, j) with 10≤i<j≤13.
+   let mut expected: Vec<(i32, i32)> = Vec::new();
+   for i in 1..=7 {
+      for j in (i + 1)..=7 {
+         expected.push((i, j));
+      }
+   }
+   for i in 10..=13 {
+      for j in (i + 1)..=13 {
+         expected.push((i, j));
+      }
+   }
+   expected.sort();
+
+   assert_eq!(snap, expected, "multi-worker compose missing or extra pairs — worker topology bug?");
+}
+
