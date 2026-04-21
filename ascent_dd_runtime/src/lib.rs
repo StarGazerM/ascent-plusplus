@@ -403,14 +403,22 @@ pub fn clone_borrow<T: Clone>(x: &T) -> T { x.clone() }
 
 /// DD worker count.
 ///
+/// Default is **1** — `prog.run()` on a small input shouldn't silently
+/// spawn N OS threads. Batch parallelism is opt-in via the env var.
+///
+/// When to raise it: benchmarks / big-graph workloads where join
+/// arrangement partitioning actually amortizes the thread-spawn cost.
+/// Rule of thumb: input ≥ 10⁴ tuples per worker.
+///
+/// Why not default-to-parallel: spawning `available_parallelism()` OS
+/// threads per `run()` call has two bad failure modes:
+///   1. Small inputs: thread-setup dominates, single-worker is faster.
+///   2. Parallel test harnesses: N tests × M workers = N·M threads,
+///      tests thrash and miss timeouts. See `ascent_tests_dd`.
+///
 /// Resolution order:
 ///   1. `ASCENT_DD_WORKERS` env var (any integer ≥ 1).
-///   2. Fall back to `std::thread::available_parallelism()` (logical CPUs).
-///   3. If even that fails, `1`.
-///
-/// Setting `ASCENT_DD_WORKERS=1` forces single-worker mode (no thread
-/// spawn, lowest overhead) — handy for debugging or tiny inputs where
-/// channel coordination would dominate.
+///   2. Fall back to `1`.
 pub fn dd_worker_count() -> usize {
    if let Ok(s) = std::env::var("ASCENT_DD_WORKERS") {
       if let Ok(n) = s.parse::<usize>() {
@@ -419,7 +427,7 @@ pub fn dd_worker_count() -> usize {
          }
       }
    }
-   std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+   1
 }
 
 // ---------------------------------------------------------------------------
