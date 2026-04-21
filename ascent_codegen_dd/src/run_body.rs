@@ -143,7 +143,8 @@ pub(crate) fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStr
          let #in_var: ::std::vec::Vec<#tuple_ty> = #target.#name.clone();
       });
       sinks_decl.push(quote! {
-         let #sink_outer: ::ascent::dd::Sink<#tuple_ty> = ::ascent::dd::Sink::new();
+         let #sink_outer: ::ascent::dd::Sink<#tuple_ty> =
+            ::ascent::dd::Sink::new_with_workers(__dd_workers);
       });
       sinks_clone.push(quote! {
          let #sink_inner = #sink_outer.clone();
@@ -187,11 +188,16 @@ pub(crate) fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStr
       .collect();
 
    quote! {
+      // Single env-var read — Sink slot count and execute_batch worker
+      // count MUST agree or sink.attach panics OOB. Reading
+      // dd_worker_count() twice would let an in-process env-var change
+      // create a mismatch.
+      let __dd_workers = ::ascent::dd::dd_worker_count();
       #(#inputs_setup)*
       #(#sinks_decl)*
       #(#sinks_clone)*
       #hoists
-      ::ascent::dd::execute_batch(move |scope, sealer, probe| {
+      ::ascent::dd::execute_batch_with_workers(__dd_workers, move |scope, sealer, probe| {
          #hoist_rebinds
          #closure_body
       });
@@ -220,7 +226,8 @@ fn phase1_run_body_batch(mir: &AscentMir, target: &TokenStream) -> TokenStream {
          let #in_var: ::std::vec::Vec<#tuple_ty> = #target.#name.clone();
       });
       sinks_decl.push(quote! {
-         let #sink_outer: ::ascent::dd::BatchSink<#tuple_ty> = ::ascent::dd::BatchSink::new();
+         let #sink_outer: ::ascent::dd::BatchSink<#tuple_ty> =
+            ::ascent::dd::BatchSink::new_with_workers(__dd_workers);
       });
       sinks_clone.push(quote! {
          let #sink_inner = #sink_outer.clone();
@@ -261,11 +268,13 @@ fn phase1_run_body_batch(mir: &AscentMir, target: &TokenStream) -> TokenStream {
       .collect();
 
    quote! {
+      // Single env-var read — see equivalent comment in `phase1_run_body`.
+      let __dd_workers = ::ascent::dd::dd_worker_count();
       #(#inputs_setup)*
       #(#sinks_decl)*
       #(#sinks_clone)*
       #hoists
-      ::ascent::dd::execute_batch_present(move |scope, sealer, probe| {
+      ::ascent::dd::execute_batch_present_with_workers(__dd_workers, move |scope, sealer, probe| {
          #hoist_rebinds
          #closure_body
       });

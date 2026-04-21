@@ -618,6 +618,55 @@ fn compose_output_only_no_inputs() {
    assert_eq!(got, vec![(0,), (1,), (2,)]);
 }
 
+// ---------------------------------------------------------------------------
+// Three-stage pipeline composition: A → B → C all wired together inside a
+// single timely scope. Verifies build_in_scope handles arbitrary chaining
+// — each program receives `Collection`s from upstream programs and
+// returns `Collection`s consumed downstream, with no Vec round-trips.
+//
+// Pipeline semantics:
+//   A: edges → path (TC)
+//   B: link (= A.path) → reach (TC over the TC, i.e. still TC)
+//   C: source + link (= B.reach) → reach_count (per-source count)
+// ---------------------------------------------------------------------------
+
+#[ntest_timeout::timeout(2000)]
+#[test]
+fn three_stage_pipeline_chained_compose() {
+   let count_sink: Sink<(i32, usize)> = Sink::new_with_workers(1);
+   let count_sink_for_build = count_sink.clone();
+
+   let edges = vec![(1, 2), (2, 3), (3, 4), (10, 11), (10, 12)];
+   let sources = vec![(1,), (10,)];
+
+   execute_batch_with_workers(1, move |scope, sealer, probe| {
+      let wi = sealer.worker_index();
+      let edge_coll = sealer.input::<(i32, i32), _>(scope, &edges);
+      let src_coll = sealer.input::<(i32,), _>(scope, &sources);
+
+      let a_out = ProgA::build_in_scope(scope, ProgAComposeInputs { edge: edge_coll });
+      // B consumes A.path; B.reach goes into C.
+      let b_out = ProgB::build_in_scope(scope, ProgBComposeInputs { link: a_out.path });
+      // C consumes B.reach + a separate source input.
+      let c_out =
+         ProgD::build_in_scope(scope, ProgDComposeInputs { source: src_coll, link: b_out.reach });
+
+      count_sink_for_build.attach(wi, &c_out.reach_count, probe);
+   });
+
+   let mut state: ::std::collections::HashMap<(i32, usize), i32> = Default::default();
+   for (t, d) in count_sink.drain_deltas() {
+      *state.entry(t).or_insert(0) += d;
+   }
+   let mut got: Vec<_> = state.iter().filter(|(_, c)| **c > 0).map(|(k, _)| *k).collect();
+   got.sort();
+
+   // Same expected output as the 2-stage aggregation test — TC is
+   // idempotent, so A→B→C same as A→C for these inputs.
+   assert_eq!(got, vec![(1, 3), (10, 2)]);
+}
+
+
 
 
 

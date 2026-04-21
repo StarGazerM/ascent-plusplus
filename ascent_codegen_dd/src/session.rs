@@ -59,7 +59,10 @@ fn run_via_session_body(mir: &AscentMir, target: &TokenStream, session_name: &Id
          quote! {
             #target.#name = ::std::mem::replace(
                &mut __s.#sink_field,
-               ::ascent::dd::Sink::new(),
+               // Session is single-worker — slot count is always 1.
+               // Don't read `dd_worker_count()`; it could give n>1 and
+               // waste empty slots that never receive a worker write.
+               ::ascent::dd::Sink::new_with_workers(1),
             ).into_vec();
          }
       })
@@ -377,7 +380,8 @@ fn emit_session_build_body(mir: &AscentMir, sorted_rels: &[&RelationIdentity]) -
                ::std::iter::empty::<(#tup_ty, u32, i32)>(),
             )
          };
-         let #sink: ::ascent::dd::Sink<#tup_ty> = ::ascent::dd::Sink::new();
+         // Session is single-worker (build_session_worker uses Thread allocator).
+         let #sink: ::ascent::dd::Sink<#tup_ty> = ::ascent::dd::Sink::new_with_workers(1);
       });
    }
 
