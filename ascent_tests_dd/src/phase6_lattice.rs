@@ -73,3 +73,55 @@ fn lattice_shortest_path_dag() {
    //   2→3 = 50
    assert_eq!(sp, vec![(1, 2, Dual(30)), (1, 3, Dual(40)), (2, 3, Dual(50))]);
 }
+
+// ---------------------------------------------------------------------------
+// Batch-mode lattice relations.
+//
+// `reduce` requires `R2: Abelian`; `Present` isn't Abelian. Codegen wraps
+// the lattice reduce in a Present→i32→reduce→Present round-trip (same
+// trick as aggregation/antijoin). The lattice-join logic itself is
+// unchanged.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd, mode = "batch")]
+   pub struct MaxPerKeyBatch;
+
+   relation observation(i32, u32);
+   lattice best(i32, u32);
+
+   best(k, v) <-- observation(k, v);
+}
+
+#[ntest_timeout::timeout(5000)]
+#[test]
+fn lattice_batch_max_per_key() {
+   let mut p = MaxPerKeyBatch::default();
+   p.observation = vec![(1, 5), (1, 10), (1, 3), (2, 7), (2, 2), (3, 100)];
+   p.run();
+   let mut b = p.best.clone();
+   b.sort();
+   assert_eq!(b, vec![(1, 10), (2, 7), (3, 100)]);
+}
+
+ascent! {
+   #![backend(dd, mode = "batch")]
+   pub struct ShortestPathBatch;
+
+   relation edge(i32, i32, u32);
+   lattice shortest_path(i32, i32, Dual<u32>);
+
+   shortest_path(x, y, Dual(*w)) <-- edge(x, y, w);
+   shortest_path(x, z, Dual(w + l.0)) <-- edge(x, y, w), shortest_path(y, z, l);
+}
+
+#[ntest_timeout::timeout(10000)]
+#[test]
+fn lattice_batch_shortest_path_dag() {
+   let mut p = ShortestPathBatch::default();
+   p.edge = vec![(1, 2, 30), (2, 3, 50), (1, 3, 40)];
+   p.run();
+   let mut sp = p.shortest_path.clone();
+   sp.sort();
+   assert_eq!(sp, vec![(1, 2, Dual(30)), (1, 3, Dual(40)), (2, 3, Dual(50))]);
+}

@@ -1,0 +1,16 @@
+[package]
+name = "bench_loader"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+memmap2 = "0.9"
+
+[lib]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

@@ -5,14 +5,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# Local path — needed for `#[backend(dd)]`. The `par` feature is implicit
-# via the default feature set.
 ascent = { path = "../../ascent", features = ["dd"] }
-memmap2 = "0.9"
-
-[lib]
-name = "bench_cspa_lib"
-path = "src/loader.rs"
+bench_loader = { path = "../bench_loader" }
 
 [[bin]]
 name = "cspa_batch"
@@ -21,6 +15,18 @@ path = "src/cspa_batch.rs"
 [[bin]]
 name = "cspa_dd"
 path = "src/cspa_dd.rs"
+
+[[bin]]
+name = "cspa_dd_inc"
+path = "src/cspa_dd_inc.rs"
+
+[[bin]]
+name = "tc_inc_test"
+path = "src/tc_inc_test.rs"
+
+[[bin]]
+name = "cspa_manual"
+path = "src/cspa_manual.rs"
 
 [profile.release]
 opt-level = 3

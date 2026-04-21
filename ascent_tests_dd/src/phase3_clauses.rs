@@ -191,6 +191,146 @@ fn negation_with_literal_arg() {
 }
 
 // ---------------------------------------------------------------------------
+// Batch-mode negation (FlowLog-parity pos/neg/normalize antijoin).
+//
+// `Present` diff isn't `Abelian`, so DD's `.antijoin()` can't be used
+// directly. Codegen instead re-encodes both sides as `i32` (+1 for R, -1
+// for R⋈L), concat's them, then `threshold_semigroup` filters back to
+// `Present` where the net weight is positive.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd, mode = "batch")]
+   pub struct NegationBatch;
+
+   relation node(i32);
+   relation edge(i32, i32);
+   relation sink(i32);
+
+   sink(x) <-- node(x), ! edge(x, _);
+}
+
+#[ntest_timeout::timeout(5000)]
+#[test]
+fn negation_batch_of_any_outgoing_edge() {
+   let mut p = NegationBatch::default();
+   p.node = vec![(1,), (2,), (3,), (4,)];
+   p.edge = vec![(1, 2), (2, 3)];
+   p.run();
+   let mut got = p.sink.clone();
+   got.sort();
+   assert_eq!(got, vec![(3,), (4,)]);
+}
+
+ascent! {
+   #![backend(dd, mode = "batch")]
+   pub struct NegationBatchWithLit;
+
+   relation candidate(i32);
+   relation rejected(i32, i32);
+   relation approved(i32);
+
+   approved(x) <-- candidate(x), ! rejected(x, 7);
+}
+
+#[ntest_timeout::timeout(5000)]
+#[test]
+fn negation_batch_with_literal_arg() {
+   let mut p = NegationBatchWithLit::default();
+   p.candidate = vec![(1,), (2,), (3,)];
+   p.rejected = vec![(1, 5), (2, 7), (3, 9)];
+   p.run();
+   let mut got = p.approved.clone();
+   got.sort();
+   assert_eq!(got, vec![(1,), (3,)]);
+}
+
+// ---------------------------------------------------------------------------
+// Batch-mode aggregation.
+//
+// `reduce` requires `R2: Abelian`; `Present` isn't Abelian. Codegen wraps
+// the reduce in a `Present → i32 → reduce → Present` round-trip so the
+// inner reduce sees an Abelian diff, and the result rejoins the batch
+// dataflow as a normal Present-diff Collection.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd, mode = "batch")]
+   pub struct AggBatchCount;
+
+   relation edge(u32, u32);
+   relation path(u32, u32);
+   relation num_paths(usize);
+
+   path(a, b) <-- edge(a, b);
+   path(a, c) <-- path(a, b), edge(b, c);
+   num_paths(n) <-- agg n = ::ascent::aggregators::count() in path(_, _);
+}
+
+#[ntest_timeout::timeout(5000)]
+#[test]
+fn agg_batch_count() {
+   let mut p = AggBatchCount::default();
+   p.edge = vec![(1, 2), (2, 3), (3, 4)];
+   p.run();
+   // Paths: (1,2) (2,3) (3,4) (1,3) (2,4) (1,4) = 6.
+   assert_eq!(p.num_paths, vec![(6,)]);
+}
+
+ascent! {
+   #![backend(dd, mode = "batch")]
+   pub struct AggBatchMinGrouped;
+
+   relation bar(i32, i32, i32);
+   relation grp(i32, i32);
+   relation min_per_group(i32, i32, i32);
+
+   // `grp` dedupes (x, y); batch's Present diff is set-semantic so the
+   // projection drops the multiplicity. One row per group avoids the
+   // accum-fanout that would multiply the agg output.
+   grp(x, y) <-- bar(x, y, _);
+   min_per_group(x, y, z) <--
+      grp(x, y),
+      agg z = ::ascent::aggregators::min(v) in bar(x, y, v);
+}
+
+#[ntest_timeout::timeout(5000)]
+#[test]
+fn agg_batch_min_grouped() {
+   let mut p = AggBatchMinGrouped::default();
+   p.bar = vec![(1, 1, 9), (1, 1, 3), (1, 1, 5), (1, 2, 7), (1, 2, 2)];
+   p.run();
+   let mut got = p.min_per_group.clone();
+   got.sort();
+   assert_eq!(got, vec![(1, 1, 3), (1, 2, 2)]);
+}
+
+ascent! {
+   #![backend(dd, mode = "batch")]
+   pub struct AggBatchSum;
+
+   relation foo(i32, i32);
+   relation foo_keys(i32);
+   relation total(i32, i32);
+
+   foo_keys(x) <-- foo(x, _);
+   total(x, s) <--
+      foo_keys(x),
+      agg s = ::ascent::aggregators::sum(v) in foo(x, v);
+}
+
+#[ntest_timeout::timeout(5000)]
+#[test]
+fn agg_batch_sum() {
+   let mut p = AggBatchSum::default();
+   p.foo = vec![(1, 10), (1, 20), (1, 30), (2, 5), (2, 7)];
+   p.run();
+   let mut got = p.total.clone();
+   got.sort();
+   assert_eq!(got, vec![(1, 60), (2, 12)]);
+}
+
+// ---------------------------------------------------------------------------
 // Generators: `for pat in expr` iterates an arbitrary Rust iterator inside a
 // rule body, binding each item as a new variable. This is the idiomatic way
 // Ascent programs seed relations from outer-scope data.

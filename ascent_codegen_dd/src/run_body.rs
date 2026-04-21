@@ -16,8 +16,7 @@ use itertools::Itertools;
 use crate::dfg;
 use crate::scc::compile_scc;
 use crate::utils::{
-   is_not_aggregator, materialize_rel, relation_coll_var, relation_input_var, relation_sink_inner,
-   relation_sink_outer,
+   materialize_rel, relation_coll_var, relation_input_var, relation_sink_inner, relation_sink_outer,
 };
 use crate::{emit_struct_and_default, phase1_blocker};
 
@@ -283,48 +282,10 @@ fn phase1_run_body_batch(mir: &AscentMir, target: &TokenStream) -> TokenStream {
 }
 
 /// Batch-mode entry point. FlowLog-style DD codegen: Present diff,
-/// `threshold_semigroup` distinct. Rejects features Present can't express
-/// (negation via antijoin requires Abelian; lattice reduce needs isize;
-/// aggregators cross strata).
+/// `threshold_semigroup` distinct. Negation/aggregation/lattice all go
+/// through the i32-roundtrip trick where DD's `reduce` / `antijoin` would
+/// otherwise require an `Abelian` diff `Present` can't provide.
 pub(crate) fn compile_mir_dd_batch(mir: &AscentMir, is_ascent_run: bool) -> syn::Result<TokenStream> {
-   use ascent_mir::MirBodyItem;
-   // Feature gate: batch mode only supports pure-datalog joins + generators.
-   // In MIR, negation lands as `MirBodyItem::Agg` with a "not" aggregator —
-   // `is_not_aggregator` discriminates it from real aggregators.
-   for scc in &mir.sccs {
-      for rule in &scc.rules {
-         for item in &rule.body_items {
-            match item {
-               MirBodyItem::Cond(_) | MirBodyItem::Clause(_) | MirBodyItem::Generator(_) => {},
-               MirBodyItem::Agg(agg) => {
-                  if is_not_aggregator(&agg.aggregator) {
-                     return Err(syn::Error::new(
-                        mir.signatures.declaration.ident.span(),
-                        "batch mode does not support negation (`!rel(...)`). Use `mode = \"incremental\"` instead.",
-                     ));
-                  } else {
-                     return Err(syn::Error::new(
-                        mir.signatures.declaration.ident.span(),
-                        "batch mode does not support aggregation (`agg ...`). Use `mode = \"incremental\"` instead.",
-                     ));
-                  }
-               },
-            }
-         }
-      }
-   }
-   for rel in mir.relations_ir_relations.keys() {
-      if rel.is_lattice {
-         return Err(syn::Error::new(
-            mir.signatures.declaration.ident.span(),
-            format!(
-               "batch mode does not support lattice relations (`{}`). Use `mode = \"incremental\"` instead.",
-               rel.name
-            ),
-         ));
-      }
-   }
-
    let blocker = phase1_blocker(mir);
    let struct_and_default = emit_struct_and_default(mir, !is_ascent_run);
 

@@ -1,0 +1,18 @@
+[package]
+name = "bench_ddisasm"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ascent = { path = "../../ascent" }
+bench_loader = { path = "../bench_loader" }
+
+[[bin]]
+name = "ddisasm_batch"
+path = "src/ddisasm_batch.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

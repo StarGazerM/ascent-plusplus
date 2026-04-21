@@ -1,0 +1,22 @@
+[package]
+name = "bench_andersen"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ascent = { path = "../../ascent", features = ["dd"] }
+bench_loader = { path = "../bench_loader" }
+
+[[bin]]
+name = "andersen_batch"
+path = "src/andersen_batch.rs"
+
+[[bin]]
+name = "andersen_dd"
+path = "src/andersen_dd.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

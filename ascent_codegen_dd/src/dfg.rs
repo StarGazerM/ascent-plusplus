@@ -103,6 +103,10 @@ pub(crate) enum DataflowOp {
       lat_ident: Ident,
       lat_ty: Type,
       flat_out_tuple: TokenStream,
+      /// `true` → run `reduce` over a Present→i32 roundtrip and normalize
+      /// back to `Present` at the end. `false` → use the native i32 diff
+      /// path (incremental).
+      is_batch: bool,
    },
 }
 
@@ -253,7 +257,51 @@ pub(crate) fn lower_agg_clause(
    rel_coll: &Ident, agg_destruct: TokenStream, filter_pred: TokenStream, clause_key_tuple: TokenStream,
    rel_full_value: TokenStream, ref_tuple_for_agg: TokenStream, aggregator: TokenStream,
    join_key_pattern: TokenStream, accum_vals_tuple: TokenStream, pat: TokenStream, out_tuple: TokenStream,
+   is_batch: bool,
 ) -> TokenStream {
+   // Aggregator closure body — same shape for both modes (filters by diff > 0,
+   // maps to the tuple-of-refs the user's aggregator expects, pushes each
+   // yielded result with diff +1).
+   let reduce_logic = quote! {
+      |_k, __input, __output| {
+         let __items = __input.iter()
+            .filter(|(_, __d)| *__d > 0)
+            .map(|(__v, _)| #ref_tuple_for_agg);
+         for __res in (#aggregator)(__items) {
+            __output.push((::ascent::dd::AggResult::into_dd(__res), 1i32));
+         }
+      }
+   };
+   // Build `__agg_result: Collection<(K, AggOut), Diff>` where Diff matches
+   // the surrounding dataflow (i32 incremental / Present batch).
+   //
+   // `reduce` requires `R2: Abelian`; `Present` isn't Abelian. In batch we
+   // re-encode the reduce as i32 (+1 per Present) then normalize the output
+   // back to Present via `threshold_semigroup` — same trick as the antijoin
+   // pos/neg/normalize dance. See `lower_antijoin`.
+   let agg_result_bind = if !is_batch {
+      quote! {
+         let __agg_result = __agg_input.reduce(#reduce_logic);
+      }
+   } else {
+      quote! {
+         let __agg_input_i32 = {
+            use ::ascent::dd::differential_dataflow::AsCollection;
+            use ::ascent::dd::timely::dataflow::operators::vec::Map;
+            __agg_input.inner
+               .flat_map(|(__x, __t, _)| ::std::iter::once((__x, __t, 1i32)))
+               .as_collection()
+         };
+         let __agg_result_i32 = __agg_input_i32.reduce(#reduce_logic);
+         let __agg_result = {
+            use ::ascent::dd::differential_dataflow::AsCollection;
+            use ::ascent::dd::timely::dataflow::operators::vec::Map;
+            __agg_result_i32.inner
+               .flat_map(|(__x, __t, _)| ::std::iter::once((__x, __t, ::ascent::dd::BATCH_DIFF_ONE)))
+               .as_collection()
+         };
+      }
+   };
    quote! {
       {
          // DD 0.20: `reduce` is inherent on Collection — no trait import.
@@ -265,18 +313,7 @@ pub(crate) fn lower_agg_clause(
                ::std::option::Option::None
             }
          });
-         // reduce: per-key, feed the consolidated values to the user's
-         // aggregator function and emit each yielded result. `AggResult`
-         // lifts non-`Ord` outputs (e.g. `f64` → `OrderedFloat<f64>`) so
-         // they satisfy DD's `Data` bound; we unwrap on the other side.
-         let __agg_result = __agg_input.reduce(|_k, __input, __output| {
-            let __items = __input.iter()
-               .filter(|(_, __d)| *__d > 0)
-               .map(|(__v, _)| #ref_tuple_for_agg);
-            for __res in (#aggregator)(__items) {
-               __output.push((::ascent::dd::AggResult::into_dd(__res), 1));
-            }
-         });
+         #agg_result_bind
          let __l = (#accum).map(move |__b| {
             #destr_accum
             (#accum_key_tuple, #accum_vals_cloned)
@@ -388,7 +425,33 @@ pub(crate) fn lower_antijoin(
    accum: TokenStream, destr_accum: TokenStream, accum_key_tuple: TokenStream, accum_vals_cloned: TokenStream,
    rel_coll: &Ident, destruct: TokenStream, filter_pred: TokenStream, clause_key_tuple: TokenStream,
    join_key_pattern: TokenStream, accum_vals_tuple: TokenStream, accum_bound_tuple: TokenStream,
+   is_batch: bool,
 ) -> TokenStream {
+   if !is_batch {
+      // Incremental (i32 diff): DD's built-in `.antijoin()` works because
+      // i32 is `Abelian` (supports subtraction).
+      return quote! {
+         {
+            let __r_keys = #rel_coll.clone().flat_map(move |#destruct| {
+               if #filter_pred {
+                  ::std::option::Option::Some(#clause_key_tuple)
+               } else {
+                  ::std::option::Option::None
+               }
+            });
+            let __accum_keyed = (#accum).map(move |__b| {
+               #destr_accum
+               (#accum_key_tuple, #accum_vals_cloned)
+            });
+            __accum_keyed.antijoin(__r_keys).map(|(#join_key_pattern, #accum_vals_tuple)| #accum_bound_tuple)
+         }
+      };
+   }
+   // Batch (`Present` diff): `Present` is a Semigroup but NOT `Abelian`,
+   // so DD's `.antijoin()` doesn't apply. Use FlowLog's pos/neg/normalize
+   // pattern: re-encode diffs as `i32` (+1 for R, -1 for R⋈L), concat,
+   // then `threshold_semigroup` back to `Present` keeping only net-positive
+   // rows. Equivalent to R - (R⋈L) = R rows whose key is not in L.
    quote! {
       {
          let __r_keys = #rel_coll.clone().flat_map(move |#destruct| {
@@ -402,7 +465,35 @@ pub(crate) fn lower_antijoin(
             #destr_accum
             (#accum_key_tuple, #accum_vals_cloned)
          });
-         __accum_keyed.antijoin(__r_keys).map(|(#join_key_pattern, #accum_vals_tuple)| #accum_bound_tuple)
+         // pos: R with +1 i32 diff.
+         let __aj_pos = {
+            use ::ascent::dd::differential_dataflow::AsCollection;
+            use ::ascent::dd::timely::dataflow::operators::vec::Map;
+            __accum_keyed.clone().inner
+               .flat_map(|(__x, __t, _)| ::std::iter::once((__x, __t, 1i32)))
+               .as_collection()
+         };
+         // neg: (R ⋈ L) with -1 i32 diff (semijoin via arranged join_core).
+         let __aj_neg = {
+            use ::ascent::dd::differential_dataflow::AsCollection;
+            use ::ascent::dd::timely::dataflow::operators::vec::Map;
+            let __aj_acc_arr = __accum_keyed.arrange_by_key();
+            let __aj_r_arr = __r_keys.arrange_by_self();
+            __aj_acc_arr
+               .join_core(__aj_r_arr, |__k, __v, _| ::std::iter::once((__k.clone(), __v.clone())))
+               .inner
+               .flat_map(|(__x, __t, _)| ::std::iter::once((__x, __t, -1i32)))
+               .as_collection()
+         };
+         __aj_pos.concat(__aj_neg)
+            .threshold_semigroup(|_, __w: &i32, _| {
+               if *__w > 0 {
+                  ::std::option::Option::Some(::ascent::dd::BATCH_DIFF_ONE)
+               } else {
+                  ::std::option::Option::None
+               }
+            })
+            .map(|(#join_key_pattern, #accum_vals_tuple)| #accum_bound_tuple)
       }
    }
 }
@@ -512,10 +603,11 @@ pub(crate) fn lower(op: &DataflowOp, upstream: TokenStream) -> TokenStream {
                })
          }
       },
-      DataflowOp::LatticeReduce { destructure, key_tuple, lat_ident, lat_ty, flat_out_tuple } => quote! {
-         {
-            let __keyed = (#upstream).map(|#destructure| (#key_tuple, #lat_ident));
-            let __reduced = __keyed.reduce(|_key, __input, __output| {
+      DataflowOp::LatticeReduce { destructure, key_tuple, lat_ident, lat_ty, flat_out_tuple, is_batch } => {
+         // Reduce logic is the same for both modes: fold all positive-diff
+         // contributions via `Lattice::join_mut`, emit one output per key.
+         let reduce_logic = quote! {
+            |_key, __input, __output| {
                let mut __acc: ::std::option::Option<#lat_ty> = ::std::option::Option::None;
                for (__v, __d) in __input.iter() {
                   if *__d > 0 {
@@ -528,10 +620,40 @@ pub(crate) fn lower(op: &DataflowOp, upstream: TokenStream) -> TokenStream {
                   }
                }
                if let ::std::option::Option::Some(__l) = __acc {
-                  __output.push((__l, 1));
+                  __output.push((__l, 1i32));
                }
-            });
-            __reduced.map(|(#key_tuple, __l)| #flat_out_tuple)
+            }
+         };
+         let reduced = if !*is_batch {
+            quote! { let __reduced = __keyed.reduce(#reduce_logic); }
+         } else {
+            // `reduce` requires Abelian output; Present isn't Abelian.
+            // Roundtrip Present → i32 → reduce → Present, same trick as
+            // `lower_agg_clause` and `lower_antijoin`.
+            quote! {
+               let __keyed_i32 = {
+                  use ::ascent::dd::differential_dataflow::AsCollection;
+                  use ::ascent::dd::timely::dataflow::operators::vec::Map;
+                  __keyed.inner
+                     .flat_map(|(__x, __t, _)| ::std::iter::once((__x, __t, 1i32)))
+                     .as_collection()
+               };
+               let __reduced_i32 = __keyed_i32.reduce(#reduce_logic);
+               let __reduced = {
+                  use ::ascent::dd::differential_dataflow::AsCollection;
+                  use ::ascent::dd::timely::dataflow::operators::vec::Map;
+                  __reduced_i32.inner
+                     .flat_map(|(__x, __t, _)| ::std::iter::once((__x, __t, ::ascent::dd::BATCH_DIFF_ONE)))
+                     .as_collection()
+               };
+            }
+         };
+         quote! {
+            {
+               let __keyed = (#upstream).map(|#destructure| (#key_tuple, #lat_ident));
+               #reduced
+               __reduced.map(|(#key_tuple, __l)| #flat_out_tuple)
+            }
          }
       },
    }

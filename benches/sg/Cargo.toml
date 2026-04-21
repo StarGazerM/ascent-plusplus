@@ -1,0 +1,22 @@
+[package]
+name = "bench_sg"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ascent = { path = "../../ascent", features = ["dd"] }
+bench_loader = { path = "../bench_loader" }
+
+[[bin]]
+name = "sg_batch"
+path = "src/sg_batch.rs"
+
+[[bin]]
+name = "sg_dd"
+path = "src/sg_dd.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

@@ -1,4 +1,5 @@
-// Context-Sensitive Pointer Analysis (CSPA) — DD batch-mode backend.
+// Context-Sensitive Pointer Analysis (CSPA) — DD incremental-mode backend.
+// Isize diffs, `reduce`-based distinct, `u32` timestamps inside iterative scopes.
 use ascent::ascent_par;
 use bench_loader::load_2;
 use std::env;
@@ -6,19 +7,19 @@ use std::time::Instant;
 
 type V = i32;
 
+// FlowLog-parity rule shape — no assign_input/deref_input indirection. The
+// user fills `prog.assign`/`prog.deref` directly like FlowLog's Assign /
+// Dereference EDBs. Previously we had `assign(x,y) <-- assign_input(x,y)`
+// copy rules + two extra relations + an extra non-looping SCC, which made
+// the dataflow structurally wider than FlowLog's.
 ascent_par! {
-    #![backend(dd, mode = "batch")]
+    #![backend(dd, mode = "incremental")]
     pub struct AscentProgram;
-    relation assign_input(V, V);
-    relation deref_input(V, V);
     relation assign(V, V);
     relation deref(V, V);
     relation value_flow(V, V);
     relation memory_alias(V, V);
     relation value_alias(V, V);
-
-    assign(x, y) <-- assign_input(x, y);
-    deref(x, y) <-- deref_input(x, y);
 
     value_flow(y, x) <-- assign(y, x);
     value_flow(x, x) <-- assign(x, _);
@@ -43,8 +44,8 @@ fn main() {
 
     let t0 = Instant::now();
     let mut prog = AscentProgram::default();
-    for t in load_2(dir, "Assign.csv") { prog.assign_input.push(t); }
-    for t in load_2(dir, "Dereference.csv") { prog.deref_input.push(t); }
+    for t in load_2(dir, "Assign.csv") { prog.assign.push(t); }
+    for t in load_2(dir, "Dereference.csv") { prog.deref.push(t); }
     let load_time = t0.elapsed();
     eprintln!("Loaded in {:?}", load_time);
 

@@ -1,19 +1,10 @@
-// Context-Sensitive Pointer Analysis (CSPA)
+// Context-Sensitive Pointer Analysis (CSPA) — pure Ascent batch.
 use ascent::ascent_par;
+use bench_loader::load_2;
 use std::env;
-use std::fs;
 use std::time::Instant;
 
 type V = i32;
-
-fn load_2(dir: &str, name: &str) -> Vec<(V, V)> {
-    let path = format!("{}/{}", dir, name);
-    let content = fs::read_to_string(&path).unwrap_or_default();
-    let delim = if content.contains('\t') { '\t' } else { ',' };
-    content.lines().filter(|l| !l.is_empty())
-        .map(|l| { let c: Vec<&str> = l.split(delim).collect(); (c[0].parse().unwrap(), c[1].parse().unwrap()) })
-        .collect()
-}
 
 ascent_par! {
     relation assign_input(V, V);
@@ -63,4 +54,5 @@ fn main() {
     eprintln!("memory_alias: {}", prog.memory_alias.len());
     eprintln!("value_alias: {}", prog.value_alias.len());
     eprintln!("Execution: {:?}", run_time);
+    eprintln!("Total: {:?}", load_time + run_time);
 }
