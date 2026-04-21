@@ -238,6 +238,30 @@ pub struct AscentConfig {
    /// semi-naive at the dataflow-operator level (e.g. DD's `Variable`).
    /// Set by shorthand resolution in `#![backend(...)]`; defaults to `false`.
    pub backend_operator_semi_naive: bool,
+   /// DD-specific config from `#![dd(...)]`. Present iff the program uses
+   /// `#![dd(...)]`. Validated at parse time to require `#![backend(dd)]`
+   /// active — rejecting `#![dd(...)]` under batch/parallel backends so
+   /// a mis-targeted attr can't silently become a no-op.
+   pub dd_config: Option<DdConfig>,
+}
+
+/// DD backend namespace. Collects all DD-specific knobs in one attribute
+/// (`#![dd(mode = incremental, workers = 4, ...)]`) rather than nesting
+/// them inside `#![backend(dd, ...)]`'s opaque extra-args. Extensible:
+/// new knobs add fields here without touching the shared `backend(...)`
+/// mechanism.
+#[derive(Clone, Debug, Default)]
+pub struct DdConfig {
+   /// Execution mode: incremental (u32 timestamps, iterative scope) vs
+   /// batch (`()` timestamp, Present-diff). Default incremental.
+   pub mode: DdMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DdMode {
+   #[default]
+   Incremental,
+   Batch,
 }
 
 impl AscentConfig {
@@ -245,6 +269,7 @@ impl AscentConfig {
    const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
    const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
    const BACKEND_ATTR: &'static str = "backend";
+   const DD_ATTR: &'static str = "dd";
 
    pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> Result<AscentConfig> {
       let include_rule_times = attrs
@@ -288,6 +313,18 @@ impl AscentConfig {
          },
       };
 
+      // `#![dd(...)]` — DD-specific config namespace. Parsed unconditionally
+      // (so we can give a clear error if the program isn't DD-backed) and
+      // validated below to require an active DD backend.
+      let dd_attr = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::DD_ATTR));
+      let dd_config: Option<DdConfig> = match dd_attr {
+         None => None,
+         Some(attr) => {
+            let list = attr.meta.require_list()?;
+            Some(parse2::<DdConfig>(list.tokens.clone())?)
+         },
+      };
+
       let _ = is_parallel;
       let _ = backend_attr;
 
@@ -296,6 +333,7 @@ impl AscentConfig {
          Self::GENERATE_RUN_TIMEOUT_ATTR,
          Self::INTER_RULE_PARALLELISM_ATTR,
          Self::BACKEND_ATTR,
+         Self::DD_ATTR,
          REL_DS_ATTR,
       ];
       for attr in attrs.iter() {
@@ -310,6 +348,25 @@ impl AscentConfig {
       if inter_rule_parallelism.is_some() && !is_parallel {
          return Err(Error::new_spanned(inter_rule_parallelism, "attribute only allowed in parallel Ascent"));
       }
+      // `#![dd(...)]` requires an active DD backend. Reject if the program
+      // is on a non-DD backend so a mis-targeted attr can't silently be
+      // a no-op (the user would be surprised when their `mode = batch`
+      // hint did nothing because they forgot `#![backend(dd)]`).
+      // Detection: DD shorthand sets `backend_operator_semi_naive = true`.
+      // For custom backend paths, conservatively allow `#![dd(...)]` —
+      // the custom backend may consume it.
+      if dd_config.is_some() && !backend_operator_semi_naive {
+         let is_known_non_dd = backend_attr
+            .and_then(|attr| attr.meta.require_list().ok())
+            .and_then(|list| parse2::<BackendArgs>(list.tokens.clone()).ok())
+            .map_or(true, |b| b.path.is_ident("batch"));
+         if is_known_non_dd {
+            return Err(Error::new_spanned(
+               dd_attr.unwrap(),
+               "`#![dd(...)]` requires `#![backend(dd)]`. Either add the DD backend, or remove the dd attribute.",
+            ));
+         }
+      }
       let default_ds = get_ds_attr(&attrs)?
          .unwrap_or_else(|| DsAttributeContents { path: parse_quote! {::ascent::rel}, args: TokenStream::default() });
       Ok(AscentConfig {
@@ -321,7 +378,48 @@ impl AscentConfig {
          backend_path,
          backend_extra,
          backend_operator_semi_naive,
+         dd_config,
       })
+   }
+}
+
+impl syn::parse::Parse for DdConfig {
+   /// Parse the body of `#![dd(...)]`. Format: comma-separated `key = value`
+   /// pairs. Currently recognized keys: `mode = incremental | batch`.
+   /// Unknown keys → error (not silent ignore — matches the strict-attr
+   /// philosophy of this crate).
+   fn parse(input: syn::parse::ParseStream) -> Result<Self> {
+      let mut cfg = DdConfig::default();
+      let mut saw_mode = false;
+      while !input.is_empty() {
+         let key: syn::Ident = input.parse()?;
+         input.parse::<syn::Token![=]>()?;
+         if key == "mode" {
+            if saw_mode {
+               return Err(Error::new(key.span(), "`mode` specified more than once"));
+            }
+            saw_mode = true;
+            let mode_ident: syn::Ident = input.parse()?;
+            cfg.mode = if mode_ident == "incremental" {
+               DdMode::Incremental
+            } else if mode_ident == "batch" {
+               DdMode::Batch
+            } else {
+               return Err(Error::new(
+                  mode_ident.span(),
+                  format!("unknown DD mode `{mode_ident}`; expected `incremental` or `batch`"),
+               ));
+            };
+         } else {
+            return Err(Error::new(key.span(), format!("unknown DD config key `{key}`; recognized keys: `mode`")));
+         }
+         if input.peek(syn::Token![,]) {
+            input.parse::<syn::Token![,]>()?;
+         } else if !input.is_empty() {
+            return Err(input.error("expected `,` or end of args"));
+         }
+      }
+      Ok(cfg)
    }
 }
 

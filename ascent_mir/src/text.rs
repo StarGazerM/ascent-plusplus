@@ -14,9 +14,9 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Expr, LitInt, Pat, Token, Type, braced, bracketed, parenthesized};
 
 use crate::types::{
-   AscentConfig, AscentMir, CondClause, DsAttributeContents, GeneratorNode, IfClause, IfLetClause, ImplSignature,
-   IndexValType, IrAggClause, IrHeadClause, IrRelation, LetClause, MirBodyClause, MirBodyItem, MirRelation,
-   MirRelationVersion, MirRule, MirScc, RelationIdentity, RelationMetadata, Signatures, TypeSignature,
+   AscentConfig, AscentMir, CondClause, DdConfig, DdMode, DsAttributeContents, GeneratorNode, IfClause, IfLetClause,
+   ImplSignature, IndexValType, IrAggClause, IrHeadClause, IrRelation, LetClause, MirBodyClause, MirBodyItem,
+   MirRelation, MirRelationVersion, MirRule, MirScc, RelationIdentity, RelationMetadata, Signatures, TypeSignature,
    ir_name_for_rel_indices,
 };
 
@@ -87,6 +87,19 @@ fn emit_program(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
    let default_ds = emit_ds_attr(&cfg.default_ds);
    let config_attrs = attr_list(&cfg.attrs);
    let signature = emit_signature(&mir.signatures);
+   // DD config is optional. `-` means no `#![dd(...)]` attr was present;
+   // any other form is `{ mode = MODE }`. Parsed symmetrically in
+   // `parse_program`. Keeps the textual MIR self-describing.
+   let dd_config_tok = match &cfg.dd_config {
+      None => quote! { - },
+      Some(dd) => {
+         let mode = match dd.mode {
+            DdMode::Incremental => kw("incremental"),
+            DdMode::Batch => kw("batch"),
+         };
+         quote! { { mode = #mode } }
+      },
+   };
 
    quote! {
       program {
@@ -98,6 +111,7 @@ fn emit_program(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
          backend                      { #backend_path } ;
          backend_extra                { #backend_extra } ;
          backend_operator_semi_naive  #operator_semi_naive ;
+         dd_config                    #dd_config_tok ;
          default_ds                   #default_ds ;
          config_attrs { #config_attrs }
          signature { #signature }
@@ -606,6 +620,28 @@ fn parse_program(input: ParseStream) -> syn::Result<(AscentConfig, Signatures, b
    let backend_operator_semi_naive = parse_bool(&body)?;
    body.parse::<Token![;]>()?;
 
+   expect_kw(&body, "dd_config")?;
+   let dd_config = if body.peek(Token![-]) {
+      body.parse::<Token![-]>()?;
+      None
+   } else {
+      let inner;
+      braced!(inner in body);
+      // { mode = incremental | batch }
+      expect_kw(&inner, "mode")?;
+      inner.parse::<Token![=]>()?;
+      let mode_ident: Ident = inner.parse()?;
+      let mode = if mode_ident == "incremental" {
+         DdMode::Incremental
+      } else if mode_ident == "batch" {
+         DdMode::Batch
+      } else {
+         return Err(syn::Error::new(mode_ident.span(), format!("unknown DD mode `{mode_ident}` in MIR text")));
+      };
+      Some(DdConfig { mode })
+   };
+   body.parse::<Token![;]>()?;
+
    expect_kw(&body, "default_ds")?;
    let default_ds = parse_ds_attr(&body)?;
    body.parse::<Token![;]>()?;
@@ -625,6 +661,7 @@ fn parse_program(input: ParseStream) -> syn::Result<(AscentConfig, Signatures, b
       backend_path,
       backend_extra,
       backend_operator_semi_naive,
+      dd_config,
    };
    Ok((config, signatures, is_parallel, is_ascent_run))
 }

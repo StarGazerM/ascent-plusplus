@@ -7,7 +7,8 @@ use std::time::Instant;
 type V = i32;
 
 ascent_par! {
-    #![backend(dd, mode = "batch")]
+    #![backend(dd)]
+    #![dd(mode = batch)]
     pub struct AscentProgram;
     relation assign_input(V, V);
     relation deref_input(V, V);

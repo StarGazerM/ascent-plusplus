@@ -200,7 +200,8 @@ fn negation_with_literal_arg() {
 // ---------------------------------------------------------------------------
 
 ascent! {
-   #![backend(dd, mode = "batch")]
+   #![backend(dd)]
+    #![dd(mode = batch)]
    pub struct NegationBatch;
 
    relation node(i32);
@@ -223,7 +224,8 @@ fn negation_batch_of_any_outgoing_edge() {
 }
 
 ascent! {
-   #![backend(dd, mode = "batch")]
+   #![backend(dd)]
+    #![dd(mode = batch)]
    pub struct NegationBatchWithLit;
 
    relation candidate(i32);
@@ -255,7 +257,8 @@ fn negation_batch_with_literal_arg() {
 // ---------------------------------------------------------------------------
 
 ascent! {
-   #![backend(dd, mode = "batch")]
+   #![backend(dd)]
+    #![dd(mode = batch)]
    pub struct AggBatchCount;
 
    relation edge(u32, u32);
@@ -278,7 +281,8 @@ fn agg_batch_count() {
 }
 
 ascent! {
-   #![backend(dd, mode = "batch")]
+   #![backend(dd)]
+    #![dd(mode = batch)]
    pub struct AggBatchMinGrouped;
 
    relation bar(i32, i32, i32);
@@ -306,7 +310,8 @@ fn agg_batch_min_grouped() {
 }
 
 ascent! {
-   #![backend(dd, mode = "batch")]
+   #![backend(dd)]
+    #![dd(mode = batch)]
    pub struct AggBatchSum;
 
    relation foo(i32, i32);

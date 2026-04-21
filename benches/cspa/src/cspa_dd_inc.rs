@@ -13,7 +13,8 @@ type V = i32;
 // copy rules + two extra relations + an extra non-looping SCC, which made
 // the dataflow structurally wider than FlowLog's.
 ascent_par! {
-    #![backend(dd, mode = "incremental")]
+    #![backend(dd)]
+    #![dd(mode = incremental)]
     pub struct AscentProgram;
     relation assign(V, V);
     relation deref(V, V);

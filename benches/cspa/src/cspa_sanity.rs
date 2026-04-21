@@ -8,7 +8,8 @@ use std::time::Instant;
 type V = i32;
 
 ascent_par! {
-    #![backend(dd, mode = "incremental")]
+    #![backend(dd)]
+    #![dd(mode = incremental)]
     pub struct AscentProgram;
     relation assign(V, V);
     relation deref(V, V);

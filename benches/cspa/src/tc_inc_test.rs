@@ -4,7 +4,8 @@ use ascent::ascent;
 type V = i32;
 
 ascent! {
-    #![backend(dd, mode = "incremental")]
+    #![backend(dd)]
+    #![dd(mode = incremental)]
     pub struct Tc;
     relation edge(V, V);
     relation path(V, V);

@@ -48,7 +48,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 
 use ascent_mir::utils::tuple_type;
-use ascent_mir::{AscentMir, MirBodyItem};
+use ascent_mir::{AscentMir, DdMode, MirBodyItem};
 
 // ============================================================================
 // Proc-macro entry point — frontend invokes us via
@@ -187,14 +187,10 @@ pub(crate) fn phase1_blocker(mir: &AscentMir) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 fn compile_mir_dd(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
-   // DD's `batch` vs `incremental` mode is a backend-private sub-config,
-   // passed through `#![backend(dd, mode = "batch")]` → MIR
-   // `backend_extra` tokens. Parse here — the frontend doesn't need to
-   // know DD's mode space.
-   let mode = match parse_dd_mode(&mir.config.backend_extra) {
-      Ok(mode) => mode,
-      Err(e) => return e.to_compile_error(),
-   };
+   // DD's `batch` vs `incremental` mode lives on `mir.config.dd_config`,
+   // sourced from the program's `#![dd(mode = ...)]` attribute. Default
+   // (no `#![dd(...)]` present) is incremental.
+   let mode = mir.config.dd_config.as_ref().map_or(DdMode::default(), |c| c.mode);
    // Per-rule fn extraction: rules that match simple patterns get lifted
    // out to free `fn` items at module level so rustc's codegen-unit
    // scheduler can parallelize LLVM-backend work across rules. Opt-in
@@ -217,45 +213,6 @@ fn compile_mir_dd(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
       #rule_fn_items
       #inner
    }
-}
-
-/// DD mode discriminator, private to this backend.
-#[derive(Clone, Copy, Default)]
-enum DdMode {
-   #[default]
-   Incremental,
-   Batch,
-}
-
-/// Parse `backend_extra` tokens for DD's `mode = "batch"|"incremental"`.
-/// Empty tokens → default (incremental). Any other unrecognised form is
-/// an error.
-fn parse_dd_mode(tokens: &TokenStream) -> syn::Result<DdMode> {
-   if tokens.is_empty() {
-      return Ok(DdMode::default());
-   }
-   struct ModeArgs(Option<DdMode>);
-   impl syn::parse::Parse for ModeArgs {
-      fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-         if input.is_empty() {
-            return Ok(ModeArgs(None));
-         }
-         let key: Ident = input.parse()?;
-         if key != "mode" {
-            return Err(syn::Error::new(key.span(), format!("unknown DD arg `{key}`; expected `mode`")));
-         }
-         input.parse::<syn::Token![=]>()?;
-         let lit: syn::LitStr = input.parse()?;
-         let mode = match lit.value().as_str() {
-            "batch" => DdMode::Batch,
-            "incremental" => DdMode::Incremental,
-            other => return Err(syn::Error::new(lit.span(), format!("unknown DD mode `{other}`"))),
-         };
-         Ok(ModeArgs(Some(mode)))
-      }
-   }
-   let parsed: ModeArgs = syn::parse2(tokens.clone())?;
-   Ok(parsed.0.unwrap_or_default())
 }
 
 fn compile_mir_dd_incremental(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {

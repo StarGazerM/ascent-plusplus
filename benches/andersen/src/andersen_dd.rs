@@ -8,7 +8,8 @@ use std::time::Instant;
 type V = i32;
 
 ascent_par! {
-    #![backend(dd, mode = "batch")]
+    #![backend(dd)]
+    #![dd(mode = batch)]
     pub struct AscentProgram;
     relation address_of(V, V);
     relation assign(V, V);

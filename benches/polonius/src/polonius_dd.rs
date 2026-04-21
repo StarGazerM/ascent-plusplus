@@ -11,7 +11,8 @@ use std::time::Instant;
 type V = i32;
 
 ascent_par! {
-    #![backend(dd, mode = "incremental")]
+    #![backend(dd)]
+    #![dd(mode = incremental)]
     pub struct AscentProgram;
     // EDB (input relations)
     relation subset_base(V, V, V);

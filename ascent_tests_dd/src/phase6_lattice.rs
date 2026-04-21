@@ -84,7 +84,8 @@ fn lattice_shortest_path_dag() {
 // ---------------------------------------------------------------------------
 
 ascent! {
-   #![backend(dd, mode = "batch")]
+   #![backend(dd)]
+    #![dd(mode = batch)]
    pub struct MaxPerKeyBatch;
 
    relation observation(i32, u32);
@@ -105,7 +106,8 @@ fn lattice_batch_max_per_key() {
 }
 
 ascent! {
-   #![backend(dd, mode = "batch")]
+   #![backend(dd)]
+    #![dd(mode = batch)]
    pub struct ShortestPathBatch;
 
    relation edge(i32, i32, u32);
