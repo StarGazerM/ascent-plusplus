@@ -576,6 +576,49 @@ fn compose_plus_plan_consistent_across_emissions() {
    assert_eq!(scope_out, session_out, "plan emissions diverged across compose vs session");
 }
 
+// ---------------------------------------------------------------------------
+// Edge case: program with ONLY `#[output]` (no `#[input]`). The
+// ComposeInputs struct has zero "real" fields — the codegen injects a
+// phantom field to anchor the `S` type parameter and avoid E0392
+// "unused type parameter". This test exercises that path.
+//
+// The program seeds itself via a literal in the rule body — no caller-
+// provided collections needed. ComposeInputs is empty-but-anchored.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd)]
+   pub struct ProgF;
+   #[output] relation singleton(i32);
+   // Generator with no body atoms — pure self-seeding.
+   singleton(x) <-- for x in 0..3;
+}
+
+#[ntest_timeout::timeout(2000)]
+#[test]
+fn compose_output_only_no_inputs() {
+   let sink: Sink<(i32,)> = Sink::new_with_workers(1);
+   let sink_for_build = sink.clone();
+   execute_batch_with_workers(1, move |scope, sealer, probe| {
+      let wi = sealer.worker_index();
+      // ComposeInputs has only the phantom field — fill it to anchor `S`.
+      let out = ProgF::build_in_scope(
+         scope,
+         ProgFComposeInputs { __phantom: ::std::marker::PhantomData },
+      );
+      sink_for_build.attach(wi, &out.singleton, probe);
+   });
+
+   let mut state: ::std::collections::HashMap<(i32,), i32> = Default::default();
+   for (t, d) in sink.drain_deltas() {
+      *state.entry(t).or_insert(0) += d;
+   }
+   let mut got: Vec<_> = state.iter().filter(|(_, c)| **c > 0).map(|(k, _)| *k).collect();
+   got.sort();
+   assert_eq!(got, vec![(0,), (1,), (2,)]);
+}
+
+
 
 
 
