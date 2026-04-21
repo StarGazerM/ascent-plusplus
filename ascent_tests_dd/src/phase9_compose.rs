@@ -299,4 +299,76 @@ fn compose_session_scale_smoke() {
    assert_eq!(reached_count, (N as usize) * (N as usize + 1) / 2, "missing pairs at scale");
 }
 
+// ---------------------------------------------------------------------------
+// Three-emission coexistence: a single program annotated for compose
+// (`#[input]` / `#[output]`) must still work via `.run()` and `::session()`
+// — the three emissions share MIR but produce independent code paths,
+// and a regression in one mustn't silently break the others.
+//
+// Asserts identical output across all three for the same input.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd)]
+   pub struct TriProg;
+   #[input] relation edge(i32, i32);
+   #[output] relation path(i32, i32);
+   path(x, y) <-- edge(x, y);
+   path(x, z) <-- edge(x, y), path(y, z);
+}
+
+#[ntest_timeout::timeout(5000)]
+#[test]
+fn three_emissions_produce_identical_output() {
+   let edges = vec![(1, 2), (2, 3), (3, 4), (5, 6)];
+   let expected: Vec<(i32, i32)> = vec![(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4), (5, 6)];
+
+   // 1. .run() — uses execute_batch under the hood, multi-worker capable
+   let run_path: Vec<(i32, i32)> = {
+      let mut p = TriProg::default();
+      p.edge = edges.clone();
+      p.run();
+      let mut path = p.path;
+      path.sort();
+      path.dedup();
+      path
+   };
+   assert_eq!(run_path, expected, ".run() produced wrong output");
+
+   // 2. ::session() + commit() — incremental, single-worker
+   let session_path: Vec<(i32, i32)> = {
+      let mut s = TriProg::session();
+      for e in &edges {
+         s.edge_insert(*e);
+      }
+      s.commit();
+      let mut path = s.path_snapshot();
+      path.sort();
+      path
+   };
+   assert_eq!(session_path, expected, "::session() produced wrong output");
+
+   // 3. build_in_scope inside execute_batch — composable path
+   let scope_path: Vec<(i32, i32)> = {
+      let sink: Sink<(i32, i32)> = Sink::new_with_workers(1);
+      let sink_for_build = sink.clone();
+      let edges_for_build = edges.clone();
+      execute_batch_with_workers(1, move |scope, sealer, probe| {
+         let wi = sealer.worker_index();
+         let edge_coll = sealer.input::<(i32, i32), _>(scope, &edges_for_build);
+         let out = TriProg::build_in_scope(scope, TriProgComposeInputs { edge: edge_coll });
+         sink_for_build.attach(wi, &out.path, probe);
+      });
+      let mut state: ::std::collections::HashMap<(i32, i32), i32> = Default::default();
+      for (t, d) in sink.drain_deltas() {
+         *state.entry(t).or_insert(0) += d;
+      }
+      let mut path: Vec<_> = state.iter().filter(|(_, c)| **c > 0).map(|(k, _)| *k).collect();
+      path.sort();
+      path
+   };
+   assert_eq!(scope_path, expected, "build_in_scope produced wrong output");
+}
+
+
 
