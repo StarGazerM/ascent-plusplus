@@ -561,32 +561,38 @@ impl<D: ExchangeData> BatchSealable for InputSession<(), D, BatchDiff> {
 pub struct BatchSealer {
    sessions: Vec<Box<dyn BatchSealable + 'static>>,
    worker_index: usize,
+   peers: usize,
 }
 
 impl BatchSealer {
-   fn new(worker_index: usize) -> Self { Self { sessions: Vec::new(), worker_index } }
+   fn new(worker_index: usize, peers: usize) -> Self {
+      Self { sessions: Vec::new(), worker_index, peers }
+   }
 
    /// Worker index. Exposed so generated code can route per-worker sink writes.
    pub fn worker_index(&self) -> usize { self.worker_index }
 
    pub fn input<T, G>(&mut self, scope: &mut G, data: Vec<T>) -> Collection<G, T, BatchDiff>
    where
-      T: ExchangeData,
+      T: ExchangeData + Hashable,
       G: Scope<Timestamp = ()> + Input,
    {
-      // Use `scope.new_collection_from_raw(empty)` instead of
-      // `InputSession::new() + to_collection()`. The InputSession::new()
-      // path creates a DIFFERENT timely operator graph that breaks DD's
-      // fixpoint convergence under `Present` diff at scale (confirmed via
-      // hand-written side-by-side: `new_collection_from_raw` scales
-      // linearly to n=10000+; `InputSession::new()+to_collection()` hangs
-      // at n=1025). Root cause: `scope.new_input()` vs `scope.input_from()`
-      // register the input differently with the scope's progress tracker.
+      // Use `scope.new_collection_from_raw(empty)` — see incremental
+      // `Sealer::input` for the n=1025 hang-fix backstory.
       let (mut session, coll) = scope.new_collection_from_raw::<T, BatchDiff, _>(
          ::std::iter::empty::<(T, (), BatchDiff)>(),
       );
-      if self.worker_index == 0 {
-         for t in data {
+      // Hash-partition input across workers (mirrors incremental
+      // `Sealer::input`). Previously concentrated on worker 0, which
+      // forced DD's downstream `arrange_by_key` to shuffle every tuple
+      // off worker 0 — same root cause as the FlowLog `shard_int`
+      // optimization. Each worker inserts only the tuples whose
+      // `Hashable::hashed() % peers` matches its index.
+      let peers = self.peers.max(1);
+      let my = self.worker_index;
+      for t in data {
+         let h: u64 = t.hashed().into();
+         if (h as usize) % peers == my {
             session.update(t, BATCH_DIFF_ONE);
          }
       }
@@ -702,8 +708,9 @@ where F: for<'a> Fn(&mut BatchRootScope<'a>, &mut BatchSealer, &mut ProbeHandle<
    timely::execute::execute(config, move |worker| {
       let build = build.clone();
       let worker_index = worker.index();
+      let peers = worker.peers();
       let (mut sealer, probe) = worker.dataflow::<(), _, _>(|scope| {
-         let mut sealer = BatchSealer::new(worker_index);
+         let mut sealer = BatchSealer::new(worker_index, peers);
          let mut probe = ProbeHandle::new();
          build(scope, &mut sealer, &mut probe);
          (sealer, probe)
