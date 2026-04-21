@@ -1,208 +1,21 @@
 #![deny(warnings)]
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write;
 
 use itertools::Itertools;
 use petgraph::algo::condensation;
 use petgraph::graphmap::DiGraphMap;
-use proc_macro2::{Ident, Span};
-use syn::{Expr, Type};
 
-use crate::ascent_hir::{
-   AscentConfig, AscentIr, IndexValType, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrRelation, IrRule,
-   RelationMetadata,
+use crate::ascent_hir::AscentIr;
+use crate::utils::intersects;
+// Data types live in `ascent_mir` now. This file only hosts HIR→MIR lowering
+// logic and related helpers.
+pub(crate) use ascent_mir::{
+   AscentMir, IrBodyItem, IrRelation, MirBodyClause, MirBodyItem, MirRelation, MirRelationVersion, MirRule, MirScc,
 };
-use crate::ascent_mir::MirRelationVersion::*;
-use crate::ascent_syntax::{CondClause, GeneratorNode, RelationIdentity, Signatures};
-use crate::syn_utils::pattern_get_vars;
-use crate::utils::{expr_to_ident, intersects, pat_to_ident, tuple_type};
+use ascent_mir::{IrRule, MirRelationVersion::*, RelationIdentity};
 
-pub(crate) struct AscentMir {
-   pub sccs: Vec<MirScc>,
-   #[allow(unused)]
-   pub deps: HashMap<usize, HashSet<usize>>,
-   pub relations_ir_relations: HashMap<RelationIdentity, HashSet<IrRelation>>,
-   pub relations_full_indices: HashMap<RelationIdentity, IrRelation>,
-   pub relations_metadata: HashMap<RelationIdentity, RelationMetadata>,
-   pub lattices_full_indices: HashMap<RelationIdentity, IrRelation>,
-   pub signatures: Signatures,
-   pub config: AscentConfig,
-   pub is_parallel: bool,
-}
-
-pub(crate) struct MirScc {
-   pub rules: Vec<MirRule>,
-   pub dynamic_relations: HashMap<RelationIdentity, HashSet<IrRelation>>,
-   pub body_only_relations: HashMap<RelationIdentity, HashSet<IrRelation>>,
-   pub is_looping: bool,
-}
-
-pub(crate) fn mir_summary(mir: &AscentMir) -> String {
-   let mut res = String::new();
-   for (i, scc) in mir.sccs.iter().enumerate() {
-      writeln!(&mut res, "scc {}, is_looping: {}:", i, scc.is_looping).unwrap();
-      for r in scc.rules.iter() {
-         writeln!(&mut res, "  {}", mir_rule_summary(r)).unwrap();
-      }
-      let sorted_dynamic_relation_keys = scc.dynamic_relations.keys().sorted_by_key(|rel| &rel.name);
-      write!(&mut res, "  dynamic relations: ").unwrap();
-      writeln!(&mut res, "{}", sorted_dynamic_relation_keys.map(|r| r.name.to_string()).join(", ")).unwrap();
-   }
-   res
-}
-
-#[derive(Clone)]
-pub(crate) struct MirRule {
-   // TODO rename to head_clauses
-   pub head_clause: Vec<IrHeadClause>,
-   pub body_items: Vec<MirBodyItem>,
-   pub simple_join_start_index: Option<usize>,
-   pub reorderable: bool,
-}
-
-pub(crate) fn mir_rule_summary(rule: &MirRule) -> String {
-   fn bitem_to_str(bitem: &MirBodyItem) -> String {
-      match bitem {
-         MirBodyItem::Clause(bcl) => format!("{}_{}", bcl.rel.ir_name, bcl.rel.version.to_string()),
-         MirBodyItem::Generator(gen) =>
-            format!("for_{}", pat_to_ident(&gen.pattern).map(|x| x.to_string()).unwrap_or_default()),
-         MirBodyItem::Cond(CondClause::If(..)) => format!("if ⋯"),
-         MirBodyItem::Cond(CondClause::IfLet(..)) => format!("if let ⋯"),
-         MirBodyItem::Cond(CondClause::Let(..)) => format!("let ⋯"),
-         MirBodyItem::Agg(agg) => format!("agg {}", agg.rel.ir_name()),
-      }
-   }
-   format!(
-      "{} <-- {}{simple_join}{reorderable}",
-      rule.head_clause.iter().map(|hcl| hcl.rel.name.to_string()).join(", "),
-      rule.body_items.iter().map(bitem_to_str).join(", "),
-      simple_join = if rule.simple_join_start_index.is_some() { " [SIMPLE JOIN]" } else { "" },
-      reorderable = if rule.simple_join_start_index.is_some() && !rule.reorderable { " [NOT REORDERABLE]" } else { "" }
-   )
-}
-
-#[derive(Clone)]
-pub(crate) enum MirBodyItem {
-   Clause(MirBodyClause),
-   Generator(GeneratorNode),
-   Cond(CondClause),
-   Agg(IrAggClause),
-}
-
-impl MirBodyItem {
-   pub fn unwrap_clause(&self) -> &MirBodyClause {
-      match self {
-         MirBodyItem::Clause(cl) => cl,
-         _ => panic!("MirBodyItem: unwrap_clause called on non_clause"),
-      }
-   }
-
-   pub fn clause(&self) -> Option<&MirBodyClause> {
-      match self {
-         MirBodyItem::Clause(mir_body_clause) => Some(mir_body_clause),
-         _ => None,
-      }
-   }
-
-   pub fn bound_vars(&self) -> Vec<Ident> {
-      match self {
-         MirBodyItem::Clause(cl) => {
-            let cl_vars = cl.args.iter().filter_map(expr_to_ident);
-            let cond_cl_vars = cl.cond_clauses.iter().flat_map(|cc| cc.bound_vars());
-            cl_vars.chain(cond_cl_vars).collect()
-         },
-         MirBodyItem::Generator(gen) => pattern_get_vars(&gen.pattern),
-         MirBodyItem::Cond(cond) => cond.bound_vars(),
-         MirBodyItem::Agg(agg) => pattern_get_vars(&agg.pat),
-      }
-   }
-}
-
-#[derive(Clone)]
-pub(crate) struct MirBodyClause {
-   pub rel: MirRelation,
-   pub args: Vec<Expr>,
-   pub rel_args_span: Span,
-   pub args_span: Span,
-   pub cond_clauses: Vec<CondClause>,
-}
-impl MirBodyClause {
-   pub fn selected_args(&self) -> Vec<Expr> { self.rel.indices.iter().map(|&i| self.args[i].clone()).collect() }
-
-   /// returns a vec of (var_ind, var) of all the variables in the clause
-   pub fn vars(&self) -> Vec<(usize, Ident)> {
-      self.args.iter().enumerate().filter_map(|(i, v)| expr_to_ident(v).map(|v| (i, v))).collect::<Vec<_>>()
-   }
-
-   #[allow(dead_code)]
-   pub fn from(ir_body_clause: IrBodyClause, rel: MirRelation) -> MirBodyClause {
-      MirBodyClause {
-         rel,
-         args: ir_body_clause.args,
-         rel_args_span: ir_body_clause.rel_args_span,
-         args_span: ir_body_clause.args_span,
-         cond_clauses: ir_body_clause.cond_clauses,
-      }
-   }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub(crate) struct MirRelation {
-   pub relation: RelationIdentity,
-   pub indices: Vec<usize>,
-   pub ir_name: Ident,
-   pub version: MirRelationVersion,
-   pub is_full_index: bool,
-   pub is_no_index: bool,
-   pub val_type: IndexValType,
-}
-
-pub(crate) fn ir_relation_version_var_name(ir_name: &Ident, version: MirRelationVersion) -> Ident {
-   let name = format!("{}_{}", ir_name, version.to_string());
-   Ident::new(&name, ir_name.span())
-}
-
-impl MirRelation {
-   pub fn var_name(&self) -> Ident { ir_relation_version_var_name(&self.ir_name, self.version) }
-
-   #[allow(dead_code)]
-   pub fn key_type(&self) -> Type {
-      let index_types: Vec<_> = self.indices.iter().map(|&i| self.relation.field_types[i].clone()).collect();
-      tuple_type(&index_types)
-   }
-
-   pub fn from(ir_relation: IrRelation, version: MirRelationVersion) -> MirRelation {
-      MirRelation {
-         ir_name: ir_relation.ir_name(),
-         is_full_index: ir_relation.is_full_index(),
-         is_no_index: ir_relation.is_no_index(),
-         relation: ir_relation.relation,
-         indices: ir_relation.indices,
-         version,
-         val_type: ir_relation.val_type,
-      }
-   }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum MirRelationVersion {
-   TotalDelta,
-   Total,
-   Delta,
-   New,
-}
-
-impl MirRelationVersion {
-   pub fn to_string(self) -> &'static str {
-      use MirRelationVersion::*;
-      match self {
-         TotalDelta => "total+delta",
-         Delta => "delta",
-         Total => "total",
-         New => "new",
-      }
-   }
-}
+// mir_summary / mir_rule_summary / types — all moved to `ascent_mir` crate.
+// Re-exported above for existing `crate::ascent_mir::…` call sites.
 
 fn get_hir_dep_graph(hir: &AscentIr) -> Vec<(usize, usize)> {
    let mut relations_to_rules_in_head: HashMap<&RelationIdentity, HashSet<usize>> =
@@ -274,13 +87,13 @@ pub(crate) fn compile_hir_to_mir(hir: &AscentIr) -> syn::Result<AscentMir> {
          }
       }
 
-      // DD handles semi-naive natively via timely's `Variable` — it
-      // tracks deltas across iterations at the operator level. Emitting
-      // N delta-variants per rule (one per IDB clause being Delta)
-      // produces N redundant rule bodies, each doing the same full join.
-      // DD's internal delta-tracking still gives correct output but at
-      // N× the work. Emit ONE variant per source rule for DD.
-      let is_dd = matches!(hir.config.backend, crate::ascent_hir::Backend::Dd);
+      // Backends that do semi-naive at the operator level (e.g. DD's
+      // `Variable` / `scope.iterative`) can handle ONE rule variant —
+      // explicit MIR-level variant expansion would produce N redundant
+      // rule bodies. The frontend gets this hint from
+      // `AscentConfig::backend_operator_semi_naive`; batch backends
+      // (which need the variants) set it to `false`.
+      let is_dd = hir.config.backend_operator_semi_naive;
       let rules = scc
          .iter()
          .map(|&ind| compile_hir_rule_to_mir_rules(&hir.rules[ind], &dynamic_relations_set, is_dd))

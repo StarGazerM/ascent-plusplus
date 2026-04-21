@@ -4,8 +4,6 @@ mod tests;
 mod ascent_mir;
 mod utils;
 mod ascent_hir;
-mod ascent_codegen;
-mod ascent_codegen_dd;
 mod ascent_syntax;
 mod test_errors;
 mod syn_utils;
@@ -24,9 +22,8 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Ident, Result, Token, parse_quote, parse_quote_spanned};
 use syn_utils::ResTokenStream2Ext;
 
-use crate::ascent_codegen::compile_mir;
-use crate::ascent_codegen_dd::compile_mir_dd;
-use crate::ascent_hir::{Backend, compile_ascent_program_to_hir};
+use ::ascent_mir::emit_mir;
+use crate::ascent_hir::compile_ascent_program_to_hir;
 use crate::ascent_mir::compile_hir_to_mir;
 
 /// The main macro of the ascent library. Allows writing logical inference rules similar to Datalog.
@@ -91,6 +88,10 @@ pub fn ascent_run(input: TokenStream) -> TokenStream {
 pub fn ascent_run_par(input: TokenStream) -> TokenStream {
    ascent_impl(input.into(), AscentMacroKind { is_ascent_run: true, is_parallel: true }).into_token_stream()
 }
+
+// Batch backend lives in its own crate (`ascent_codegen_batch`), re-exported
+// by `ascent` as `::ascent::__backend_batch`. The frontend emits a macro
+// call to it just like any third-party backend — no dispatch code here.
 
 /// This macro allows writing Ascent code that can later be included in an actual Ascent program.
 ///
@@ -243,13 +244,14 @@ pub(crate) fn ascent_impl(input: proc_macro2::TokenStream, kind: AscentMacroKind
 
    let hir = compile_ascent_program_to_hir(&prog, is_parallel)?;
 
-   let backend = hir.config.backend;
    let mir = compile_hir_to_mir(&hir)?;
 
-   let code = match backend {
-      Backend::Batch => compile_mir(&mir, is_ascent_run),
-      Backend::Dd => compile_mir_dd(&mir, is_ascent_run),
-   };
-
-   Ok(code)
+   // Two-stage expansion: emit MIR v1 tokens wrapped in a call to the chosen
+   // backend's proc-macro. The backend is named by a proc-macro path — the
+   // frontend has zero knowledge of what backends exist. It only copies the
+   // path from `mir.config.backend_path` into the emitted macro call;
+   // rustc expands the call at the second stage.
+   let mir_tokens = emit_mir(&mir, is_ascent_run);
+   let backend_path = &mir.config.backend_path;
+   Ok(quote! { #backend_path ! { #mir_tokens } })
 }

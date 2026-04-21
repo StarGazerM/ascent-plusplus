@@ -30,6 +30,11 @@ pub use ascent_base::*;
 pub use ascent_macro::{ascent, ascent_run, ascent_source};
 #[cfg(feature = "par")]
 pub use ascent_macro::{ascent_par, ascent_run_par};
+
+/// Batch (non-DD) codegen proc-macro — re-exported so the frontend-emitted
+/// call `::ascent::__backend_batch::compile_mir!{…}` resolves in user crates.
+#[doc(hidden)]
+pub use ascent_codegen_batch as __backend_batch;
 #[cfg(feature = "par")]
 pub use dashmap;
 #[cfg(feature = "par")]
@@ -41,3 +46,10 @@ pub use {boxcar, hashbrown};
 /// `ascent` to pull this in.
 #[cfg(feature = "dd")]
 pub use ascent_dd_runtime as dd;
+
+/// DD codegen proc-macro — re-exported so the frontend-emitted call
+/// `::ascent::__backend_dd::compile_mir!{…}` resolves in user crates that
+/// only depend on `ascent` with the `dd` feature.
+#[cfg(feature = "dd")]
+#[doc(hidden)]
+pub use ascent_codegen_dd as __backend_dd;

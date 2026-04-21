@@ -17,16 +17,41 @@
 
 #![allow(dead_code)]
 
+extern crate proc_macro;
+
+mod analyses;
+
 use itertools::Itertools;
 use proc_macro2::{Ident, Span, TokenStream};
+use quote::quote;
 use syn::Expr;
 use syn::spanned::Spanned;
 
-use crate::ascent_hir::IrAggClause;
-use crate::ascent_mir::{AscentMir, MirBodyItem, MirRule, MirScc, mir_rule_summary};
-use crate::ascent_syntax::{CondClause, RelationIdentity};
-use crate::syn_utils::{expr_get_vars, pattern_get_vars};
-use crate::utils::{expr_to_ident, is_wild_card, tuple, tuple_type};
+use ascent_mir::syn_utils::{expr_get_vars, pattern_get_vars};
+use ascent_mir::utils::{expr_to_ident, is_wild_card, tuple, tuple_type};
+use ascent_mir::{
+   AscentMir, CondClause, IrAggClause, MirBodyItem, MirRule, MirScc, RelationIdentity, mir_rule_summary,
+};
+
+// ============================================================================
+// Proc-macro entry point — frontend invokes us via
+// `::ascent_codegen_dd::compile_mir! { mir_v1 { … } }` and we return runtime Rust.
+// ============================================================================
+
+/// Consume a MIR v1 token stream and emit the DD-backed runtime code.
+///
+/// Invoked at the second expansion stage. The frontend (`ascent!` /
+/// `ascent_run!` et al.) parses user syntax → builds MIR → emits the call
+/// `::ascent_codegen_dd::compile_mir! { mir_v1 { … } }` verbatim. This macro
+/// then parses the MIR, delegates to `compile_mir_dd`, and returns the final
+/// generated code.
+#[proc_macro]
+pub fn compile_mir(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+   match ::ascent_mir::parse_mir(input.into()) {
+      Ok((mir, is_ascent_run)) => compile_mir_dd(&mir, is_ascent_run).into(),
+      Err(err) => err.to_compile_error().into(),
+   }
+}
 
 // ---------------------------------------------------------------------------
 // Phase envelope check
@@ -182,7 +207,7 @@ fn compile_rule_body_phase1(
    // has exactly ONE head clause, AND the body has ≥2 clauses (otherwise
    // there's no join_core to fuse into — the single-clause path emits a
    // raw flat_map of different shape than the head).
-   use crate::ascent_mir::MirBodyItem;
+   use ascent_mir::MirBodyItem;
    let clause_count = rule.body_items.iter().filter(|i| matches!(i, MirBodyItem::Clause(_))).count();
    let all_clauses_simple = clause_count >= 2
       && rule.body_items.iter().all(|item| match item {
@@ -199,7 +224,7 @@ fn compile_rule_body_phase1(
       } else {
          None
       };
-   let mut prior_rel: Option<crate::ascent_mir::MirRelation> = None;
+   let mut prior_rel: Option<ascent_mir::MirRelation> = None;
    for (i, item) in rule.body_items.iter().enumerate() {
       let is_last_clause = Some(i) == last_clause_idx;
       let fused_for_this = if is_last_clause { fused_head_expr.clone() } else { None };
@@ -429,7 +454,7 @@ fn destructure_pattern(plans: &[ColPlan]) -> TokenStream {
    }
 }
 
-fn compile_first_clause(cl: &crate::ascent_mir::MirBodyClause) -> (Vec<Ident>, TokenStream) {
+fn compile_first_clause(cl: &ascent_mir::MirBodyClause) -> (Vec<Ident>, TokenStream) {
    // First clause has no prior bound vars, so no shared vars and no computed
    // keys (expressions must be pure since there's nothing to reference).
    let (plans, _shared, new_vars, filters, _computed) = plan_clause(&cl.args, &[]);
@@ -458,8 +483,8 @@ fn compile_first_clause(cl: &crate::ascent_mir::MirBodyClause) -> (Vec<Ident>, T
 
 fn compile_join_clause(
    prior_bound: &[Ident], prior_var_kinds: &[VarKind], accum: TokenStream,
-   cl: &crate::ascent_mir::MirBodyClause,
-   prior_rel: Option<&crate::ascent_mir::MirRelation>,
+   cl: &ascent_mir::MirBodyClause,
+   prior_rel: Option<&ascent_mir::MirRelation>,
    // FlowLog fusion: if this is the TERMINAL clause of a simple rule body
    // (single head clause, all-Clause body, no cond/let/neg/agg), emit the
    // head tuple directly inside the `join_core` closure instead of the
@@ -560,7 +585,7 @@ fn compile_join_clause(
    // bindings that pick from clause cols), fall back to per-clause
    // `flat_map().arrange_by_key()`.
    let shared_arr_name = shared_arr_ident(&{
-      use crate::ascent_hir::IrRelation;
+      use ascent_mir::IrRelation;
       // Reconstruct `IrRelation` from MirRelation fields — `ir_name` is the
       // product of `rel.name` + `indices`, so this is deterministic.
       IrRelation {
@@ -825,7 +850,7 @@ fn emit_agg(
 ) -> (Vec<Ident>, Vec<VarKind>, TokenStream) {
    let rel_name = &agg.rel.relation.name;
    let rel_coll = relation_coll_var(rel_name);
-   let (plans, shared_in_clause_order, new_vars, filters, computed_keys) = plan_clause(&agg.rel_args, bound_vars);
+   let (plans, shared_in_clause_order, _new_vars, filters, computed_keys) = plan_clause(&agg.rel_args, bound_vars);
 
    // Shared vars reordered by prior-bound order (for consistent key tuple layout).
    let shared_by_accum_order: Vec<(Ident, Ident)> = bound_vars
@@ -1145,7 +1170,7 @@ fn compile_rule_head_exprs(
       return (out, TokenStream::new());
    }
 
-   use crate::ascent_mir::MirBodyItem;
+   use ascent_mir::MirBodyItem;
    let clause_count = rule.body_items.iter().filter(|i| matches!(i, MirBodyItem::Clause(_))).count();
    let single_clause_fusion = rule.body_items.len() == 1
       && rule.head_clause.len() == 1
@@ -1227,7 +1252,7 @@ fn compile_rule_with_head_target(
       return (out, TokenStream::new());
    }
 
-   use crate::ascent_mir::MirBodyItem;
+   use ascent_mir::MirBodyItem;
    let clause_count = rule.body_items.iter().filter(|i| matches!(i, MirBodyItem::Clause(_))).count();
 
    // SINGLE-CLAUSE FUSION: rule has exactly one body clause (a Clause, no
@@ -1322,14 +1347,61 @@ fn compile_rule_with_head_target(
 // Top-level codegen
 // ---------------------------------------------------------------------------
 
-pub(crate) fn compile_mir_dd(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
-   match mir.config.dd_mode {
-      crate::ascent_hir::DdMode::Incremental => compile_mir_dd_incremental(mir, is_ascent_run),
-      crate::ascent_hir::DdMode::Batch => match compile_mir_dd_batch(mir, is_ascent_run) {
+fn compile_mir_dd(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
+   // DD's `batch` vs `incremental` mode is a backend-private sub-config,
+   // passed through `#![backend(dd, mode = "batch")]` → MIR
+   // `backend_extra` tokens. Parse here — the frontend doesn't need to
+   // know DD's mode space.
+   let mode = match parse_dd_mode(&mir.config.backend_extra) {
+      Ok(mode) => mode,
+      Err(e) => return e.to_compile_error(),
+   };
+   match mode {
+      DdMode::Incremental => compile_mir_dd_incremental(mir, is_ascent_run),
+      DdMode::Batch => match compile_mir_dd_batch(mir, is_ascent_run) {
          Ok(ts) => ts,
          Err(e) => e.to_compile_error(),
       },
    }
+}
+
+/// DD mode discriminator, private to this backend.
+#[derive(Clone, Copy, Default)]
+enum DdMode {
+   #[default]
+   Incremental,
+   Batch,
+}
+
+/// Parse `backend_extra` tokens for DD's `mode = "batch"|"incremental"`.
+/// Empty tokens → default (incremental). Any other unrecognised form is
+/// an error.
+fn parse_dd_mode(tokens: &TokenStream) -> syn::Result<DdMode> {
+   if tokens.is_empty() {
+      return Ok(DdMode::default());
+   }
+   struct ModeArgs(Option<DdMode>);
+   impl syn::parse::Parse for ModeArgs {
+      fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+         if input.is_empty() {
+            return Ok(ModeArgs(None));
+         }
+         let key: Ident = input.parse()?;
+         if key != "mode" {
+            return Err(syn::Error::new(key.span(), format!("unknown DD arg `{key}`; expected `mode`")));
+         }
+         input.parse::<syn::Token![=]>()?;
+         let lit: syn::LitStr = input.parse()?;
+         let mode = match lit.value().as_str() {
+            "batch" => DdMode::Batch,
+            "incremental" => DdMode::Incremental,
+            other => return Err(syn::Error::new(lit.span(), format!("unknown DD mode `{other}`"))),
+         };
+         Ok(ModeArgs(Some(mode)))
+      }
+   }
+   let parsed: ModeArgs = syn::parse2(tokens.clone())?;
+   Ok(parsed.0.unwrap_or_default())
 }
 
 fn compile_mir_dd_incremental(mir: &AscentMir, is_ascent_run: bool) -> TokenStream {
@@ -1800,7 +1872,7 @@ fn phase1_run_body_batch(mir: &AscentMir, target: &TokenStream) -> TokenStream {
 /// (negation via antijoin requires Abelian; lattice reduce needs isize;
 /// aggregators cross strata).
 fn compile_mir_dd_batch(mir: &AscentMir, is_ascent_run: bool) -> syn::Result<TokenStream> {
-   use crate::ascent_mir::MirBodyItem;
+   use ascent_mir::MirBodyItem;
    // Feature gate: batch mode only supports pure-datalog joins + generators.
    // In MIR, negation lands as `MirBodyItem::Agg` with a "not" aggregator —
    // `is_not_aggregator` discriminates it from real aggregators.
@@ -2378,7 +2450,7 @@ fn compile_nonlooping_scc(scc: &MirScc, hoist_counter: &mut usize, is_batch: boo
    // Collect actually-used arrangement names from this SCC's rule bodies
    // (skip first-clauses without a subsequent join, and empty-indices which
    // are never referenced via the shared-arr path).
-   use crate::ascent_mir::MirBodyItem;
+   use ascent_mir::MirBodyItem;
    let mut used_arr_names: std::collections::HashSet<Ident> =
       std::collections::HashSet::new();
    for rule in &scc.rules {
@@ -2547,59 +2619,24 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
    // Arrange dynamic (recursive) relations INSIDE the loop on the Variable's
    // read handle (shadow __<rel>_coll above).
    //
-   // Only emit arrangements for `(rel, indices)` pairs ACTUALLY REFERENCED
-   // by some rule body's clause in this SCC. MIR's `dynamic_relations` /
-   // `body_only_relations` include full-index IrRelations that aren't used
-   // by any join — emitting them creates dead DD operators that still cost
-   // per-iteration maintenance. Pre-pass over rule bodies to collect the
-   // used set. (Upstream TODO in ascent_mir.rs: "we can add only indices
-   // used in bodies in the scc, that requires the codegen to be updated.")
-   use crate::ascent_mir::MirBodyItem;
-   let mut used_arr_names: std::collections::HashSet<Ident> =
-      std::collections::HashSet::new();
-   for rule in &scc.rules {
-      for (i, item) in rule.body_items.iter().enumerate() {
-         if let MirBodyItem::Clause(cl) = item {
-            // Empty indices = no-key arrangement — never used via shared
-            // arrangement path (compile_join_clause's `can_use_shared`
-            // requires non-empty indices). Skip emitting.
-            if cl.rel.indices.is_empty() {
-               continue;
-            }
-            // First-clause (i==0): only needed as LHS-shared target if the
-            // rule has >=2 clauses (prior_rel optimization). Otherwise it's
-            // scanned via compile_first_clause which doesn't need the
-            // arrangement.
-            let is_first = i == 0;
-            let rule_has_join = rule.body_items.iter().filter(|it| matches!(it, MirBodyItem::Clause(_))).count() >= 2;
-            if is_first && !rule_has_join {
-               continue;
-            }
-            let name = format!(
-               "__arr_{}_indices_{}",
-               cl.rel.relation.name,
-               cl.rel.indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_")
-            );
-            used_arr_names.insert(Ident::new(&name, cl.rel.relation.name.span()));
-         }
-      }
-   }
+   // Analyses (dd_analyses.rs) — pre-compute the data this emission needs.
+   let used_arrs = crate::analyses::UsedArrangements::of(scc);
+   let placement = crate::analyses::RelationPlacement::of(scc);
+
    let mut outer_arrs = TokenStream::new();
    let mut outer_arr_enters = TokenStream::new();
    let mut inner_arrs = TokenStream::new();
    let mut seen_arrs: std::collections::HashSet<Ident> = std::collections::HashSet::new();
-   let body_only_rel_names: std::collections::HashSet<String> =
-      scc.body_only_relations.keys().map(|r| r.name.to_string()).collect();
    let rel_iter = scc
       .body_only_relations
       .iter()
       .chain(scc.dynamic_relations.iter())
       .sorted_by_cached_key(|(rel, _)| rel.name.to_string());
    for (rel_ident, ir_rels) in rel_iter {
-      let is_body_only = body_only_rel_names.contains(&rel_ident.name.to_string());
+      let is_body_only = placement.is_body_only(&rel_ident.name);
       for ir_rel in ir_rels.iter().sorted_by_cached_key(|r| r.ir_name()) {
          let arr_name = shared_arr_ident(ir_rel);
-         if !used_arr_names.contains(&arr_name) {
+         if !used_arrs.contains(&arr_name) {
             continue;
          }
          if !seen_arrs.insert(arr_name.clone()) {
@@ -2616,35 +2653,21 @@ fn compile_looping_scc(scc: &MirScc, scc_idx: usize, hoist_counter: &mut usize, 
       }
    }
 
-   // 5. Rule productions. Split into NON-recursive (body touches no dyn_rel
-   //    of this SCC) and RECURSIVE (body touches ≥1 dyn_rel). FlowLog pattern:
-   //    non-recursive rules lowered OUTSIDE `scope.iterative` — they fire
-   //    ONCE on outer-scope `__<rel>_coll`, producing stable base contributions.
-   //    Recursive rules lowered INSIDE — they feed the Variable/threshold loop.
-   //    Without this split, non-recursive rules re-fire every iteration
-   //    producing identical tuples that `threshold_semigroup` has to dedup —
-   //    O(iter × EDB-size) wasted work that cascades with recursive growth.
-   let dyn_names_set: std::collections::HashSet<String> = dyn_rels.iter().map(|r| r.name.to_string()).collect();
-   let is_rule_recursive = |rule: &MirRule| -> bool {
-      use crate::ascent_mir::MirBodyItem;
-      rule.body_items.iter().any(|item| match item {
-         MirBodyItem::Clause(cl) => dyn_names_set.contains(&cl.rel.relation.name.to_string()),
-         MirBodyItem::Agg(agg) => dyn_names_set.contains(&agg.rel.relation.name.to_string()),
-         MirBodyItem::Cond(_) | MirBodyItem::Generator(_) => false,
-      })
-   };
-
-   // Non-recursive rules: emit on outer-scope `__<rel>_coll`. Head goes to
-   // the outer coll via `relation_coll_var`. These fire once; their output
-   // is what the scope.iterative's `inner_dyn_seed_bindings` pulls in.
-   let non_rec_rules: Vec<&MirRule> = scc.rules.iter().filter(|r| !is_rule_recursive(r)).collect();
-   let rec_rules: Vec<&MirRule> = scc.rules.iter().filter(|r| is_rule_recursive(r)).collect();
+   // Rule classification (dd_analyses.rs): partition rules into non-recursive
+   // (body touches no dyn_rel of this SCC) and recursive.
+   // FlowLog pattern: non-recursive rules lowered OUTSIDE `scope.iterative`
+   // (fire once, feed the seed); recursive rules INSIDE (feed the
+   // Variable/threshold loop). Without this split, non-recursive rules
+   // re-fire every iteration producing identical tuples.
+   let rule_class = crate::analyses::RuleClassification::of(scc);
+   let non_rec_rules: &[&MirRule] = &rule_class.non_recursive;
+   let rec_rules: &[&MirRule] = &rule_class.recursive;
 
    let mut non_rec_body = TokenStream::new();
    let mut non_rec_hoists = TokenStream::new();
    let outer_scope = Ident::new("scope", Span::call_site());
    let non_rec_head_target = |name: &Ident| relation_coll_var(name);
-   for rule in &non_rec_rules {
+   for rule in non_rec_rules {
       let summary = format!("rule [non-rec] {}", mir_rule_summary(rule));
       non_rec_body.extend(quote! { ::ascent::internal::comment(#summary); });
       let (body, pre) =
@@ -2897,7 +2920,7 @@ fn materialize_rel(rel: &RelationIdentity, coll_expr: TokenStream, is_batch: boo
 
 /// Name of the shared arrangement binding for a given `IrRelation`.
 /// Matches `compile_join_clause`'s lookup — both sides must agree.
-fn shared_arr_ident(ir_rel: &crate::ascent_hir::IrRelation) -> Ident {
+fn shared_arr_ident(ir_rel: &ascent_mir::IrRelation) -> Ident {
    let base = ir_rel.ir_name();
    Ident::new(&format!("__arr_{}", base), base.span())
 }
@@ -2906,7 +2929,7 @@ fn shared_arr_ident(ir_rel: &crate::ascent_hir::IrRelation) -> Ident {
 /// for one shared arrangement. Key columns come from `ir_rel.indices` (already
 /// sorted ascending → canonical). Value columns are every other position in
 /// natural order. Both sides of any later `join_core` must mirror this layout.
-fn emit_shared_arrangement_binding(ir_rel: &crate::ascent_hir::IrRelation) -> TokenStream {
+fn emit_shared_arrangement_binding(ir_rel: &ascent_mir::IrRelation) -> TokenStream {
    let arr_ident = shared_arr_ident(ir_rel);
    let rel_coll = relation_coll_var(&ir_rel.relation.name);
    let arity = ir_rel.relation.field_types.len();

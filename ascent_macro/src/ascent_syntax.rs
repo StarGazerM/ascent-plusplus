@@ -4,6 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use ascent_base::util::update;
+// Re-export shared data types that lived here historically — they live in
+// `ascent_mir` now but downstream code in this crate still references them
+// via `crate::ascent_syntax::…` paths.
+pub(crate) use ascent_mir::{CondClause, GeneratorNode, RelationIdentity, Signatures};
 use derive_syn_parse::Parse;
 use itertools::{Either, Itertools};
 use proc_macro2::{Span, TokenStream};
@@ -12,8 +16,7 @@ use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-   Attribute, Error, Expr, ExprMacro, Generics, Ident, ImplGenerics, Pat, Path, Result, Token, Type, TypeGenerics,
-   Visibility, WhereClause, braced, parenthesized, parse2,
+   Attribute, Error, Expr, ExprMacro, Ident, Pat, Path, Result, Token, Type, braced, parenthesized, parse2,
 };
 
 use crate::AscentMacroKind;
@@ -21,9 +24,10 @@ use crate::syn_utils::{
    expr_get_vars, expr_visit_free_vars_mut, expr_visit_idents_in_macros_mut, pattern_get_vars, pattern_visit_vars_mut,
    token_stream_idents, token_stream_replace_ident,
 };
+use ascent_mir::utils::{expr_to_ident, is_wild_card, pat_to_ident};
 use crate::utils::{
-   Piper, expr_to_ident, expr_to_ident_mut, flatten_punctuated, is_wild_card, pat_to_ident, punctuated_map,
-   punctuated_singleton, punctuated_try_map, punctuated_try_unwrap, spans_eq, token_stream_replace_macro_idents,
+   Piper, expr_to_ident_mut, flatten_punctuated, punctuated_map, punctuated_singleton, punctuated_try_map,
+   punctuated_try_unwrap, spans_eq, token_stream_replace_macro_idents,
 };
 
 // resources:
@@ -55,68 +59,8 @@ mod kw {
    syn::custom_keyword!(include_source);
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct Signatures {
-   pub(crate) declaration: TypeSignature,
-   pub(crate) implementation: Option<ImplSignature>,
-}
-
-impl Signatures {
-   pub fn split_ty_generics_for_impl(&self) -> (ImplGenerics<'_>, TypeGenerics<'_>, Option<&'_ WhereClause>) {
-      self.declaration.generics.split_for_impl()
-   }
-
-   pub fn split_impl_generics_for_impl(&self) -> (ImplGenerics<'_>, TypeGenerics<'_>, Option<&'_ WhereClause>) {
-      let Some(signature) = &self.implementation else {
-         return self.split_ty_generics_for_impl();
-      };
-
-      let (impl_generics, _, _) = signature.impl_generics.split_for_impl();
-      let (_, ty_generics, where_clause) = signature.generics.split_for_impl();
-
-      (impl_generics, ty_generics, where_clause)
-   }
-}
-
-impl Parse for Signatures {
-   fn parse(input: ParseStream) -> Result<Self> {
-      let declaration = TypeSignature::parse(input)?;
-      let implementation = if input.peek(Token![impl]) { Some(ImplSignature::parse(input)?) } else { None };
-      Ok(Signatures { declaration, implementation })
-   }
-}
-
-#[derive(Clone, Parse, Debug)]
-pub struct TypeSignature {
-   // We don't actually use the Parse impl to parse attrs.
-   #[call(Attribute::parse_outer)]
-   pub attrs: Vec<Attribute>,
-   pub visibility: Visibility,
-   pub _struct_kw: Token![struct],
-   pub ident: Ident,
-   #[call(parse_generics_with_where_clause)]
-   pub generics: Generics,
-   pub _semi: Token![;],
-}
-
-#[derive(Clone, Parse, Debug)]
-pub struct ImplSignature {
-   pub _impl_kw: Token![impl],
-   pub impl_generics: Generics,
-   pub ident: Ident,
-   #[call(parse_generics_with_where_clause)]
-   pub generics: Generics,
-   pub _semi: Token![;],
-}
-
-/// Parse impl on Generics does not parse WhereClauses, hence this function
-fn parse_generics_with_where_clause(input: ParseStream) -> Result<Generics> {
-   let mut res = Generics::parse(input)?;
-   if input.peek(Token![where]) {
-      res.where_clause = Some(input.parse()?);
-   }
-   Ok(res)
-}
+// Signatures, TypeSignature, ImplSignature, parse_generics_with_where_clause
+// — moved to `ascent_mir` crate; re-exported via `use ascent_mir::*` below.
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct RelationNode {
@@ -211,14 +155,7 @@ impl Parse for DisjunctionNode {
    }
 }
 
-#[derive(Parse, Clone)]
-pub struct GeneratorNode {
-   pub for_keyword: Token![for],
-   #[call(Pat::parse_multi)]
-   pub pattern: Pat,
-   pub _in_keyword: Token![in],
-   pub expr: Expr,
-}
+// GeneratorNode — moved to `ascent_mir` crate.
 
 #[derive(Clone)]
 pub struct BodyClauseNode {
@@ -276,75 +213,7 @@ pub struct ClauseArgPattern {
    pub pattern: Pat,
 }
 
-#[derive(Parse, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct IfLetClause {
-   pub if_keyword: Token![if],
-   pub let_keyword: Token![let],
-   #[call(Pat::parse_multi)]
-   pub pattern: Pat,
-   pub eq_symbol: Token![=],
-   pub exp: syn::Expr,
-}
-
-#[derive(Parse, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct IfClause {
-   pub if_keyword: Token![if],
-   pub cond: Expr,
-}
-
-#[derive(Parse, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct LetClause {
-   pub let_keyword: Token![let],
-   #[call(Pat::parse_multi)]
-   pub pattern: Pat,
-   pub eq_symbol: Token![=],
-   pub exp: syn::Expr,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum CondClause {
-   IfLet(IfLetClause),
-   If(IfClause),
-   Let(LetClause),
-}
-
-impl CondClause {
-   pub fn bound_vars(&self) -> Vec<Ident> {
-      match self {
-         CondClause::IfLet(cl) => pattern_get_vars(&cl.pattern),
-         CondClause::If(_) => vec![],
-         CondClause::Let(cl) => pattern_get_vars(&cl.pattern),
-      }
-   }
-
-   /// returns the expression associated with the CondClause.
-   /// Useful for determining clause dependencies
-   pub fn expr(&self) -> &Expr {
-      match self {
-         CondClause::IfLet(cl) => &cl.exp,
-         CondClause::If(cl) => &cl.cond,
-         CondClause::Let(cl) => &cl.exp,
-      }
-   }
-}
-impl Parse for CondClause {
-   fn parse(input: ParseStream) -> Result<Self> {
-      if input.peek(Token![if]) {
-         if input.peek2(Token![let]) {
-            let cl: IfLetClause = input.parse()?;
-            Ok(Self::IfLet(cl))
-         } else {
-            let cl: IfClause = input.parse()?;
-            Ok(Self::If(cl))
-         }
-      } else if input.peek(Token![let]) {
-         let cl: LetClause = input.parse()?;
-         Ok(Self::Let(cl))
-      } else {
-         Err(input.error("expected either if clause or if let clause"))
-      }
-   }
-}
+// IfLetClause, IfClause, LetClause, CondClause — moved to `ascent_mir` crate.
 
 // impl ToTokens for BodyClauseNode {
 //    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
@@ -733,13 +602,8 @@ impl Parse for AscentProgram {
    }
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub(crate) struct RelationIdentity {
-   pub name: Ident,
-   pub field_types: Vec<Type>,
-   pub is_lattice: bool,
-}
-
+// RelationIdentity + DsAttributeContents — moved to `ascent_mir` crate.
+// The `From<&RelationNode>` impl stays here since RelationNode is local.
 impl From<&RelationNode> for RelationIdentity {
    fn from(relation_node: &RelationNode) -> Self {
       RelationIdentity {
@@ -747,26 +611,6 @@ impl From<&RelationNode> for RelationIdentity {
          field_types: relation_node.field_types.iter().cloned().collect(),
          is_lattice: relation_node.is_lattice,
       }
-   }
-}
-
-#[derive(Clone)]
-pub(crate) struct DsAttributeContents {
-   pub path: syn::Path,
-   pub args: TokenStream,
-}
-
-impl Parse for DsAttributeContents {
-   fn parse(input: ParseStream) -> Result<Self> {
-      let path = syn::Path::parse_mod_style(input)?;
-      let args = if input.peek(Token![:]) {
-         input.parse::<Token![:]>()?;
-         TokenStream::parse(input)?
-      } else {
-         TokenStream::default()
-      };
-
-      Ok(Self { path, args })
    }
 }
 

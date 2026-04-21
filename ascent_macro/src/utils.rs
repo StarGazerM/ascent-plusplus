@@ -4,49 +4,12 @@ use std::hash::Hash;
 
 use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
 use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
-use syn::{Expr, Pat, Type};
+use syn::{Expr, Pat};
 
 use crate::syn_utils::path_get_ident_mut;
 
-pub fn tuple_type(types: &[Type]) -> Type {
-   let res = match types.len() {
-      1 => {
-         let ty = &types[0];
-         quote! { ( #ty, ) }
-      },
-      _ => quote! { ( #(#types),* ) },
-   };
-   syn::parse2(res).unwrap()
-}
-
-pub fn tuple(exprs: &[Expr]) -> Expr {
-   let span = if !exprs.is_empty() { exprs[0].span() } else { Span::call_site() };
-   tuple_spanned(exprs, span)
-}
-pub fn tuple_spanned(exprs: &[Expr], span: Span) -> Expr {
-   let res = match exprs.len() {
-      1 => {
-         let exp = &exprs[0];
-         quote_spanned! {span=> ( #exp, ) }
-      },
-      _ => quote_spanned! {span=> ( #(#exprs),* ) },
-   };
-   syn::parse2(res).unwrap()
-}
-
-pub fn exp_cloned(exp: &Expr) -> Expr {
-   let exp_span = exp.span();
-   let res = match exp {
-      Expr::Path(_) | Expr::Field(_) | Expr::Paren(_) => quote_spanned! {exp_span=> #exp.clone()},
-      _ => quote_spanned! {exp_span=> (#exp).clone()},
-   };
-   syn::parse2(res).unwrap()
-}
-
-pub fn collect_set<T: Eq + std::hash::Hash>(iter: impl Iterator<Item = T>) -> HashSet<T> { iter.collect() }
-
-pub fn into_set<T: Eq + std::hash::Hash>(iter: impl IntoIterator<Item = T>) -> HashSet<T> { iter.into_iter().collect() }
+// Tuple / exp_cloned / tuple_type / is_wild_card — all moved to
+// `ascent_mir::utils`. Import there if needed.
 
 pub fn punctuated_map<T, P, U>(punc: Punctuated<T, P>, mut f: impl FnMut(T) -> U) -> Punctuated<U, P> {
    let mut res = Punctuated::new();
@@ -124,18 +87,11 @@ pub fn expr_to_ident_mut(expr: &mut Expr) -> Option<&mut Ident> {
    }
 }
 
+#[allow(dead_code)]
 pub fn pat_to_ident(pat: &Pat) -> Option<Ident> {
    match pat {
       Pat::Ident(ident) => Some(ident.ident.clone()),
       _ => None,
-   }
-}
-
-pub fn is_wild_card(expr: &Expr) -> bool {
-   match expr {
-      Expr::Infer(_) => true,
-      Expr::Verbatim(ts) => ts.to_string() == "_",
-      _ => false,
    }
 }
 
@@ -200,23 +156,7 @@ where T: Sized
    fn pipe<Res>(self, f: impl FnOnce(Self) -> Res) -> Res { f(self) }
 }
 
-/// sets the span of only top-level tokens to `span`
-pub fn with_span(ts: TokenStream, span: Span) -> TokenStream {
-   ts.into_iter()
-      .map(|mut tt| {
-         tt.set_span(span);
-         tt
-      })
-      .collect()
-}
-
-pub(crate) trait TokenStreamExtensions {
-   fn with_span(self, span: Span) -> TokenStream;
-}
-
-impl TokenStreamExtensions for TokenStream {
-   fn with_span(self, span: Span) -> TokenStream { with_span(self, span) }
-}
+// `with_span` / `TokenStreamExtensions` — moved to `ascent_mir::utils`.
 
 fn check_lazy_set_contains<T: Hash + Eq>(hs: &mut HashSet<T>, iter: &mut impl Iterator<Item = T>, x: T) -> bool {
    if hs.contains(&x) {

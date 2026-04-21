@@ -678,13 +678,17 @@ where F: FnOnce(&mut SessionRootScope<'_>) -> T {
 
 #[cfg(test)]
 mod tests {
-   use differential_dataflow::operators::iterate::Variable;
-   use differential_dataflow::operators::{Join, Threshold};
+   // DD 0.20: `Join` / `Threshold` / `Iterate` are not standalone traits any
+   // more — `.join`, `.distinct`, `.concat`, etc. are inherent methods on
+   // `Collection` / `VecCollection`. So no trait imports needed.
+   use differential_dataflow::VecCollection;
    use timely::dataflow::ProbeHandle;
-   use timely::dataflow::operators::probe::Probe;
    use timely::dataflow::scopes::Scope;
    use timely::order::Product;
 
+   // `Variable` here refers to the crate-level re-export
+   // (`VecVariable`, 3-arg — `<G, D, R>`), not `differential_dataflow::operators::iterate::Variable`
+   // (the newer 2-arg type in DD 0.20).
    use super::*;
 
    #[test]
@@ -696,7 +700,7 @@ mod tests {
       execute_batch(move |scope, sealer, probe| {
          let a = sealer.input::<i32, _>(scope, vec![1, 2]).map(|x| ((), x));
          let b = sealer.input::<i32, _>(scope, vec![10, 20]).map(|x| ((), x));
-         let ab = a.join(&b).map(|(_, (x, y))| (x, y));
+         let ab = a.join(b).map(|(_, (x, y))| (x, y));
          sink_for_closure.attach(&ab, probe);
       });
 
@@ -720,17 +724,26 @@ mod tests {
 
          let path = scope.iterative::<u32, _, _>(|inner| {
             let edge_inner = edge_coll.enter(inner);
-            let path_var: Variable<_, (i32, i32), isize> =
-               Variable::new(inner, Product::new(Default::default(), 1));
-            let path_coll = (*path_var).clone();
+            // DD 0.20: `Variable::new` returns `(Variable, VecCollection)`.
+            // The Variable itself is consumed by `.set(...)`; we read the
+            // companion Collection directly (no `*var` deref any more).
+            let (path_var, path_coll): (
+               Variable<_, (i32, i32), isize>,
+               VecCollection<_, (i32, i32), isize>,
+            ) = Variable::new(inner, Product::new(Default::default(), 1));
 
             let rule1 = edge_inner.clone();
             let rule2 = edge_inner
                .map(|(x, y)| (y, x))
-               .join(&path_coll.map(|(y, z)| (y, z)))
+               .join(path_coll.map(|(y, z)| (y, z)))
                .map(|(_y, (x, z))| (x, z));
 
-            path_var.set(&rule1.concat(&rule2).distinct()).leave()
+            // 0.20: `.concat()` consumes both sides; `.set(...)` consumes the
+            // Variable and takes an owned Collection (returns `()`). Keep a
+            // clone for `.leave()` to carry the final Collection out of scope.
+            let next = rule1.concat(rule2).distinct();
+            path_var.set(next.clone());
+            next.leave()
          });
 
          path_sink_for_build.attach(&path, &mut probe);

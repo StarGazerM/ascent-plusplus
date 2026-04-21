@@ -1,21 +1,33 @@
 #![deny(warnings)]
+
+extern crate proc_macro;
+
 use std::collections::HashSet;
 
 use itertools::{Either, Itertools};
 use proc_macro2::{Ident, Span, TokenStream};
+use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{Expr, Type, parse_quote, parse_quote_spanned, parse2};
 
-use crate::ascent_hir::{IndexValType, IrRelation};
-use crate::ascent_mir::MirRelationVersion::*;
-use crate::ascent_mir::{
-   AscentMir, MirBodyItem, MirRelation, MirRelationVersion, MirRule, MirScc, ir_relation_version_var_name,
-   mir_rule_summary, mir_summary,
+use ascent_mir::MirRelationVersion::*;
+use ascent_mir::utils::{TokenStreamExtensions, exp_cloned, expr_to_ident, tuple, tuple_spanned, tuple_type};
+use ascent_mir::{
+   AscentMir, CondClause, IndexValType, IrRelation, MirBodyItem, MirRelation, MirRelationVersion, MirRule, MirScc,
+   RelationIdentity, ir_relation_version_var_name, mir_rule_summary, mir_summary,
 };
-use crate::ascent_syntax::{CondClause, RelationIdentity};
-use crate::utils::{TokenStreamExtensions, exp_cloned, expr_to_ident, tuple, tuple_spanned, tuple_type};
 
-pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::TokenStream {
+/// Proc-macro entry point. Frontend emits `::ascent::__backend_batch::compile_mir! { mir_v1 { … } }`
+/// for the built-in batch backend; we parse the MIR tokens and emit runtime Rust.
+#[proc_macro]
+pub fn compile_mir(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+   match ::ascent_mir::parse_mir(input.into()) {
+      Ok((mir, is_ascent_run)) => compile_mir_internal(&mir, is_ascent_run).into(),
+      Err(err) => err.to_compile_error().into(),
+   }
+}
+
+fn compile_mir_internal(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::TokenStream {
    let mut relation_fields = vec![];
    let mut field_defaults = vec![];
 
@@ -95,7 +107,7 @@ pub(crate) fn compile_mir(mir: &AscentMir, is_ascent_run: bool) -> proc_macro2::
    let mut lat_field_type_names = HashSet::<String>::new();
 
    for relation in mir.relations_ir_relations.keys().sorted_by_key(|rel| &rel.name) {
-      use crate::quote::ToTokens;
+      use quote::ToTokens;
       for (i, field_type) in relation.field_types.iter().enumerate() {
          let is_lat = relation.is_lattice && i == relation.field_types.len() - 1;
          let add = if let Type::Path(path) = field_type {

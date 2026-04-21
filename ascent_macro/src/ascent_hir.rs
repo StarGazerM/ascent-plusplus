@@ -3,183 +3,26 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use itertools::Itertools;
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Ident, Span};
+use quote::quote;
 use syn::spanned::Spanned;
-use syn::{Attribute, Error, Expr, Pat, Type, parse_quote, parse2};
+use syn::{Error, Expr, parse2};
 
 use crate::AscentProgram;
-use crate::ascent_syntax::{
-   BodyClauseArg, BodyItemNode, CondClause, DsAttributeContents, GeneratorNode, RelationIdentity, RelationNode,
-   RuleNode, Signatures,
+// Types that used to live in this file have moved to `ascent_mir`. Re-export
+// under their historical paths so call sites within this crate keep working
+// via `crate::ascent_hir::…`.
+pub(crate) use ascent_mir::{
+   AscentConfig, IrAggClause, IrBodyClause, IrBodyItem, IrHeadClause, IrPlanVariant, IrRelation, IrRule,
+   RelationMetadata,
 };
+pub(crate) use ascent_mir::{REL_DS_ATTR, get_ds_attr};
+use ascent_mir::{CondClause, RelationIdentity};
+
+use crate::ascent_syntax::{BodyClauseArg, BodyItemNode, RelationNode, RuleNode, Signatures};
 use crate::syn_utils::{expr_get_vars, pattern_get_vars};
-use crate::utils::{dedup_all_keep_last_by, expr_to_ident, is_wild_card, tuple_type};
-
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub(crate) enum Backend {
-   #[default]
-   Batch,
-   Dd,
-}
-
-/// Parses `backend(...)` argument list: bare ident or `ident, mode = "literal"`.
-struct BackendArgs {
-   backend: Ident,
-   mode: Option<String>,
-}
-
-impl syn::parse::Parse for BackendArgs {
-   fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-      let backend: Ident = input.parse()?;
-      let mut mode = None;
-      if input.peek(syn::Token![,]) {
-         input.parse::<syn::Token![,]>()?;
-         let key: Ident = input.parse()?;
-         if key != "mode" {
-            return Err(Error::new(key.span(), format!("expected `mode`, got `{key}`")));
-         }
-         input.parse::<syn::Token![=]>()?;
-         let lit: syn::LitStr = input.parse()?;
-         mode = Some(lit.value());
-      }
-      Ok(BackendArgs { backend, mode })
-   }
-}
-
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub(crate) enum DdMode {
-   /// Incremental/isize diff. Supports retractions, antijoin (negation),
-   /// lattice reduce. Current default — preserves existing test behavior.
-   #[default]
-   Incremental,
-   /// FlowLog-style batch: `Diff = Present`, insert-only. Pre-arranges EDB
-   /// outside iterative scope, `threshold_semigroup` distinct, `join_core`
-   /// on arranged traces. No negation, no retraction, no lattice.
-   Batch,
-}
-
-#[derive(Clone)]
-pub(crate) struct AscentConfig {
-   #[allow(dead_code)]
-   pub attrs: Vec<Attribute>,
-   pub include_rule_times: bool,
-   pub generate_run_partial: bool,
-   pub inter_rule_parallelism: bool,
-   pub default_ds: DsAttributeContents,
-   pub backend: Backend,
-   pub dd_mode: DdMode,
-}
-
-impl AscentConfig {
-   const MEASURE_RULE_TIMES_ATTR: &'static str = "measure_rule_times";
-   const GENERATE_RUN_TIMEOUT_ATTR: &'static str = "generate_run_timeout";
-   const INTER_RULE_PARALLELISM_ATTR: &'static str = "inter_rule_parallelism";
-   const BACKEND_ATTR: &'static str = "backend";
-
-   pub fn new(attrs: Vec<Attribute>, is_parallel: bool) -> syn::Result<AscentConfig> {
-      let include_rule_times = attrs
-         .iter()
-         .find(|attr| attr.meta.path().is_ident(Self::MEASURE_RULE_TIMES_ATTR))
-         .map(|attr| attr.meta.require_path_only())
-         .transpose()?
-         .is_some();
-      let generate_run_partial = attrs
-         .iter()
-         .find(|attr| attr.meta.path().is_ident(Self::GENERATE_RUN_TIMEOUT_ATTR))
-         .map(|attr| attr.meta.require_path_only())
-         .transpose()?
-         .is_some();
-      let inter_rule_parallelism = attrs
-         .iter()
-         .find(|attr| attr.meta.path().is_ident(Self::INTER_RULE_PARALLELISM_ATTR))
-         .map(|attr| attr.meta.require_path_only())
-         .transpose()?;
-
-      let backend_attr = attrs.iter().find(|attr| attr.meta.path().is_ident(Self::BACKEND_ATTR));
-      let (backend, dd_mode) = match backend_attr {
-         None => (Backend::default(), DdMode::default()),
-         Some(attr) => {
-            let list = attr.meta.require_list()?;
-            // Accept: `backend(batch)`, `backend(dd)`,
-            //        `backend(dd, mode = "batch")`, `backend(dd, mode = "incremental")`.
-            let tokens = list.tokens.clone();
-            let parsed: BackendArgs = parse2(tokens).map_err(|e| {
-               Error::new(
-                  e.span(),
-                  format!("expected `batch`, `dd`, or `dd, mode = \"batch\"|\"incremental\"`: {e}"),
-               )
-            })?;
-            let backend = match parsed.backend.to_string().as_str() {
-               "batch" => Backend::Batch,
-               "dd" => Backend::Dd,
-               other => {
-                  return Err(Error::new(
-                     parsed.backend.span(),
-                     format!("unknown backend `{other}`; expected `batch` or `dd`"),
-                  ));
-               },
-            };
-            let dd_mode = match (backend, parsed.mode.as_deref()) {
-               (Backend::Dd, None) => DdMode::default(),
-               (Backend::Dd, Some("batch")) => DdMode::Batch,
-               (Backend::Dd, Some("incremental")) => DdMode::Incremental,
-               (Backend::Dd, Some(other)) => {
-                  return Err(Error::new(
-                     parsed.backend.span(),
-                     format!("unknown dd mode `{other}`; expected `batch` or `incremental`"),
-                  ));
-               },
-               (Backend::Batch, Some(_)) => {
-                  return Err(Error::new(
-                     parsed.backend.span(),
-                     "`mode` is only valid with `backend(dd, ...)`",
-                  ));
-               },
-               (Backend::Batch, None) => DdMode::default(),
-            };
-            (backend, dd_mode)
-         },
-      };
-
-      // `ascent_par!` + `#![backend(dd)]`: DD's parallelism is orthogonal
-      // to the batch `par` machinery. Workers are controlled by
-      // `ASCENT_DD_WORKERS` at runtime; `ascent_par!` on DD is effectively
-      // the same as `ascent!` at codegen time.
-      let _ = is_parallel;
-      let _ = backend_attr;
-
-      let recognized_attrs = [
-         Self::MEASURE_RULE_TIMES_ATTR,
-         Self::GENERATE_RUN_TIMEOUT_ATTR,
-         Self::INTER_RULE_PARALLELISM_ATTR,
-         Self::BACKEND_ATTR,
-         REL_DS_ATTR,
-      ];
-      for attr in attrs.iter() {
-         if !recognized_attrs.iter().any(|recognized_attr| attr.meta.path().is_ident(recognized_attr)) {
-            let recognized_attrs = recognized_attrs.iter().map(|attr| format!("`{attr}`")).join(", ");
-            return Err(Error::new_spanned(
-               attr,
-               format!("unrecognized attribute. recognized attributes are: {recognized_attrs}"),
-            ));
-         }
-      }
-      if inter_rule_parallelism.is_some() && !is_parallel {
-         return Err(Error::new_spanned(inter_rule_parallelism, "attribute only allowed in parallel Ascent"));
-      }
-      let default_ds = get_ds_attr(&attrs)?
-         .unwrap_or_else(|| DsAttributeContents { path: parse_quote! {::ascent::rel}, args: TokenStream::default() });
-      Ok(AscentConfig {
-         inter_rule_parallelism: inter_rule_parallelism.is_some(),
-         attrs,
-         include_rule_times,
-         generate_run_partial,
-         default_ds,
-         backend,
-         dd_mode,
-      })
-   }
-}
+use crate::utils::dedup_all_keep_last_by;
+use ascent_mir::utils::{expr_to_ident, is_wild_card};
 
 pub(crate) struct AscentIr {
    pub relations_ir_relations: HashMap<RelationIdentity, HashSet<IrRelation>>,
@@ -192,37 +35,7 @@ pub(crate) struct AscentIr {
    pub is_parallel: bool,
 }
 
-#[derive(Clone)]
-pub(crate) struct RelationMetadata {
-   pub initialization: Option<Rc<Expr>>,
-   pub attributes: Rc<Vec<Attribute>>,
-   /// Will be `Some()` iff the relation is not a lattice
-   pub ds_attr: Option<DsAttributeContents>,
-}
-
-pub(crate) struct IrRule {
-   pub head_clauses: Vec<IrHeadClause>,
-   pub body_items: Vec<IrBodyItem>,
-   pub simple_join_start_index: Option<usize>,
-   /// User-supplied semi-naive plan (from `#[plan(variant(...), ...)]`).
-   /// When `Some`, overrides the default variant set in MIR expansion:
-   /// exactly the listed variants are emitted, in the listed order, each
-   /// with the listed body-item permutation and delta clause.
-   ///
-   /// When `None`, MIR auto-generates variants (one per IDB clause being
-   /// delta, natural body order) — the pre-existing behavior.
-   #[allow(dead_code)] // read by MIR in a follow-up stage
-   pub plan: Option<Vec<IrPlanVariant>>,
-}
-
-/// One semi-naive variant as spelled by the user. `delta` and `order`
-/// both index into the rule's ORIGINAL body-item list (before permutation).
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub(crate) struct IrPlanVariant {
-   pub delta: usize,
-   pub order: Vec<usize>,
-}
+// RelationMetadata, IrRule, IrPlanVariant — moved to `ascent_mir` crate.
 
 #[allow(unused)]
 pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
@@ -243,101 +56,11 @@ pub(crate) fn ir_rule_summary(rule: &IrRule) -> String {
    )
 }
 
-#[derive(Clone)]
-pub(crate) struct IrHeadClause {
-   pub rel: RelationIdentity,
-   pub args: Vec<Expr>,
-   pub span: Span,
-   pub args_span: Span,
-}
-
-pub(crate) enum IrBodyItem {
-   Clause(IrBodyClause),
-   Generator(GeneratorNode),
-   Cond(CondClause),
-   Agg(IrAggClause),
-}
-
-impl IrBodyItem {
-   pub(crate) fn rel(&self) -> Option<&IrRelation> {
-      match self {
-         IrBodyItem::Clause(bcl) => Some(&bcl.rel),
-         IrBodyItem::Agg(agg) => Some(&agg.rel),
-         IrBodyItem::Generator(_) | IrBodyItem::Cond(_) => None,
-      }
-   }
-}
-
-#[derive(Clone)]
-pub(crate) struct IrBodyClause {
-   pub rel: IrRelation,
-   pub args: Vec<Expr>,
-   pub rel_args_span: Span,
-   pub args_span: Span,
-   pub cond_clauses: Vec<CondClause>,
-}
-
-impl IrBodyClause {
-   #[allow(dead_code)]
-   pub fn selected_args(&self) -> Vec<Expr> { self.rel.indices.iter().map(|&i| self.args[i].clone()).collect() }
-}
-
-#[derive(Clone)]
-pub(crate) struct IrAggClause {
-   pub span: Span,
-   pub pat: Pat,
-   pub aggregator: Expr,
-   pub bound_args: Vec<Ident>,
-   pub rel: IrRelation,
-   pub rel_args: Vec<Expr>,
-}
-
-#[derive(Clone, Hash, PartialEq, Eq, Debug)]
-pub(crate) struct IrRelation {
-   pub relation: RelationIdentity,
-   pub indices: Vec<usize>,
-   pub val_type: IndexValType,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum IndexValType {
-   Reference,
-   Direct(Vec<usize>),
-}
-
-impl IrRelation {
-   pub fn new(relation: RelationIdentity, indices: Vec<usize>) -> Self {
-      // TODO this is not the right place for this
-      let val_type = if relation.is_lattice
-      //|| indices.len() == relation.field_types.len()
-      {
-         IndexValType::Reference
-      } else {
-         IndexValType::Direct((0..relation.field_types.len()).filter(|i| !indices.contains(i)).collect_vec())
-      };
-      IrRelation { relation, indices, val_type }
-   }
-
-   pub fn key_type(&self) -> Type {
-      let index_types: Vec<_> = self.indices.iter().map(|&i| self.relation.field_types[i].clone()).collect();
-      tuple_type(&index_types)
-   }
-   pub fn ir_name(&self) -> Ident { ir_name_for_rel_indices(&self.relation.name, &self.indices) }
-   pub fn is_full_index(&self) -> bool { self.relation.field_types.len() == self.indices.len() }
-   pub fn is_no_index(&self) -> bool { self.indices.is_empty() }
-
-   pub fn value_type(&self) -> Type {
-      match &self.val_type {
-         IndexValType::Reference => parse_quote! {usize},
-         IndexValType::Direct(cols) => {
-            let index_types: Vec<_> = cols.iter().map(|&i| self.relation.field_types[i].clone()).collect();
-            tuple_type(&index_types)
-         },
-      }
-   }
-}
-
-const REL_DS_ATTR: &str = "ds";
+// IrHeadClause / IrBodyItem / IrBodyClause / IrAggClause / IrRelation /
+// IndexValType — moved to `ascent_mir` crate.
+//
+// `REL_DS_ATTR` moved too; this file keeps the local typo-named constant for
+// historical call sites inside `compile_ascent_program_to_hir`.
 const RECOGNIIZED_REL_ATTRS: [&str; 1] = [REL_DS_ATTR];
 
 pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: bool) -> syn::Result<AscentIr> {
@@ -423,19 +146,6 @@ pub(crate) fn compile_ascent_program_to_hir(prog: &AscentProgram, is_parallel: b
       config,
       is_parallel,
    })
-}
-
-fn get_ds_attr(attrs: &[Attribute]) -> syn::Result<Option<DsAttributeContents>> {
-   let ds_attrs =
-      attrs.iter().filter(|attr| attr.meta.path().get_ident().is_some_and(|ident| ident == REL_DS_ATTR)).collect_vec();
-   match &ds_attrs[..] {
-      [] => Ok(None),
-      [attr] => {
-         let res = syn::parse2::<DsAttributeContents>(attr.meta.require_list()?.tokens.clone())?;
-         Ok(Some(res))
-      },
-      [_attr1, attr2, ..] => Err(Error::new(attr2.bracket_token.span.join(), "multiple `ds` attributes specified")),
-   }
 }
 
 fn compile_rule_to_ir_rule(rule: &RuleNode, prog: &AscentProgram) -> syn::Result<(IrRule, Vec<IrRelation>)> {
@@ -725,12 +435,6 @@ fn validate_and_lower_plan(
       return Err(Error::new(Span::call_site(), "#[plan(...)] must contain at least one `variant(...)`"));
    }
    Ok(out)
-}
-
-pub fn ir_name_for_rel_indices(rel: &Ident, indices: &[usize]) -> Ident {
-   let indices_str = if indices.is_empty() { format!("none") } else { indices.iter().join("_") };
-   let name = format!("{}_indices_{}", rel, indices_str);
-   Ident::new(&name, rel.span())
 }
 
 /// for a clause with args, returns the indices assuming vars are grounded.

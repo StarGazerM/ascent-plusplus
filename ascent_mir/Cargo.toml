@@ -1,0 +1,16 @@
+[package]
+name = "ascent_mir"
+version.workspace = true
+edition = "2021"
+authors = ["Arash Sahebolamri"]
+license = "MIT"
+description = "Ascent MIR: textual mid-level IR between frontend and codegen backends"
+
+[dependencies]
+syn = { version = "2.0.57", features = ["derive", "full", "extra-traits", "visit-mut"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+itertools = "0.13"
+derive-syn-parse = "0.2.0"
+ascent_base = { workspace = true }
+duplicate = { version = "2.0", default-features = false }

@@ -1,5 +1,14 @@
 [workspace]
-members = ["byods/ascent-byods-rels", "ascent", "ascent_base", "ascent_dd_runtime", "ascent_macro"]
+members = [
+   "byods/ascent-byods-rels",
+   "ascent",
+   "ascent_base",
+   "ascent_dd_runtime",
+   "ascent_macro",
+   "ascent_mir",
+   "ascent_codegen_dd",
+   "ascent_codegen_batch",
+]
 exclude = ["ascent_tests", "ascent_tests_dd", "wasm-tests", "benches"]
 resolver = "2"
 
@@ -11,3 +20,6 @@ ascent = { path = "./ascent", default-features = false, version = "0.8.0" }
 ascent_macro = { path = "./ascent_macro", version = "0.8.0" }
 ascent_base = { path = "./ascent_base", version = "0.8.0" }
 ascent_dd_runtime = { path = "./ascent_dd_runtime", version = "0.8.0" }
+ascent_mir = { path = "./ascent_mir", version = "0.8.0" }
+ascent_codegen_dd = { path = "./ascent_codegen_dd", version = "0.8.0" }
+ascent_codegen_batch = { path = "./ascent_codegen_batch", version = "0.8.0" }
