@@ -666,6 +666,37 @@ fn three_stage_pipeline_chained_compose() {
    assert_eq!(got, vec![(1, 3), (10, 2)]);
 }
 
+// ---------------------------------------------------------------------------
+// `run_with_workers(n)` — pin worker count without touching env var.
+// Verifies the codegen-emitted explicit-topology entry point. Uses ProgA
+// (TC) and asserts both incremental (.run()) and explicit (run_with_workers(4))
+// produce identical output, regardless of `ASCENT_DD_WORKERS`.
+// ---------------------------------------------------------------------------
+
+#[ntest_timeout::timeout(2000)]
+#[test]
+fn run_with_workers_pins_topology() {
+   let edges = vec![(1, 2), (2, 3), (3, 4), (5, 6)];
+   let expected: Vec<(i32, i32)> = vec![(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4), (5, 6)];
+
+   let mut p_default = ProgA::default();
+   p_default.edge = edges.clone();
+   p_default.run();
+   let mut got_default = p_default.path;
+   got_default.sort();
+   got_default.dedup();
+   assert_eq!(got_default, expected);
+
+   let mut p_pinned = ProgA::default();
+   p_pinned.edge = edges;
+   p_pinned.run_with_workers(4);
+   let mut got_pinned = p_pinned.path;
+   got_pinned.sort();
+   got_pinned.dedup();
+   assert_eq!(got_pinned, expected);
+}
+
+
 
 
 

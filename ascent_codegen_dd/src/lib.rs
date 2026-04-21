@@ -321,12 +321,21 @@ fn compile_mir_dd_incremental(mir: &AscentMir, is_ascent_run: bool) -> TokenStre
    };
    let _ = emit_session_for_this_program; // still controls Session struct emission, just not `run()` body
    let run_func = if is_ascent_run {
+      // ascent_run! takes a separate inlined codegen path further down —
+      // see `run_inline`. No method emission here.
       quote! {}
    } else {
       quote! {
-         #[doc = "Runs the Ascent program to a fixed point (DD backend)."]
+         #[doc = "Runs the Ascent program to a fixed point (DD backend), with worker count from `ASCENT_DD_WORKERS` (default 1)."]
          pub fn run(&mut self) {
+            self.run_with_workers(::ascent::dd::dd_worker_count())
+         }
+         #[doc = "Like `run` but pins worker count explicitly. Use this from tests \
+                  that need a deterministic parallel topology without contending \
+                  for `ASCENT_DD_WORKERS` env-var with concurrent test threads."]
+         pub fn run_with_workers(&mut self, workers: usize) {
             #![allow(unused_imports, unused_mut, unused_variables, clippy::all)]
+            let __dd_workers = workers.max(1);
             #run_body
          }
       }
@@ -358,7 +367,16 @@ fn compile_mir_dd_incremental(mir: &AscentMir, is_ascent_run: bool) -> TokenStre
    } else {
       let inline_target: TokenStream = quote!(__run_res);
       let run_inline = match &blocker {
-         None => run_body::phase1_run_body(mir, &inline_target),
+         None => {
+            let body = run_body::phase1_run_body(mir, &inline_target);
+            // ascent_run! expands inline; bind `__dd_workers` here so
+            // the body's Sink::new_with_workers / execute_batch_with_workers
+            // calls have a value in scope. Read once from env var.
+            quote! {
+               let __dd_workers = ::ascent::dd::dd_worker_count();
+               #body
+            }
+         },
          Some(_) => quote! {},
       };
       // Relation initialisations — evaluated here in the enclosing fn body

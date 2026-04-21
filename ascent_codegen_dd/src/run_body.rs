@@ -187,12 +187,10 @@ pub(crate) fn phase1_run_body(mir: &AscentMir, target: &TokenStream) -> TokenStr
       })
       .collect();
 
+   // `__dd_workers: usize` is bound by the surrounding `run` /
+   // `run_with_workers` wrapper — single source of truth for both
+   // Sink slot count and execute_batch worker count.
    quote! {
-      // Single env-var read — Sink slot count and execute_batch worker
-      // count MUST agree or sink.attach panics OOB. Reading
-      // dd_worker_count() twice would let an in-process env-var change
-      // create a mismatch.
-      let __dd_workers = ::ascent::dd::dd_worker_count();
       #(#inputs_setup)*
       #(#sinks_decl)*
       #(#sinks_clone)*
@@ -267,9 +265,9 @@ fn phase1_run_body_batch(mir: &AscentMir, target: &TokenStream) -> TokenStream {
       })
       .collect();
 
+   // `__dd_workers: usize` is bound by the wrapper — see equivalent
+   // comment in `phase1_run_body`.
    quote! {
-      // Single env-var read — see equivalent comment in `phase1_run_body`.
-      let __dd_workers = ::ascent::dd::dd_worker_count();
       #(#inputs_setup)*
       #(#sinks_decl)*
       #(#sinks_clone)*
@@ -318,9 +316,17 @@ pub(crate) fn compile_mir_dd_batch(mir: &AscentMir, is_ascent_run: bool) -> syn:
       quote! {}
    } else {
       quote! {
-         #[doc = "Runs the Ascent program to a fixed point (DD backend, batch mode)."]
+         #[doc = "Runs the Ascent program to a fixed point (DD backend, batch mode), with worker count from `ASCENT_DD_WORKERS` (default 1)."]
          pub fn run(&mut self) {
+            self.run_with_workers(::ascent::dd::dd_worker_count())
+         }
+         #[doc = "Like `run` but pins worker count explicitly. Use this from \
+                  tests that need a deterministic parallel topology without \
+                  contending for `ASCENT_DD_WORKERS` env-var with concurrent \
+                  test threads."]
+         pub fn run_with_workers(&mut self, workers: usize) {
             #![allow(unused_imports, unused_mut, unused_variables, clippy::all)]
+            let __dd_workers = workers.max(1);
             #run_body
          }
       }
@@ -351,6 +357,9 @@ pub(crate) fn compile_mir_dd_batch(mir: &AscentMir, is_ascent_run: bool) -> syn:
             #![allow(unused_imports, unused_mut, unused_variables, clippy::all)]
             let mut __run_res = <#struct_name #impl_ty_generics as ::std::default::Default>::default();
             #inputs_assign
+            // Bind `__dd_workers` for the inlined run body — see equivalent
+            // in incremental ascent_run inline path.
+            let __dd_workers = ::ascent::dd::dd_worker_count();
             #run_body
             __run_res
          }
