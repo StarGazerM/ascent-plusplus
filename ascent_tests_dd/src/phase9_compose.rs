@@ -511,6 +511,72 @@ fn compose_with_lattice_output() {
    assert_eq!(got, vec![(1, 10), (2, 7), (3, 100)]);
 }
 
+// ---------------------------------------------------------------------------
+// `#[plan]` + compose interaction. A rule annotated with a non-default
+// `#[plan(order=...)]` must produce identical output whether driven via
+// session or via build_in_scope — the plan permutation is applied at
+// HIR→MIR lowering, so both emissions see the same MIR. This locks in
+// the contract that those features compose without surprises.
+// ---------------------------------------------------------------------------
+
+ascent! {
+   #![backend(dd)]
+   pub struct ProgPlanCompose;
+   #[input] relation edge(i32, i32);
+   #[output] relation path(i32, i32);
+   path(x, y) <-- edge(x, y);
+   // Reverse the natural body order — exercises the plan permutation
+   // through both session and build_in_scope codegen paths.
+   #[plan(variant(delta = 1, order = [1, 0]))]
+   path(x, z) <-- edge(x, y), path(y, z);
+}
+
+#[ntest_timeout::timeout(2000)]
+#[test]
+fn compose_plus_plan_consistent_across_emissions() {
+   let edges = vec![(1, 2), (2, 3), (3, 4), (5, 6)];
+   let expected: Vec<(i32, i32)> = vec![(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4), (5, 6)];
+
+   // build_in_scope path
+   let scope_out: Vec<(i32, i32)> = {
+      let sink: Sink<(i32, i32)> = Sink::new_with_workers(1);
+      let sink_for_build = sink.clone();
+      let edges_clone = edges.clone();
+      execute_batch_with_workers(1, move |scope, sealer, probe| {
+         let wi = sealer.worker_index();
+         let edge_coll = sealer.input::<(i32, i32), _>(scope, &edges_clone);
+         let out = ProgPlanCompose::build_in_scope(
+            scope,
+            ProgPlanComposeComposeInputs { edge: edge_coll },
+         );
+         sink_for_build.attach(wi, &out.path, probe);
+      });
+      let mut state: ::std::collections::HashMap<(i32, i32), i32> = Default::default();
+      for (t, d) in sink.drain_deltas() {
+         *state.entry(t).or_insert(0) += d;
+      }
+      let mut path: Vec<_> = state.iter().filter(|(_, c)| **c > 0).map(|(k, _)| *k).collect();
+      path.sort();
+      path
+   };
+   assert_eq!(scope_out, expected, "build_in_scope + #[plan] produced wrong output");
+
+   // session path — same program, same plan, must match
+   let session_out: Vec<(i32, i32)> = {
+      let mut s = ProgPlanCompose::session();
+      for e in &edges {
+         s.edge_insert(*e);
+      }
+      s.commit();
+      let mut p = s.path_snapshot();
+      p.sort();
+      p
+   };
+   assert_eq!(session_out, expected, "session + #[plan] produced wrong output");
+   assert_eq!(scope_out, session_out, "plan emissions diverged across compose vs session");
+}
+
+
 
 
 
