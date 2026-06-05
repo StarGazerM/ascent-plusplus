@@ -56,6 +56,8 @@ mod phase7_streaming;
 mod phase8_plan;
 #[cfg(test)]
 mod phase9_compose;
+#[cfg(test)]
+mod egglog_port;
 // Upstream `ascent_tests/src/tests.rs` forked verbatim (see
 // `upstream_tests.rs.hold`). Many tests there use types (`LambdaCalcExpr`,
 // `TNode`) without `Ord`/`Serialize`/`Deserialize` derives, which the DD

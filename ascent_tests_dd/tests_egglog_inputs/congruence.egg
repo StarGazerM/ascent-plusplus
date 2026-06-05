@@ -1,0 +1,24 @@
+; Minimal congruence demo. Two nullary constructors A and B get unioned;
+; by congruence, F(A) and F(B) must also be in the same e-class.
+;
+; This is the simplest case where RAW-match alone is insufficient: the
+; structural match for the rewrite never fires (there IS no rewrite),
+; yet F(A) ≡ F(B) must hold. Only a congruence rule derives that.
+;
+; Cross-check: `egglog congruence.egg` must exit 0.
+; Ported to ascent_tests_dd/src/egglog_port.rs::congruence_naive_fails /
+;                                            ::congruence_with_rule_works.
+
+(datatype Math
+   (A)
+   (B)
+   (F Math))
+
+(F (A))
+(F (B))
+
+(union (A) (B))
+
+(run 1)
+
+(check (= (F (A)) (F (B))))

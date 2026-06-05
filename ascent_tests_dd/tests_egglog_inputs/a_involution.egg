@@ -1,0 +1,20 @@
+; Minimal nested-pattern rewrite test. Rule body matches `(A (A x))` —
+; two instances of the unary constructor `A` stacked, with `x` ranging
+; over any Math term. Exercises a self-join on the view relation with
+; a shared e-class variable, plus rule-derived unions with more than one
+; body atom.
+;
+; Cross-check: `egglog a_involution.egg` must exit 0.
+; Ported to ascent_tests_dd/src/egglog_port.rs::a_involution_nested_pattern.
+
+(sort Math)
+(constructor Leaf () Math)
+(constructor A (Math) Math)
+
+(rewrite (A (A x)) x)
+
+(A (A (Leaf)))
+
+(run 1)
+
+(check (= (A (A (Leaf))) (Leaf)))
